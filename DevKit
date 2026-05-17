@@ -1,0 +1,534 @@
+-- // DevKit.lua
+-- // A fast-development helper module built to match the existing script's
+-- // variable naming, comment, and code style exactly.
+-- // Access globally via: getgenv().DevKit
+-- // Example: local l_Kit_0 = getgenv().DevKit;
+
+local l_Players_0     = game:GetService("Players");
+local l_TweenService_0 = game:GetService("TweenService");
+local l_RunService_0   = game:GetService("RunService");
+local l_Debris_0       = game:GetService("Debris");
+local l_Collection_0   = game:GetService("CollectionService");
+local l_SoundService_0 = game:GetService("SoundService");
+
+local l_LocalPlayer_0  = l_Players_0.LocalPlayer;
+
+-- // Internal animation track cache so we can stop/reuse tracks cleanly
+local v1 = {}; -- [[ active anim tracks keyed by anim id string ]]
+
+-- ─────────────────────────────────────────────
+-- // Character helpers
+-- ─────────────────────────────────────────────
+
+local function v2() --[[ Line: 28 ]]
+    -- upvalues: l_LocalPlayer_0 (copy)
+    return l_LocalPlayer_0.Character;
+end;
+
+local function v3() --[[ Line: 33 ]]
+    -- upvalues: v2 (copy)
+    local l_Character_0 = v2();
+    if not l_Character_0 then
+        return nil;
+    end;
+    return l_Character_0:FindFirstChildOfClass("Humanoid");
+end;
+
+local function v4() --[[ Line: 42 ]]
+    -- upvalues: v2 (copy)
+    local l_Character_1 = v2();
+    if not l_Character_1 then
+        return nil;
+    end;
+    return l_Character_1:FindFirstChild("HumanoidRootPart");
+end;
+
+local function v5(v5_p1, v5_p2) --[[ Line: 51 ]]
+    -- upvalues: l_LocalPlayer_0 (copy)
+    -- Waits for the local player's character to exist.
+    -- v5_p1 = optional timeout in seconds (default 10)
+    -- v5_p2 = optional callback fired with the character once ready
+    local l_timeout_0 = v5_p1 or 10;
+    local l_Character_2 = l_LocalPlayer_0.Character or l_LocalPlayer_0.CharacterAdded:Wait();
+    if l_Character_2 then
+        if v5_p2 then
+            task.spawn(v5_p2, l_Character_2);
+        end;
+        return l_Character_2;
+    end;
+    local v6 = tick();
+    repeat
+        task.wait();
+        l_Character_2 = l_LocalPlayer_0.Character;
+    until l_Character_2 or tick() - v6 > l_timeout_0;
+    if v5_p2 and l_Character_2 then
+        task.spawn(v5_p2, l_Character_2);
+    end;
+    return l_Character_2;
+end;
+
+local function v7(v7_p1) --[[ Line: 74 ]]
+    -- upvalues: l_LocalPlayer_0 (copy), v7_p1 = callback(character)
+    -- Fires v7_p1 immediately if character exists, and again on every CharacterAdded.
+    if l_LocalPlayer_0.Character then
+        task.spawn(v7_p1, l_LocalPlayer_0.Character);
+    end;
+    l_LocalPlayer_0.CharacterAdded:Connect(function(v8) --[[ Line: 81 ]]
+        -- upvalues: v7_p1 (copy)
+        task.spawn(v7_p1, v8);
+    end);
+end;
+
+-- ─────────────────────────────────────────────
+-- // Animation
+-- ─────────────────────────────────────────────
+
+local function v9(v9_p1, v9_p2, v9_p3) --[[ Line: 92 ]]
+    -- upvalues: v1 (ref), v3 (copy)
+    -- Plays an animation on the local character's Animator.
+    -- v9_p1 = Animation Id (number or string, e.g. 12345678 or "rbxassetid://12345678")
+    -- v9_p2 = Speed (number, default 1)
+    -- v9_p3 = StopTime (optional number of seconds before auto-stopping)
+    -- Returns the AnimationTrack so you can do more with it.
+
+    if not v9_p1 then
+        return nil;
+    end;
+
+    local l_Humanoid_0 = v3();
+    if not l_Humanoid_0 then
+        return nil;
+    end;
+
+    local l_Animator_0 = l_Humanoid_0:FindFirstChildOfClass("Animator");
+    if not l_Animator_0 then
+        return nil;
+    end;
+
+    -- // Build a clean asset id string regardless of what was passed in
+    local l_IdStr_0;
+    if type(v9_p1) == "number" then
+        l_IdStr_0 = "rbxassetid://" .. tostring(v9_p1);
+    else
+        l_IdStr_0 = tostring(v9_p1);
+    end;
+
+    -- // Stop the previous track for this id if one is already running
+    if v1[l_IdStr_0] and v1[l_IdStr_0].IsPlaying then
+        v1[l_IdStr_0]:Stop();
+    end;
+
+    local l_Animation_0 = Instance.new("Animation");
+    l_Animation_0.AnimationId = l_IdStr_0;
+
+    local l_Track_0 = l_Animator_0:LoadAnimation(l_Animation_0);
+    l_Animation_0:Destroy();
+
+    l_Track_0:Play();
+    l_Track_0:AdjustSpeed(v9_p2 or 1);
+
+    v1[l_IdStr_0] = l_Track_0;
+
+    -- // Auto-stop if StopTime was provided
+    if v9_p3 then
+        task.delay(v9_p3, function() --[[ Line: 141 ]]
+            -- upvalues: l_Track_0 (copy)
+            if l_Track_0 and l_Track_0.IsPlaying then
+                l_Track_0:Stop();
+            end;
+        end);
+    end;
+
+    return l_Track_0;
+end;
+
+local function v10(v10_p1) --[[ Line: 151 ]]
+    -- upvalues: v1 (ref)
+    -- Stops a specific AnimationTrack.
+    -- v10_p1 = AnimationTrack returned by PlayAnimation
+    if v10_p1 and v10_p1.IsPlaying then
+        v10_p1:Stop();
+    end;
+end;
+
+local function v11() --[[ Line: 159 ]]
+    -- upvalues: v1 (ref), v3 (copy)
+    -- Stops every currently playing animation on the local character.
+    local l_Humanoid_1 = v3();
+    if not l_Humanoid_1 then
+        return;
+    end;
+    local l_Animator_1 = l_Humanoid_1:FindFirstChildOfClass("Animator");
+    if not l_Animator_1 then
+        return;
+    end;
+    for _, v12 in pairs(l_Animator_1:GetPlayingAnimationTracks()) do
+        v12:Stop();
+    end;
+    -- // Clear the internal cache too
+    for l_key_0, _ in pairs(v1) do
+        v1[l_key_0] = nil;
+    end;
+end;
+
+-- ─────────────────────────────────────────────
+-- // Tween helpers
+-- ─────────────────────────────────────────────
+
+local function v13(v13_p1, v13_p2, v13_p3, v13_p4, v13_p5) --[[ Line: 184 ]]
+    -- upvalues: l_TweenService_0 (copy)
+    -- Quick tween builder and auto-player.
+    -- v13_p1 = Instance to tween
+    -- v13_p2 = Duration  (number, default 0.3)
+    -- v13_p3 = EasingStyle (Enum.EasingStyle, default Quad)
+    -- v13_p4 = EasingDirection (Enum.EasingDirection, default Out)
+    -- v13_p5 = Property table e.g. { Transparency = 1, Size = UDim2.new(...) }
+    -- Returns the Tween object so you can :Connect(Tween.Completed, ...) on it.
+    if not v13_p1 or not v13_p5 then
+        return nil;
+    end;
+    local l_Tween_0 = l_TweenService_0:Create(
+        v13_p1,
+        TweenInfo.new(
+            v13_p2 or 0.3,
+            v13_p3 or Enum.EasingStyle.Quad,
+            v13_p4 or Enum.EasingDirection.Out
+        ),
+        v13_p5
+    );
+    l_Tween_0:Play();
+    return l_Tween_0;
+end;
+
+local function v14(v14_p1, v14_p2, v14_p3) --[[ Line: 207 ]]
+    -- upvalues: l_TweenService_0 (copy)
+    -- Raw tween builder matching the original script style.
+    -- v14_p1 = Instance
+    -- v14_p2 = TweenInfo object (already constructed)
+    -- v14_p3 = Property table
+    -- Returns the Tween object (not auto-played — you call :Play() yourself).
+    if not v14_p1 or not v14_p2 or not v14_p3 then
+        return nil;
+    end;
+    return l_TweenService_0:Create(v14_p1, v14_p2, v14_p3);
+end;
+
+-- ─────────────────────────────────────────────
+-- // Sound helpers
+-- ─────────────────────────────────────────────
+
+local function v15(v15_p1) --[[ Line: 224 ]]
+    -- upvalues: l_SoundService_0 (copy), l_Debris_0 (copy)
+    -- Creates and returns a Sound instance from a config table.
+    -- v15_p1 = {
+    --     SoundId  = "rbxassetid://...",  (required)
+    --     Parent   = someInstance,        (default workspace)
+    --     Volume   = 1,                   (default 1)
+    --     RollOff  = 75,                  (default 75)
+    --     Pitch    = 1,                   (optional PlaybackSpeed)
+    --     AutoPlay = false,               (set true to auto-play immediately)
+    --     Debris   = nil,                 (seconds before auto-destroy, optional)
+    -- }
+    if not v15_p1 or not v15_p1.SoundId then
+        return nil;
+    end;
+    local l_Sound_0 = Instance.new("Sound");
+    l_Sound_0.SoundId         = v15_p1.SoundId;
+    l_Sound_0.Volume          = v15_p1.Volume or 1;
+    l_Sound_0.RollOffMaxDistance = v15_p1.RollOff or 75;
+    l_Sound_0.SoundGroup      = l_SoundService_0:FindFirstChild("Sounds") or l_SoundService_0;
+    if v15_p1.Pitch then
+        l_Sound_0.PlaybackSpeed = v15_p1.Pitch;
+    end;
+    l_Sound_0.Parent = v15_p1.Parent or workspace;
+    if v15_p1.AutoPlay then
+        l_Sound_0:Play();
+    end;
+    if v15_p1.Debris then
+        l_Debris_0:AddItem(l_Sound_0, v15_p1.Debris);
+    end;
+    return l_Sound_0;
+end;
+
+-- ─────────────────────────────────────────────
+-- // Attribute helpers
+-- ─────────────────────────────────────────────
+
+local function v16(v16_p1, v16_p2, v16_p3) --[[ Line: 261 ]]
+    -- Gets an attribute from an Instance safely.
+    -- v16_p1 = Instance
+    -- v16_p2 = Attribute name (string)
+    -- v16_p3 = Default value if attribute is nil (optional)
+    if not v16_p1 then
+        return v16_p3;
+    end;
+    return v16_p1:GetAttribute(v16_p2) or v16_p3;
+end;
+
+local function v17(v17_p1, v17_p2, v17_p3) --[[ Line: 271 ]]
+    -- Sets an attribute on an Instance safely inside a pcall.
+    -- v17_p1 = Instance
+    -- v17_p2 = Attribute name (string)
+    -- v17_p3 = Value
+    if not v17_p1 then
+        return;
+    end;
+    local l_ok_0, l_err_0 = pcall(function() --[[ Line: 278 ]]
+        -- upvalues: v17_p1 (copy), v17_p2 (copy), v17_p3 (copy)
+        v17_p1:SetAttribute(v17_p2, v17_p3);
+    end);
+    if not l_ok_0 then
+        warn("[DevKit] SetAttribute failed:", l_err_0);
+    end;
+end;
+
+local function v18(v18_p1, v18_p2, v18_p3) --[[ Line: 287 ]]
+    -- upvalues: l_LocalPlayer_0 (copy)
+    -- Shorthand for getting/setting an attribute on the LocalPlayer.
+    -- If v18_p3 is provided it's a SET, otherwise it's a GET.
+    -- v18_p1 = Attribute name
+    -- v18_p2 = Default value (for GET only, optional)
+    -- v18_p3 = Value to SET (optional — omit for GET)
+    if v18_p3 ~= nil then
+        l_LocalPlayer_0:SetAttribute(v18_p1, v18_p3);
+    else
+        return l_LocalPlayer_0:GetAttribute(v18_p1) or v18_p2;
+    end;
+end;
+
+-- ─────────────────────────────────────────────
+-- // CollectionService helpers
+-- ─────────────────────────────────────────────
+
+local function v19(v19_p1, v19_p2) --[[ Line: 303 ]]
+    -- upvalues: l_Collection_0 (copy)
+    -- Connects a callback to CollectionService's InstanceAdded signal for a tag,
+    -- and also fires it immediately for all already-tagged instances.
+    -- v19_p1 = Tag name (string)
+    -- v19_p2 = Callback function(instance)
+    if not v19_p1 or not v19_p2 then
+        return;
+    end;
+    for _, v20 in pairs(l_Collection_0:GetTagged(v19_p1)) do
+        task.spawn(v19_p2, v20);
+    end;
+    return l_Collection_0:GetInstanceAddedSignal(v19_p1):Connect(v19_p2);
+end;
+
+-- ─────────────────────────────────────────────
+-- // Remote / Communicate helpers
+-- ─────────────────────────────────────────────
+
+local function v21(v21_p1, v21_p2) --[[ Line: 319 ]]
+    -- upvalues: l_LocalPlayer_0 (copy), v2 (copy)
+    -- Fires the character's Communicate RemoteEvent safely.
+    -- v21_p1 = Goal string  e.g. "Reset", "Change Character"
+    -- v21_p2 = Extra data table to merge into the payload (optional)
+    local l_Character_3 = v2();
+    if not l_Character_3 then
+        return;
+    end;
+    local l_Comm_0 = l_Character_3:FindFirstChild("Communicate");
+    if not l_Comm_0 then
+        return;
+    end;
+    local v22 = {
+        Goal = v21_p1,
+    };
+    if v21_p2 then
+        for l_k_0, l_v_0 in pairs(v21_p2) do
+            v22[l_k_0] = l_v_0;
+        end;
+    end;
+    l_Comm_0:FireServer(v22);
+end;
+
+-- ─────────────────────────────────────────────
+-- // Instance creation helpers
+-- ─────────────────────────────────────────────
+
+local function v23(v23_p1, v23_p2) --[[ Line: 346 ]]
+    -- Quick Instance.new wrapper that applies a property table and sets Parent last.
+    -- v23_p1 = ClassName string  e.g. "Part", "BillboardGui"
+    -- v23_p2 = Property table  e.g. { Size = Vector3.new(1,1,1), Anchored = true, Parent = workspace }
+    -- Parent key inside the table is applied LAST (as recommended by Roblox).
+    if not v23_p1 then
+        return nil;
+    end;
+    local l_inst_0 = Instance.new(v23_p1);
+    local l_parent_0 = nil;
+    if v23_p2 then
+        for l_k_1, l_v_1 in pairs(v23_p2) do
+            if l_k_1 == "Parent" then
+                l_parent_0 = l_v_1;
+            else
+                l_inst_0[l_k_1] = l_v_1;
+            end;
+        end;
+    end;
+    if l_parent_0 then
+        l_inst_0.Parent = l_parent_0;
+    end;
+    return l_inst_0;
+end;
+
+-- ─────────────────────────────────────────────
+-- // Safe call / error wrapper
+-- ─────────────────────────────────────────────
+
+local function v24(v24_p1, ...) --[[ Line: 375 ]]
+    -- Wraps any function call in a pcall.  On failure, warns with the error.
+    -- v24_p1 = function to call
+    -- ... = arguments to pass to that function
+    -- Returns (success bool, result or error string)
+    local v25, v26 = pcall(v24_p1, ...);
+    if not v25 then
+        warn("[DevKit] SafeCall error:", v26);
+    end;
+    return v25, v26;
+end;
+
+-- ─────────────────────────────────────────────
+-- // Lerp / math utilities
+-- ─────────────────────────────────────────────
+
+local function v27(v27_p1, v27_p2, v27_p3) --[[ Line: 390 ]]
+    -- Standard lerp for numbers.
+    return v27_p1 + (v27_p2 - v27_p1) * v27_p3;
+end;
+
+local function v28(v28_p1, v28_p2, v28_p3) --[[ Line: 395 ]]
+    -- Clamps v28_p1 between v28_p2 (min) and v28_p3 (max).
+    return math.max(v28_p2, math.min(v28_p3, v28_p1));
+end;
+
+local function v29(v29_p1, v29_p2) --[[ Line: 400 ]]
+    -- Returns a random number between v29_p1 and v29_p2 (inclusive of floats).
+    return v29_p1 + math.random() * (v29_p2 - v29_p1);
+end;
+
+-- ─────────────────────────────────────────────
+-- // Heartbeat / RenderStepped connection helpers
+-- ─────────────────────────────────────────────
+
+local function v30(v30_p1) --[[ Line: 409 ]]
+    -- upvalues: l_RunService_0 (copy)
+    -- Connects to Heartbeat. Returns the RBXScriptConnection.
+    return l_RunService_0.Heartbeat:Connect(v30_p1);
+end;
+
+local function v31(v31_p1) --[[ Line: 415 ]]
+    -- upvalues: l_RunService_0 (copy)
+    -- Connects to RenderStepped (client only). Returns the RBXScriptConnection.
+    return l_RunService_0.RenderStepped:Connect(v31_p1);
+end;
+
+-- ─────────────────────────────────────────────
+-- // Debris / cleanup helpers
+-- ─────────────────────────────────────────────
+
+local function v32(v32_p1, v32_p2) --[[ Line: 424 ]]
+    -- upvalues: l_Debris_0 (copy)
+    -- Adds an instance to Debris for auto-cleanup.
+    -- v32_p1 = Instance   v32_p2 = seconds (default 5)
+    if not v32_p1 then
+        return;
+    end;
+    l_Debris_0:AddItem(v32_p1, v32_p2 or 5);
+end;
+
+-- ─────────────────────────────────────────────
+-- // Humanoid state helpers
+-- ─────────────────────────────────────────────
+
+local function v33() --[[ Line: 435 ]]
+    -- upvalues: v3 (copy)
+    -- Returns the current Humanoid health (0 if no humanoid).
+    local l_Humanoid_2 = v3();
+    return l_Humanoid_2 and l_Humanoid_2.Health or 0;
+end;
+
+local function v34(v34_p1) --[[ Line: 442 ]]
+    -- upvalues: v3 (copy)
+    -- Sets the Humanoid WalkSpeed safely.
+    local l_Humanoid_3 = v3();
+    if l_Humanoid_3 then
+        l_Humanoid_3.WalkSpeed = v34_p1;
+    end;
+end;
+
+local function v35(v35_p1) --[[ Line: 451 ]]
+    -- upvalues: v3 (copy)
+    -- Sets the Humanoid JumpPower safely.
+    local l_Humanoid_4 = v3();
+    if l_Humanoid_4 then
+        l_Humanoid_4.JumpPower = v35_p1;
+    end;
+end;
+
+-- ─────────────────────────────────────────────
+-- // Module table — public API
+-- ─────────────────────────────────────────────
+
+local l_DevKit_0 = {
+
+    -- // Character
+    GetChar          = v2;   -- ()                            → Character | nil
+    GetHumanoid      = v3;   -- ()                            → Humanoid | nil
+    GetRootPart      = v4;   -- ()                            → HumanoidRootPart | nil
+    WaitForChar      = v5;   -- (timeout?, callback?)         → Character | nil
+    OnCharacter      = v7;   -- (callback(char))              → void
+
+    -- // Animation
+    PlayAnimation    = v9;   -- (Id, Speed?, StopTime?)       → AnimationTrack | nil
+    StopAnimation    = v10;  -- (AnimationTrack)              → void
+    StopAllAnimations = v11; -- ()                            → void
+
+    -- // Tweening
+    QuickTween       = v13;  -- (inst, dur?, style?, dir?, props) → Tween
+    MakeTween        = v14;  -- (inst, TweenInfo, props)      → Tween (not auto-played)
+
+    -- // Sound
+    MakeSound        = v15;  -- ({ SoundId, Parent?, Volume?, RollOff?, Pitch?, AutoPlay?, Debris? }) → Sound
+
+    -- // Attributes
+    GetAttr          = v16;  -- (inst, attrName, default?)    → value
+    SetAttr          = v17;  -- (inst, attrName, value)       → void
+    PlayerAttr       = v18;  -- (attrName, default? | value)  → value | void
+
+    -- // CollectionService
+    TagConnect       = v19;  -- (tag, callback(inst))         → RBXScriptConnection
+
+    -- // Remotes
+    FireCommunicate  = v21;  -- (Goal, extraData?)            → void
+
+    -- // Instance creation
+    Make             = v23;  -- (className, propsTable?)      → Instance
+
+    -- // Utilities
+    SafeCall         = v24;  -- (fn, ...)                     → bool, result
+    Lerp             = v27;  -- (a, b, t)                     → number
+    Clamp            = v28;  -- (n, min, max)                 → number
+    RandFloat        = v29;  -- (min, max)                    → number
+    AddDebris        = v32;  -- (inst, seconds?)              → void
+
+    -- // RunService
+    OnHeartbeat      = v30;  -- (callback(dt))                → RBXScriptConnection
+    OnRenderStepped  = v31;  -- (callback(dt))                → RBXScriptConnection
+
+    -- // Humanoid state
+    GetHealth        = v33;  -- ()                            → number
+    SetWalkSpeed     = v34;  -- (speed)                       → void
+    SetJumpPower     = v35;  -- (power)                       → void
+
+};
+
+-- ─────────────────────────────────────────────
+-- // Register to getgenv so any script can do:
+-- //   local l_Kit_0 = getgenv().DevKit;
+-- //   l_Kit_0.PlayAnimation(123456789, 1, 3);
+-- ─────────────────────────────────────────────
+
+getgenv().DevKit = l_DevKit_0;
+
+return l_DevKit_0;
