@@ -1,6 +1,6 @@
 -- decompilation:
 local t1 = {}
-local library = require(game.ReplicatedStorage.library)
+local library = require(game.ReplicatedStorage:WaitForChild("library"))
 local PlayAttachment = library.PlayAttachment
 local Maid = library.Maid
 local _ = library.PlayTween
@@ -20,7 +20,7 @@ local _ = library.Yield
 local _ = library.ProcessPart
 local _ = library.WeldObject
 local _ = library.Bezier
-local vfx = game:GetService("ReplicatedStorage").Emotes.VFX.VfxMods.Evolved.vfx
+local vfx = script:WaitForChild("vfx")
 local t2 = {}
 
 t2.__index = t2
@@ -28,20 +28,11 @@ t2.__index = t2
 local random = Random.new()
 local TweenService = game:GetService("TweenService")
 
-game:GetService("PhysicsService")
-
-local _ = game.Workspace.Camera
-
 function t1.FirstEvent(p1) -- line: 35
 	-- upvalues: t2 (copy), Maid (copy), vfx (copy), QuickFX (copy), PlayAttachment (copy), dtwait (copy), TweenService (copy), LifeScale (copy), PlayMesh (copy), QuickWeld (copy), RaiseZIndex (copy), EFP (copy), random (copy), Able (copy)
 	local Char = p1.Char
 	local _ = Char.Humanoid
 	local PrimaryPart = Char.PrimaryPart
-
-	shared.NerfVfx({
-		Script = script,
-		Char = Char
-	})
 
 	local v31 = setmetatable({}, t2)
 
@@ -50,11 +41,11 @@ function t1.FirstEvent(p1) -- line: 35
 	local CleanupTable = p1.CleanupTable
 	local RealAnim = p1.RealAnim
 	local Bind = p1.Bind
+	local StartFrom = p1.StartFrom or 0
 	local u35 = false
 	local connection = nil
 	local u37 = false
 
-	tick()
 	connection = Bind:GetPropertyChangedSignal("Parent"):Connect(function() -- line: 101
 		-- upvalues: Bind (copy), u37 (ref), u35 (ref), v31 (copy), connection (ref)
 		if not Bind or not Bind.Parent then
@@ -82,7 +73,7 @@ function t1.FirstEvent(p1) -- line: 35
 			v31._maid:doCleaning()
 		end
 	end)
-	spawn(function() -- line: 120
+	task.spawn(function() -- line: 120
 		-- upvalues: vfx (copy), Char (copy)
 		if not workspace:GetAttribute("ez") then
 			workspace:SetAttribute("ez", true)
@@ -124,10 +115,10 @@ function t1.FirstEvent(p1) -- line: 35
 	local clone = vfx.Cubes:Clone()
 
 	table.insert(CleanupTable, clone)
-	clone.Parent = workspace.Thrown
+	clone.Parent = workspace:WaitForChild("Thrown")
 	game.Debris:AddItem(clone, 10)
 	table.insert(CleanupTable, clone)
-	clone.AnimationController:LoadAnimation(script.Cubes):Play()
+	clone.AnimationController:LoadAnimation(script:WaitForChild("Cubes")):Play()
 
 	local Weld = Instance.new("Weld")
 
@@ -145,7 +136,9 @@ function t1.FirstEvent(p1) -- line: 35
 
 		table.insert(CleanupTable, v57)
 		PlayAttachment(v57)
-		dtwait(0.5)
+		if StartFrom < 0.5 then
+			dtwait(0.5 - StartFrom)
+		end
 
 		local v58
 
@@ -225,7 +218,7 @@ function t1.FirstEvent(p1) -- line: 35
 				if Decal then
 					Decal.Transparency = 0
 					TweenService:Create(Decal, TweenInfo.new(2, Enum.EasingStyle.Sine), {
-						Color3 = Color3.fromRGB(0, 0, 0)
+						Color = Color3.fromRGB(0, 0, 0)
 					}):Play()
 				end
 			end
@@ -1047,7 +1040,7 @@ function t1.FirstEvent(p1) -- line: 35
 				Decal.Texture = v98
 				Decal.Name = i
 				Decal.Transparency = 0.999
-				Decal.Color3 = Color3.new(1, 1, 1)
+				Decal.Color = Color3.new(1, 1, 1)
 				Decal.Parent = u40
 			end
 		end,
@@ -1128,7 +1121,8 @@ function t1.FirstEvent(p1) -- line: 35
 	}
 
 	for k, v in pairs(t5) do
-		table.insert(CleanupTable, (task.delay(k, function() -- line: 732
+		local adjustedDelay = math.max(0, k - StartFrom)
+		table.insert(CleanupTable, (task.delay(adjustedDelay, function() -- line: 732
 			-- upvalues: u37 (ref), RealAnim (copy), Bind (copy), v (copy)
 			local v100
 
@@ -1150,3 +1144,105 @@ end
 
 return t1
 
+
+-- ===================== CALLER =====================
+do
+	local Players    = game:GetService("Players")
+	local p          = Players.LocalPlayer
+	local c          = p.Character or p.CharacterAdded:Wait()
+	local h          = c:WaitForChild("Humanoid")
+
+	-- Configuration
+	local ANIM_ID    = "rbxassetid://116187503451999"
+	local START_FROM = 0  -- set to e.g. 4 to jump 4 seconds in
+
+	-- Load and play the animation, then seek to StartFrom
+	local animObj        = Instance.new("Animation")
+	animObj.AnimationId  = ANIM_ID
+	local animTrack      = h:LoadAnimation(animObj)
+	animTrack:Play()
+	if START_FROM > 0 then
+		animTrack.TimePosition = START_FROM
+	end
+
+	-- Bind object (emote holder accessory)
+	local acc      = Instance.new("Accessory")
+	acc.Name       = "#EmoteHolder_" .. math.random(1, 100000)
+	acc.Parent     = c
+	acc:SetAttribute("EmoteProperty", true)
+
+	-- CleanupTable collects connections/instances to destroy later
+	local CleanupTable = {}
+
+	-- Call FirstEvent
+	t1.FirstEvent({
+		Char         = c,
+		CleanupTable = CleanupTable,
+		RealAnim     = animTrack,
+		Bind         = acc,
+		StartFrom    = START_FROM,
+	})
+
+	-- Cleanup: destroy the bind accessory when the animation ends,
+	-- which triggers the Bind.Parent disconnect inside FirstEvent
+	animTrack.Stopped:Connect(function()
+		if acc and acc.Parent then
+			acc:Destroy()
+		end
+		for _, item in ipairs(CleanupTable) do
+			if typeof(item) == "RBXScriptConnection" then
+				item:Disconnect()
+			elseif typeof(item) == "Instance" and item.Parent then
+				item:Destroy()
+			end
+		end
+	end)
+
+	-- Aura effect at t=7
+	task.delay(7 - START_FROM, function()
+		if not acc or not acc.Parent then return end
+
+		local auraFolder = Instance.new("Folder")
+		auraFolder.Name = "AuraHolder"
+		auraFolder:SetAttribute("DivineForm", true)
+		auraFolder:SetAttribute("LimAura", true)
+		auraFolder:SetAttribute("EmoteEffect", true)
+		auraFolder.Parent = c
+
+		local vfxFolder = game.ReplicatedStorage.Emotes.VFX.VfxMods.Evolved.vfx.Folder
+
+		for _, v in pairs(vfxFolder:GetChildren()) do
+			if v:IsA("BasePart") then
+				local target = c:FindFirstChild(v.Name)
+				if target then
+					local clone = v:Clone()
+					clone.Transparency = 1
+					clone.Massless = true
+					clone.Name = tostring(math.random(1, 1000))
+					clone:SetAttribute("LimAura", true)
+
+					local weld = Instance.new("Weld")
+					weld.Part0 = target
+					weld.Part1 = clone
+					weld.Parent = clone
+					clone.Parent = auraFolder
+
+					for _, d in pairs(clone:GetDescendants()) do
+						if d:IsA("ParticleEmitter") or d:IsA("Beam") then
+							d:SetAttribute("LimitedAura", true)
+							task.delay(2, function()
+								d.Enabled = false
+							end)
+						end
+					end
+
+					task.delay(4, function()
+						if clone and clone.Parent then
+							clone:Destroy()
+						end
+					end)
+				end
+			end
+		end
+	end)
+end
