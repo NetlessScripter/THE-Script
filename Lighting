@@ -1,0 +1,75 @@
+local l = game:GetService('Lighting')
+do
+local i = Instance.new('SunRaysEffect')
+i.Intensity = 0.08500000089406967
+i.Spread = 0.3499999940395355
+i.Enabled = true
+i.Parent = l
+end
+do
+local i = Instance.new('BloomEffect')
+i.Intensity = 2
+i.Size = inf
+i.Threshold = 1
+i.Enabled = true
+i.Parent = l
+end
+do
+local i = Instance.new('Atmosphere')
+i.Density = 0.39500001072883606
+i.Offset = 0
+i.Color = Color3.new(0.7843000292778015,0.666700005531311,0.4235000014305115)
+i.Decay = Color3.new(0.36079999804496765,0.2353000044822693,0.05490000173449516)
+i.Glare = 0
+i.Haze = 0
+i.Parent = l
+end
+do
+local i = Instance.new('ColorCorrectionEffect')
+i.Brightness = 0
+i.Contrast = 0.05000000074505806
+i.Saturation = -0.17499999701976776
+i.TintColor = Color3.new(1,0.9019608497619629,0.9019608497619629)
+i.Enabled = true
+i.Parent = l
+end
+do
+local i = Instance.new('Sky')
+i.SkyboxBk = "http://www.roblox.com/asset/?id=151165214"
+i.SkyboxDn = "http://www.roblox.com/asset/?id=151165197"
+i.SkyboxFt = "http://www.roblox.com/asset/?id=151165224"
+i.SkyboxLf = "http://www.roblox.com/asset/?id=151165191"
+i.SkyboxRt = "http://www.roblox.com/asset/?id=151165206"
+i.SkyboxUp = "http://www.roblox.com/asset/?id=151165227"
+i.MoonAngularSize = 0
+i.MoonTextureId = "rbxasset://sky/moon.jpg"
+i.SunAngularSize = 0
+i.SunTextureId = "rbxasset://sky/sun.jpg"
+i.Parent = l
+end
+do
+local i = Instance.new('DepthOfFieldEffect')
+i.FarIntensity = 0.2199999988079071
+i.FocusDistance = 90
+i.InFocusRadius = 0
+i.NearIntensity = 0
+i.Enabled = true
+i.Parent = l
+end
+l.Brightness = 4
+l.ClockTime = 17.399999618530273
+l.FogEnd = 100000
+l.FogStart = 0
+l.FogColor = Color3.new(0.7529412508010864,0.7529412508010864,0.7529412508010864)
+l.OutdoorAmbient = Color3.new(0.3529411852359772,0.05882352963089943,0.5098039507865906)
+l.Ambient = Color3.new(0.529411792755127,0.1764705926179886,0.019607843831181526)
+l.GlobalShadows = true
+l.GeographicLatitude = 42.198001861572266
+l.EnvironmentSpecularScale = 1
+l.EnvironmentDiffuseScale = 1
+l.ExposureCompensation = -0.10000000149011612
+l.ColorShift_Bottom = Color3.new(0,0,0)
+l.ColorShift_Top = Color3.new(1,0.3921568691730499,0.3921568691730499)
+l.Technology = Enum.Technology.Future
+l.ShadowSoftness = 0
+l.TimeOfDay = "17:24:00"
