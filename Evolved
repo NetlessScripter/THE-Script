@@ -20,7 +20,7 @@ local _ = library.Yield
 local _ = library.ProcessPart
 local _ = library.WeldObject
 local _ = library.Bezier
-local vfx = script.vfx
+local vfx = game:GetService("ReplicatedStorage").Emotes.VFX.VfxMods.Evolved.vfx
 local t2 = {}
 
 t2.__index = t2
