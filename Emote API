@@ -26891,7 +26891,6 @@ function t1.IsLimited(_, p1604) -- line: 27613
 	-- upvalues: t1 (copy)
 	return t1:GetTable(true)[p1604].Limited
 end
-
 -- ═══════════════════════════════════════════════════════════════════
 --  PUBLIC API  ·  getgenv().Emote  (client-side rewrite)
 -- ═══════════════════════════════════════════════════════════════════
