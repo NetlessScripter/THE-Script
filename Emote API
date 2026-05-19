@@ -26982,12 +26982,33 @@ getgenv().Emote = function(EmoteName, Char, Hit)
 	mainTrack.Looped = data.Looped == true
 	mainTrack:Play()
 
-	-- ── VFX (Limited / AuraEffect / Kill emotes) ──────────────────────
-	-- Regular emotes have no VFX entry.
-	-- Limited/AuraEffect emotes fire ReplicateEmoteVfx from their Startup.
-	-- Kill emotes with VFX check VFX[emoteName] directly.
-	-- Since we ARE the client, we call the VFX function directly instead
-	-- of waiting for FireAllClients — VFX is already loaded as an upvalue.
+	-- ── VFX ───────────────────────────────────────────────────────────
+	-- VFX:MainFunction() is the single dispatcher — it reads vfxName and
+	-- routes to the right module internally, just like the client handler
+	-- does when it receives a ReplicateEmoteVfx event from the server.
+	-- SpecificModule must always be the Instance so Startup functions can
+	-- navigate it as a folder tree (script.VFX.VfxMods.Evolved.vfx etc).
+	--
+	-- IMPORTANT: several emotes fire FireAllClients with a vfxName that
+	-- differs from the emote's own key.  The map below reflects exactly
+	-- what each Startup function passes in its FireAllClients call.
+	local VFX_NAME_MAP = {
+		["The Strongest"] = "Boss Raid",       -- Startup: vfxName = "Boss Raid"
+		["The Fallen"]    = "Pride",            -- Startup: vfxName = "Pride"
+		["Inner Rage"]    = "Energy Explosion", -- Startup: vfxName = "Energy Explosion"
+		["BigSlash"]      = "HugeSlash",        -- World Cutting Slash / Startup: vfxName = "HugeSlash"
+	}
+
+	-- Extra params that specific Startup functions also include in their
+	-- FireAllClients call — MainFunction passes them down to the VFX module.
+	local EXTRA_PARAMS_MAP = {
+		["The Strongest"]   = { CanRotate = true },
+		["The Fallen"]      = { CanRotate = true },
+		["BigSlash"]        = { CanRotate = true },
+		["Inner Rage"]      = { NoInsertion = true, Colour = data.CanColor and Color3.fromRGB(math.random(0,255), math.random(0,255), math.random(0,255)) or nil },
+		["Shadow Eruption"] = { NoInsertion = true },
+	}
+
 	-- If no Hit was supplied, fall back to Char so kill-emote VFX never
 	-- receives nil and triggers pairs(nil) / Destroy-of-table errors.
 	Hit = Hit or Char
@@ -26996,28 +27017,34 @@ getgenv().Emote = function(EmoteName, Char, Hit)
 	-- instances/connections here so they can be mass-destroyed on cleanup.
 	local CleanupTable = {}
 
-	if VFX[EmoteName] then
-		pcall(function()
-			VFX[EmoteName]({
-				-- ── Divine Form / new convention ──────────────────────
-				-- VFX modules (e.g. Evolved_2, Wombo Combo) read these keys.
-				Char           = Char,
-				RealAnim       = mainTrack,
-				Bind           = bind,
-				CleanupTable   = CleanupTable,
-				StartFrom      = 0,
-				-- ── Legacy / AnimationPlayer convention ───────────────
-				-- Older or mixed modules may still read these names.
-				Character      = Char,
-				AnimSent       = data.Animation,
-				RealBind       = bind,
-				-- ── Shared ────────────────────────────────────────────
-				vfxName        = EmoteName,
-				SpecificModule = VFX,
-				Victim         = Hit,
-			})
-		end)
+	local resolvedVfxName = VFX_NAME_MAP[EmoteName] or EmoteName
+	local extraParams     = EXTRA_PARAMS_MAP[EmoteName] or {}
+
+	local vfxParams = {
+		-- ── Standard convention (matches every working individual script) ──
+		Character      = Char,
+		vfxName        = resolvedVfxName,
+		SpecificModule = game:GetService("ReplicatedStorage").Emotes.VFX,
+		AnimSent       = data.Animation,
+		RealBind       = bind,
+		-- ── Divine Form convention (Char/RealAnim/Bind/CleanupTable) ──────
+		Char           = Char,
+		RealAnim       = mainTrack,
+		Bind           = bind,
+		CleanupTable   = CleanupTable,
+		StartFrom      = 0,
+		-- ── Kill emote ─────────────────────────────────────────────────────
+		Victim         = Hit,
+	}
+
+	-- Merge emote-specific extra params on top
+	for k, v in pairs(extraParams) do
+		vfxParams[k] = v
 	end
+
+	pcall(function()
+		VFX:MainFunction(vfxParams)
+	end)
 
 	-- Flush CleanupTable when the bind is destroyed (emote ends).
 	bind:GetPropertyChangedSignal("Parent"):Connect(function()
