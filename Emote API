@@ -26892,92 +26892,149 @@ function t1.IsLimited(_, p1604) -- line: 27613
 	return t1:GetTable(true)[p1604].Limited
 end
 
--- ─────────────────────────────────────────────
--- Public API  (accessible via getgenv().Emote)
--- ─────────────────────────────────────────────
--- Works fully client-side. For every emote:
---   1. Creates a #EmoteHolder_ bind accessory on the character
---   2. Plays the main animation via LoadAnimation
---   3. If the emote has an Idle, plays it looped after the main ends
---   4. Destroys the bind when the emote fully completes
+-- ═══════════════════════════════════════════════════════════════════
+--  PUBLIC API  ·  getgenv().Emote
+-- ═══════════════════════════════════════════════════════════════════
 --
--- Usage:
---   getgenv().Emote("Wombo Combo", char)       -- auto-target / solo
---   getgenv().Emote("Wombo Combo", char, hit)  -- explicit partner
+--  Works fully client-side for every emote type:
+--    Regular, Looped, Idle, Limited, AuraEffect, KillEmote, Dual
 --
--- Returns: mainTrack, bind  (so caller can stop early if needed)
--- ─────────────────────────────────────────────
+--  Usage:
+--    getgenv().Emote("Blink",       char)        -- regular / looped
+--    getgenv().Emote("True Aura",   char)        -- limited / VFX
+--    getgenv().Emote("Wombo Combo", char)        -- kill emote (auto)
+--    getgenv().Emote("Friendly Hug",char, hit)   -- dual with partner
+--
+--  Returns: mainTrack, bind
+--    mainTrack → the AnimationTrack so you can :Stop() early
+--    bind      → the #EmoteHolder_ Accessory (destroyed on finish)
+-- ═══════════════════════════════════════════════════════════════════
 getgenv().Emote = function(EmoteName, Char, Hit)
+
+	-- ── Resolve alias ─────────────────────────────────────────────────
+	if EmoteName == "2v1" then EmoteName = "Wombo Combo" end
+
+	-- ── Input validation ──────────────────────────────────────────────
 	if type(EmoteName) ~= "string" then
 		return warn("[Emote API] EmoteName must be a string, got: " .. type(EmoteName))
 	end
-
 	if typeof(Char) ~= "Instance" then
 		return warn("[Emote API] Char must be a character Instance, got: " .. typeof(Char))
 	end
 
 	local Humanoid = Char:FindFirstChildOfClass("Humanoid")
 	if not Humanoid then
-		return warn("[Emote API] No Humanoid found in character")
+		return warn("[Emote API] No Humanoid in character")
 	end
 
-	-- Fetch the full emote data table from the module.
-	-- t1:GetTable() calls t1:Play(nil, nil, true) which returns t49 before
-	-- hitting any server-only code paths — safe to call client-side.
-	local ok, emoteTable = pcall(function()
-		return t1:GetTable()
-	end)
+	-- ── Emote data lookup ─────────────────────────────────────────────
+	-- t1:GetTable() = t1:Play(nil, nil, true) which returns the full t49
+	-- table before hitting any server-only code — safe client-side.
+	-- t1:Play(nil, nil, true, nil, true) also merges in t64 (key emotes).
+	local data
 
-	if not ok or type(emoteTable) ~= "table" then
-		return warn("[Emote API] Failed to fetch emote table: " .. tostring(emoteTable))
+	local ok1, tbl1 = pcall(function() return t1:GetTable() end)
+	if ok1 and type(tbl1) == "table" then
+		data = tbl1[EmoteName]
 	end
 
-	local emoteData = emoteTable[EmoteName]
+	if not data then
+		-- Fallback: merge in t64 (key emotes, p27 = true)
+		local ok2, tbl2 = pcall(function()
+			return t1:Play(nil, nil, true, nil, true)
+		end)
+		if ok2 and type(tbl2) == "table" then
+			data = tbl2[EmoteName]
+		end
+	end
 
-	if not emoteData then
+	if not data then
 		return warn("[Emote API] Unknown emote: '" .. EmoteName .. "'")
 	end
 
+	if not data.Animation then
+		return warn("[Emote API] Emote '" .. EmoteName .. "' has no Animation ID")
+	end
+
 	-- ── Bind accessory ────────────────────────────────────────────────
-	-- Matches the game's own pattern (#EmoteHolder_XXXXX + EmoteProperty)
+	-- Mirrors the game's exact pattern: #EmoteHolder_XXXXX + EmoteProperty
+	-- The bind is the signal the VFX module uses to know when the emote ends.
 	local bind = Instance.new("Accessory")
 	bind.Name = "#EmoteHolder_" .. math.random(1, 100000)
 	bind:SetAttribute("EmoteProperty", true)
 	bind.Parent = Char
 
+	local alive = true
 	local function cleanup()
-		if bind and bind.Parent then
-			bind:Destroy()
+		if alive then
+			alive = false
+			if bind and bind.Parent then
+				bind:Destroy()
+			end
 		end
 	end
 
 	-- ── Main animation ────────────────────────────────────────────────
 	local mainAnim = Instance.new("Animation")
-	mainAnim.AnimationId = "rbxassetid://" .. tostring(emoteData.Animation)
+	mainAnim.AnimationId = "rbxassetid://" .. tostring(data.Animation)
 
 	local mainTrack = Humanoid:LoadAnimation(mainAnim)
-	mainTrack.Looped = emoteData.Looped == true
+	mainTrack.Looped = data.Looped == true
 	mainTrack:Play()
 
-	-- ── Idle loop (if emote has one) ──────────────────────────────────
-	if emoteData.Idle then
+	-- ── VFX (Limited / AuraEffect / Kill emotes) ──────────────────────
+	-- Regular emotes have no VFX entry.
+	-- Limited/AuraEffect emotes fire ReplicateEmoteVfx from their Startup.
+	-- Kill emotes with VFX check VFX[emoteName] directly.
+	-- Since we ARE the client, we call the VFX function directly instead
+	-- of waiting for FireAllClients — VFX is already loaded as an upvalue.
+	if VFX[EmoteName] then
+		pcall(function()
+			VFX[EmoteName]({
+				Character   = Char,
+				vfxName     = EmoteName,
+				SpecificModule = VFX,
+				AnimSent    = data.Animation,
+				RealBind    = bind,
+				Victim      = Hit or nil,
+			})
+		end)
+	end
+
+	-- ── Dual emote: partner animation ─────────────────────────────────
+	-- If Hit is supplied and the emote has AnimationTwo, play it on them.
+	-- Partner collision / positioning (Attach, RootAnchor) is server-side
+	-- and cannot be replicated here, but the animation will play.
+	if Hit and data.AnimationTwo then
+		local hitHumanoid = Hit:FindFirstChildOfClass("Humanoid")
+		if hitHumanoid then
+			pcall(function()
+				local partnerAnim = Instance.new("Animation")
+				partnerAnim.AnimationId = "rbxassetid://" .. tostring(data.AnimationTwo)
+				local partnerTrack = hitHumanoid:LoadAnimation(partnerAnim)
+				partnerTrack.Looped = data.Looped == true
+				partnerTrack:Play()
+			end)
+		end
+	end
+
+	-- ── Idle loop ─────────────────────────────────────────────────────
+	-- Some emotes (Hunter Pose, Sleigh, etc.) play a main anim first,
+	-- then loop an Idle anim. The bind lives until the idle also stops.
+	if data.Idle then
 		mainTrack.Stopped:Once(function()
-			-- Only transition to idle if the bind still exists
-			-- (i.e. emote wasn't cancelled externally)
-			if not bind or not bind.Parent then return end
+			if not alive or not bind.Parent then return end
 
 			local idleAnim = Instance.new("Animation")
-			idleAnim.AnimationId = "rbxassetid://" .. tostring(emoteData.Idle)
+			idleAnim.AnimationId = "rbxassetid://" .. tostring(data.Idle)
 
 			local idleTrack = Humanoid:LoadAnimation(idleAnim)
 			idleTrack.Looped = true
 			idleTrack:Play()
 
-			-- Destroy bind once the idle stops (player cancels / dies etc.)
 			idleTrack.Stopped:Once(cleanup)
 		end)
 	else
-		-- No idle — destroy bind as soon as the main animation stops
 		mainTrack.Stopped:Once(cleanup)
 	end
 
