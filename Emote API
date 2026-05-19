@@ -26991,18 +26991,46 @@ getgenv().Emote = function(EmoteName, Char, Hit)
 	-- If no Hit was supplied, fall back to Char so kill-emote VFX never
 	-- receives nil and triggers pairs(nil) / Destroy-of-table errors.
 	Hit = Hit or Char
+
+	-- CleanupTable mirrors Divine Form's pattern: VFX modules insert
+	-- instances/connections here so they can be mass-destroyed on cleanup.
+	local CleanupTable = {}
+
 	if VFX[EmoteName] then
 		pcall(function()
 			VFX[EmoteName]({
-				Character   = Char,
-				vfxName     = EmoteName,
+				-- ── Divine Form / new convention ──────────────────────
+				-- VFX modules (e.g. Evolved_2, Wombo Combo) read these keys.
+				Char           = Char,
+				RealAnim       = mainTrack,
+				Bind           = bind,
+				CleanupTable   = CleanupTable,
+				StartFrom      = 0,
+				-- ── Legacy / AnimationPlayer convention ───────────────
+				-- Older or mixed modules may still read these names.
+				Character      = Char,
+				AnimSent       = data.Animation,
+				RealBind       = bind,
+				-- ── Shared ────────────────────────────────────────────
+				vfxName        = EmoteName,
 				SpecificModule = VFX,
-				AnimSent    = data.Animation,
-				RealBind    = bind,
-				Victim      = Hit,
+				Victim         = Hit,
 			})
 		end)
 	end
+
+	-- Flush CleanupTable when the bind is destroyed (emote ends).
+	bind:GetPropertyChangedSignal("Parent"):Connect(function()
+		if not bind or not bind.Parent then
+			for _, item in ipairs(CleanupTable) do
+				if typeof(item) == "RBXScriptConnection" then
+					pcall(function() item:Disconnect() end)
+				elseif typeof(item) == "Instance" then
+					pcall(function() if item.Parent then item:Destroy() end end)
+				end
+			end
+		end
+	end)
 
 	-- ── Dual emote: partner animation ─────────────────────────────────
 	-- If Hit is supplied and the emote has AnimationTwo, play it on them.
