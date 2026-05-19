@@ -26896,15 +26896,14 @@ end
 -- Public API  (accessible via getgenv().Emote)
 -- ─────────────────────────────────────────────
 -- Usage:
---   getgenv().Emote(EmoteName, Char)          -- solo emote
---   getgenv().Emote(EmoteName, Char, Hit)     -- dual/partner emote
+--   getgenv().Emote(EmoteName, Char)          -- solo / auto-target dual
+--   getgenv().Emote(EmoteName, Char, Hit)     -- dual with explicit partner
 --
--- Hit is optional.  If omitted it defaults to Char, but it is only
--- forwarded to Play() when the emote actually has a Dual table —
--- emotes that don't need a partner receive no hit argument at all.
+-- Hit is optional. When nil, dual emotes auto-target the nearest valid
+-- player via the built-in Dual detection logic. t1.Play handles
+-- animations, bind accessories, cleanup — everything.
 -- ─────────────────────────────────────────────
 getgenv().Emote = function(EmoteName, Char, Hit)
-	-- Validate inputs
 	if type(EmoteName) ~= "string" then
 		return warn("[Emote API] EmoteName must be a string, got: " .. type(EmoteName))
 	end
@@ -26913,30 +26912,11 @@ getgenv().Emote = function(EmoteName, Char, Hit)
 		return warn("[Emote API] Char must be a character Instance, got: " .. typeof(Char))
 	end
 
-	-- Pull the full emote data table (same table Play uses internally)
-	local ok, emoteTable = pcall(function()
-		return t1:GetTable()
-	end)
-
-	if not ok or type(emoteTable) ~= "table" then
-		return warn("[Emote API] Failed to fetch emote data: " .. tostring(emoteTable))
-	end
-
-	if not emoteTable[EmoteName] then
-		return warn("[Emote API] Unknown emote '" .. EmoteName .. "'")
-	end
-
-	-- Only forward a hit/partner when this emote actually has a Dual table.
-	-- For everything else the argument is skipped entirely.
-	local needsHit = emoteTable[EmoteName].Dual ~= nil
-
-	if needsHit then
-		-- Default Hit to Char when the caller didn't supply one
-		local partner = Hit or Char
-		t1:Play(Char, EmoteName, nil, partner)
-	else
-		t1:Play(Char, EmoteName)
-	end
+	-- Pass Hit straight through as p26.
+	-- nil  → dual emotes auto-scan nearby players (auto-target)
+	-- Char → targets that specific character
+	-- t1.Play handles animations, accessories, and cleanup internally.
+	t1:Play(Char, EmoteName, nil, Hit)
 end
 
 return t1
