@@ -27010,7 +27010,7 @@ getgenv().Emote = function(EmoteName, Char, Hit)
 	-- Char is NOT passed here; we supply it explicitly to Startup below.
 	local allEmotes
 	local ok, res = pcall(function()
-		return t1:Play(nil, nil, true, nil, true)
+return t1:Play(Char, nil, true, nil, true)
 	end)
 	if ok and type(res) == "table" then
 		allEmotes = res
