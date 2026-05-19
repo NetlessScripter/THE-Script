@@ -4,9 +4,12 @@
 --
 --  Root problems fixed vs the old version:
 --
---  1. t1:GetTable() passes p23 = nil → Startup closures have no char.
---     FIX: call t1:Play(Char, nil, true, nil, true) so p23 = Char is
---     baked into every closure before we early-return t49.
+--  1. t1:GetTable() / t1:Play(Char, …) hit ownership validation when a
+--     real character is passed as p23, causing pcall to catch an error
+--     and return nil — emote always "not found".
+--     FIX: look up data with t1:Play(nil, nil, true, nil, true) (same
+--     as GetTable) so Play early-returns t49 cleanly.  Char is passed
+--     explicitly to Startup, so closures still get the right character.
 --
 --  2. data.Startup was never called → props / welds / effects never
 --     spawn.  FIX: we call it ourselves with the correct 6-arg sig.
@@ -106,14 +109,15 @@ getgenv().Emote = function(EmoteName, Char, Hit)
 		end
 	end
 
-	-- ── Get t49 with p23 = Char baked into every closure ─────────────
-	-- Play(Char, nil, true, nil, true):
-	--   p23 = Char   → correct character upvalue in all closures
-	--   p25 = true   → early-return t49 before any server code runs
-	--   p27 = true   → merge t64 (key / kill emotes) into t49
+	-- ── Get emote data ────────────────────────────────────────────────
+	-- Use nil for p23 (same as t1:GetTable) so Play reaches the early-
+	-- return without hitting any ownership / character validation code.
+	-- p25 = true  → early-return t49 before any server code runs
+	-- p27 = true  → merge t64 (limited / kill emotes) into the table
+	-- Char is NOT passed here; we supply it explicitly to Startup below.
 	local allEmotes
 	local ok, res = pcall(function()
-		return t1:Play(Char, nil, true, nil, true)
+		return t1:Play(nil, nil, true, nil, true)
 	end)
 	if ok and type(res) == "table" then
 		allEmotes = res
