@@ -26988,6 +26988,9 @@ getgenv().Emote = function(EmoteName, Char, Hit)
 	-- Kill emotes with VFX check VFX[emoteName] directly.
 	-- Since we ARE the client, we call the VFX function directly instead
 	-- of waiting for FireAllClients — VFX is already loaded as an upvalue.
+	-- If no Hit was supplied, fall back to Char so kill-emote VFX never
+	-- receives nil and triggers pairs(nil) / Destroy-of-table errors.
+	Hit = Hit or Char
 	if VFX[EmoteName] then
 		pcall(function()
 			VFX[EmoteName]({
@@ -26996,7 +26999,7 @@ getgenv().Emote = function(EmoteName, Char, Hit)
 				SpecificModule = VFX,
 				AnimSent    = data.Animation,
 				RealBind    = bind,
-				Victim      = Hit or nil,
+				Victim      = Hit,
 			})
 		end)
 	end
