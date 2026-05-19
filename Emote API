@@ -26893,28 +26893,44 @@ function t1.IsLimited(_, p1604) -- line: 27613
 end
 
 -- ═══════════════════════════════════════════════════════════════════
---  PUBLIC API  ·  getgenv().Emote
+--  PUBLIC API  ·  getgenv().Emote  (client-side rewrite)
 -- ═══════════════════════════════════════════════════════════════════
 --
---  Works fully client-side for every emote type:
---    Regular, Looped, Idle, Limited, AuraEffect, KillEmote, Dual
+--  Root problems fixed vs the old version:
+--
+--  1. t1:GetTable() passes p23 = nil → Startup closures have no char.
+--     FIX: call t1:Play(Char, nil, true, nil, true) so p23 = Char is
+--     baked into every closure before we early-return t49.
+--
+--  2. data.Startup was never called → props / welds / effects never
+--     spawn.  FIX: we call it ourselves with the correct 6-arg sig.
+--
+--  3. FireAllClients inside Startup threw an error that the outer pcall
+--     caught, aborting Startup before any Instance.new/Clone ran.
+--     FIX: __namecall hook temporarily turns FireAllClients / FireClient
+--     into no-ops so Startup completes fully.
+--
+--  4. Sounds were never scheduled (Play does that after the p25 guard).
+--     FIX: we replicate Play's task.delay / shared.sfx loop exactly.
+--
+--  5. Keyframes (string or numeric keys) were never connected.
+--     FIX: KeyframeReached connects all of them.
 --
 --  Usage:
---    getgenv().Emote("Blink",       char)        -- regular / looped
---    getgenv().Emote("True Aura",   char)        -- limited / VFX
---    getgenv().Emote("Wombo Combo", char)        -- kill emote (auto)
---    getgenv().Emote("Friendly Hug",char, hit)   -- dual with partner
+--    getgenv().Emote("Blink",        char)
+--    getgenv().Emote("Waiting Game", char)
+--    getgenv().Emote("Wombo Combo",  char)          -- kill emote
+--    getgenv().Emote("Friendly Hug", char, partner) -- dual
 --
 --  Returns: mainTrack, bind
---    mainTrack → the AnimationTrack so you can :Stop() early
---    bind      → the #EmoteHolder_ Accessory (destroyed on finish)
 -- ═══════════════════════════════════════════════════════════════════
+
 getgenv().Emote = function(EmoteName, Char, Hit)
 
-	-- ── Resolve alias ─────────────────────────────────────────────────
+	-- ── Alias ─────────────────────────────────────────────────────────
 	if EmoteName == "2v1" then EmoteName = "Wombo Combo" end
 
-	-- ── Input validation ──────────────────────────────────────────────
+	-- ── Validate ──────────────────────────────────────────────────────
 	if type(EmoteName) ~= "string" then
 		return warn("[Emote API] EmoteName must be a string, got: " .. type(EmoteName))
 	end
@@ -26927,176 +26943,277 @@ getgenv().Emote = function(EmoteName, Char, Hit)
 		return warn("[Emote API] No Humanoid in character")
 	end
 
-	-- ── Emote data lookup ─────────────────────────────────────────────
-	-- t1:GetTable() = t1:Play(nil, nil, true) which returns the full t49
-	-- table before hitting any server-only code — safe client-side.
-	-- t1:Play(nil, nil, true, nil, true) also merges in t64 (key emotes).
-	local data
+	-- ── shared.* polyfills ────────────────────────────────────────────
+	-- These are set PERMANENTLY (not restored) because Keyframe closures
+	-- captured v22 → shared.sfx by reference; they fire seconds later
+	-- and need the polyfill to still be in place.
 
-	local ok1, tbl1 = pcall(function() return t1:GetTable() end)
-	if ok1 and type(tbl1) == "table" then
-		data = tbl1[EmoteName]
-	end
-
-	if not data then
-		-- Fallback: merge in t64 (key emotes, p27 = true)
-		local ok2, tbl2 = pcall(function()
-			return t1:Play(nil, nil, true, nil, true)
-		end)
-		if ok2 and type(tbl2) == "table" then
-			data = tbl2[EmoteName]
+	if not shared.sfx then
+		-- Returns (Sound, nil, nil) matching the real shared.sfx contract.
+		-- Does NOT auto-play — callers do :Play() or :Resume() themselves,
+		-- exactly like the real implementation.
+		shared.sfx = function(p)
+			local s = Instance.new("Sound")
+			pcall(function()
+				local id = tostring(p.SoundId or 0)
+				-- Normalise: bare number, rbxassetid://..., or full url
+				if not id:match("^rbxasset") then
+					local num = id:match("%d+")
+					id = num and ("rbxassetid://" .. num) or "rbxassetid://0"
+				end
+				s.SoundId             = id
+				s.Name                = p.Name or "EmoteSFX"
+				s.Volume              = p.Volume or 1
+				s.Looped              = p.Looped == true
+				s.RollOffMaxDistance  = p.RollOffMaxDistance or (n1 or 85)
+				s.Parent              = p.Parent or Char:FindFirstChild("HumanoidRootPart") or Char
+			end)
+			return s, nil, nil
 		end
 	end
 
+	if not shared.intcheck then
+		-- Returns an interrupt-state object.  .interrupted is set true by
+		-- cleanup(); Startup / Keyframe loops check it to bail early.
+		shared.intcheck = function(_char, _arr, _fn)
+			return { interrupted = false }
+		end
+	end
+
+	if not shared.cfolder then
+		-- Real shared.cfolder receives a PROPERTY TABLE (Name, Parent, …),
+		-- not separate (char, name) args.
+		shared.cfolder = function(props, _delay)
+			local f = Instance.new("Folder")
+			if type(props) == "table" then
+				for k, v in pairs(props) do
+					pcall(function() f[k] = v end)
+				end
+			end
+			return f
+		end
+	end
+
+	-- ── Get t49 with p23 = Char baked into every closure ─────────────
+	-- Play(Char, nil, true, nil, true):
+	--   p23 = Char   → correct character upvalue in all closures
+	--   p25 = true   → early-return t49 before any server code runs
+	--   p27 = true   → merge t64 (key / kill emotes) into t49
+	local allEmotes
+	local ok, res = pcall(function()
+		return t1:Play(Char, nil, true, nil, true)
+	end)
+	if ok and type(res) == "table" then
+		allEmotes = res
+	end
+
+	local data = allEmotes and allEmotes[EmoteName]
 	if not data then
 		return warn("[Emote API] Unknown emote: '" .. EmoteName .. "'")
 	end
-
 	if not data.Animation then
 		return warn("[Emote API] Emote '" .. EmoteName .. "' has no Animation ID")
 	end
 
+	-- ── Execution state (mirrors Play's locals exactly) ───────────────
+	local mainAnim       = Instance.new("Animation")
+	mainAnim.AnimationId = "rbxassetid://" .. tostring(data.Animation)
+	local v144           = Humanoid:LoadAnimation(mainAnim)   -- main AnimationTrack
+	v144.Looped          = data.Looped == true
+
+	local t65  = { v144 }              -- cleanup array  (Startup pushes into this)
+	local t67  = {}                    -- state table    (Startup stores prop refs)
+	local v147 = nil                   -- stun holder    (nil client-side)
+	local v152 = { interrupted = false } -- interrupt state
+
 	-- ── Bind accessory ────────────────────────────────────────────────
-	-- Mirrors the game's exact pattern: #EmoteHolder_XXXXX + EmoteProperty
-	-- The bind is the signal the VFX module uses to know when the emote ends.
 	local bind = Instance.new("Accessory")
-	bind.Name = "#EmoteHolder_" .. math.random(1, 100000)
+	bind.Name  = "#EmoteHolder_" .. math.random(1, 100000)
 	bind:SetAttribute("EmoteProperty", true)
 	bind.Parent = Char
+	table.insert(t65, bind)
 
-	local alive = true
-	local function cleanup()
-		if alive then
-			alive = false
-			if bind and bind.Parent then
-				bind:Destroy()
-			end
-		end
-	end
+	-- ── Play main animation ───────────────────────────────────────────
+	v144:Play()
 
-	-- ── Main animation ────────────────────────────────────────────────
-	local mainAnim = Instance.new("Animation")
-	mainAnim.AnimationId = "rbxassetid://" .. tostring(data.Animation)
+	-- ── Call Startup ──────────────────────────────────────────────────
+	-- Startup functions contain FireAllClients / FireClient calls that
+	-- would error and abort execution before any prop/weld/clone runs.
+	-- We hook __namecall to silence those two methods for the duration
+	-- of the Startup call, then immediately restore the original.
+	if data.Startup then
 
-	local mainTrack = Humanoid:LoadAnimation(mainAnim)
-	mainTrack.Looped = data.Looped == true
-	mainTrack:Play()
+		local hooked   = false
+		local origCall = nil
+		local mt       = nil
 
-	-- ── VFX ───────────────────────────────────────────────────────────
-	-- VFX:MainFunction() is the single dispatcher — it reads vfxName and
-	-- routes to the right module internally, just like the client handler
-	-- does when it receives a ReplicateEmoteVfx event from the server.
-	-- SpecificModule must always be the Instance so Startup functions can
-	-- navigate it as a folder tree (script.VFX.VfxMods.Evolved.vfx etc).
-	--
-	-- IMPORTANT: several emotes fire FireAllClients with a vfxName that
-	-- differs from the emote's own key.  The map below reflects exactly
-	-- what each Startup function passes in its FireAllClients call.
-	local VFX_NAME_MAP = {
-		["The Strongest"] = "Boss Raid",       -- Startup: vfxName = "Boss Raid"
-		["The Fallen"]    = "Pride",            -- Startup: vfxName = "Pride"
-		["Inner Rage"]    = "Energy Explosion", -- Startup: vfxName = "Energy Explosion"
-		["BigSlash"]      = "HugeSlash",        -- World Cutting Slash / Startup: vfxName = "HugeSlash"
-	}
-
-	-- Extra params that specific Startup functions also include in their
-	-- FireAllClients call — MainFunction passes them down to the VFX module.
-	local EXTRA_PARAMS_MAP = {
-		["The Strongest"]   = { CanRotate = true },
-		["The Fallen"]      = { CanRotate = true },
-		["BigSlash"]        = { CanRotate = true },
-		["Inner Rage"]      = { NoInsertion = true, Colour = data.CanColor and Color3.fromRGB(math.random(0,255), math.random(0,255), math.random(0,255)) or nil },
-		["Shadow Eruption"] = { NoInsertion = true },
-	}
-
-	-- If no Hit was supplied, fall back to Char so kill-emote VFX never
-	-- receives nil and triggers pairs(nil) / Destroy-of-table errors.
-	Hit = Hit or Char
-
-	-- CleanupTable mirrors Divine Form's pattern: VFX modules insert
-	-- instances/connections here so they can be mass-destroyed on cleanup.
-	local CleanupTable = {}
-
-	local resolvedVfxName = VFX_NAME_MAP[EmoteName] or EmoteName
-	local extraParams     = EXTRA_PARAMS_MAP[EmoteName] or {}
-
-	local vfxParams = {
-		-- ── Standard convention (matches every working individual script) ──
-		Character      = Char,
-		vfxName        = resolvedVfxName,
-		SpecificModule = game:GetService("ReplicatedStorage").Emotes.VFX,
-		AnimSent       = data.Animation,
-		RealBind       = bind,
-		-- ── Divine Form convention (Char/RealAnim/Bind/CleanupTable) ──────
-		Char           = Char,
-		RealAnim       = mainTrack,
-		Bind           = bind,
-		CleanupTable   = CleanupTable,
-		StartFrom      = 0,
-		-- ── Kill emote ─────────────────────────────────────────────────────
-		Victim         = Hit,
-	}
-
-	-- Merge emote-specific extra params on top
-	for k, v in pairs(extraParams) do
-		vfxParams[k] = v
-	end
-
-	pcall(function()
-		VFX:MainFunction(vfxParams)
-	end)
-
-	-- Flush CleanupTable when the bind is destroyed (emote ends).
-	bind:GetPropertyChangedSignal("Parent"):Connect(function()
-		if not bind or not bind.Parent then
-			for _, item in ipairs(CleanupTable) do
-				if typeof(item) == "RBXScriptConnection" then
-					pcall(function() item:Disconnect() end)
-				elseif typeof(item) == "Instance" then
-					pcall(function() if item.Parent then item:Destroy() end end)
+		-- Try the hook (requires exploit APIs: getrawmetatable, setreadonly,
+		-- getnamecallmethod, newcclosure).  If any of these are missing the
+		-- hook is silently skipped and Startup runs inside a plain pcall.
+		pcall(function()
+			mt = getrawmetatable(game)
+			if not mt then return end
+			setreadonly(mt, false)
+			origCall = rawget(mt, "__namecall")
+			rawset(mt, "__namecall", newcclosure(function(self, ...)
+				local m = getnamecallmethod()
+				if m == "FireAllClients" or m == "FireClient" then
+					return  -- silently discard — server-only, can't run on client
 				end
-			end
-		end
-	end)
+				return origCall(self, ...)
+			end))
+			setreadonly(mt, true)
+			hooked = true
+		end)
 
-	-- ── Dual emote: partner animation ─────────────────────────────────
-	-- If Hit is supplied and the emote has AnimationTwo, play it on them.
-	-- Partner collision / positioning (Attach, RootAnchor) is server-side
-	-- and cannot be replicated here, but the animation will play.
-	if Hit and data.AnimationTwo then
-		local hitHumanoid = Hit:FindFirstChildOfClass("Humanoid")
-		if hitHumanoid then
+		-- Run Startup with the same 6-arg signature Play uses:
+		--   (t65, v144, t67, data, v152, v147)
+		pcall(data.Startup, t65, v144, t67, data, v152, v147)
+
+		-- Restore immediately so the hook doesn't linger
+		if hooked and origCall and mt then
 			pcall(function()
-				local partnerAnim = Instance.new("Animation")
-				partnerAnim.AnimationId = "rbxassetid://" .. tostring(data.AnimationTwo)
-				local partnerTrack = hitHumanoid:LoadAnimation(partnerAnim)
-				partnerTrack.Looped = data.Looped == true
-				partnerTrack:Play()
+				setreadonly(mt, false)
+				rawset(mt, "__namecall", origCall)
+				setreadonly(mt, true)
 			end)
 		end
 	end
 
-	-- ── Idle loop ─────────────────────────────────────────────────────
-	-- Some emotes (Hunter Pose, Sleigh, etc.) play a main anim first,
-	-- then loop an Idle anim. The bind lives until the idle also stops.
+	-- ── Keyframes ─────────────────────────────────────────────────────
+	-- Keys can be numeric (seconds/frame number) OR strings ("start").
+	-- KeyframeReached fires with the keyframe name as a string.
+	if data.Keyframes then
+		v144.KeyframeReached:Connect(function(kfName)
+			-- Try numeric key first, then string key
+			local fn = data.Keyframes[tonumber(kfName)] or data.Keyframes[kfName]
+			if fn then
+				pcall(fn, t67, t65, kfName, v152)
+			end
+		end)
+	end
+
+	-- ── Sounds ────────────────────────────────────────────────────────
+	-- Play's execution section (lines 26821-26880) handles Sounds AFTER
+	-- the p25 early-return, so our early-return misses it.
+	-- We replicate the exact logic here (task.delay + shared.sfx).
+	if data.Sounds then
+		for k, v in pairs(data.Sounds) do
+			if v152.interrupted then break end
+
+			task.delay(k, function()
+				if v152.interrupted then return end
+
+				-- Build the sound config table the same way Play does
+				local t88 = {
+					Name               = "EmoteSFX",
+					Parent             = Char.PrimaryPart or Char:FindFirstChild("HumanoidRootPart") or Char,
+					RollOffMaxDistance = n1 or 85,
+				}
+
+				local smoothTarget = nil
+
+				if v.ParentTorso then
+					t88.Parent    = Char:FindFirstChild("Torso") or t88.Parent
+					v.ParentTorso = nil
+				end
+
+				if v.Smooth then
+					smoothTarget = v.Volume or 0.5
+					v.Volume     = 0
+					v.Smooth     = nil
+				end
+
+				-- Merge sound-specific fields on top
+				for k2, v2 in pairs(v) do
+					t88[k2] = v2
+				end
+
+				if v152.interrupted then return end
+
+				-- Create the Sound via the polyfilled shared.sfx
+				local snd = shared.sfx(t88)
+				if not snd then return end
+
+				snd:SetAttribute("EmoteProperty", true)
+				table.insert(t65, snd)
+
+				if smoothTarget then snd.Volume = 0 end
+
+				if v152.interrupted then return end
+
+				snd:Resume()   -- mirrors Play: it uses Resume, not Play
+
+				if smoothTarget then
+					local TweenService = game:GetService("TweenService")
+					TweenService:Create(
+						snd,
+						TweenInfo.new(1.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+						{ Volume = smoothTarget }
+					):Play()
+				end
+			end)
+		end
+	end
+
+	-- ── Dual emote: partner animation ─────────────────────────────────
+	if Hit and Hit ~= Char and data.AnimationTwo then
+		local hitHum = Hit:FindFirstChildOfClass("Humanoid")
+		if hitHum then
+			pcall(function()
+				local partAnim       = Instance.new("Animation")
+				partAnim.AnimationId = "rbxassetid://" .. tostring(data.AnimationTwo)
+				local partTrack      = hitHum:LoadAnimation(partAnim)
+				partTrack.Looped     = data.Looped == true
+				partTrack:Play()
+				table.insert(t65, partTrack)
+			end)
+		end
+	end
+
+	-- ── Cleanup ───────────────────────────────────────────────────────
+	-- Destroys / disconnects everything in t65 (the same array Startup
+	-- and Keyframes pushed into), then sets v152.interrupted = true so
+	-- any still-running loops inside Startup task.spawns bail out.
+	local alive = true
+	local function cleanup()
+		if not alive then return end
+		alive             = false
+		v152.interrupted  = true
+
+		for _, item in ipairs(t65) do
+			pcall(function()
+				if typeof(item) == "RBXScriptConnection" then
+					item:Disconnect()
+				elseif typeof(item) == "Instance" and item.Parent then
+					item:Destroy()
+				end
+			end)
+		end
+	end
+
+	-- ── Idle chain ────────────────────────────────────────────────────
+	-- Some emotes (Hunter Pose, Sleigh, Aka Stance, …) play an intro
+	-- animation and then loop an Idle.  The bind survives until the
+	-- player manually stops the idle.
 	if data.Idle then
-		mainTrack.Stopped:Once(function()
-			if not alive or not bind.Parent then return end
+		v144.Stopped:Once(function()
+			if not alive then return end
 
-			local idleAnim = Instance.new("Animation")
+			local idleAnim       = Instance.new("Animation")
 			idleAnim.AnimationId = "rbxassetid://" .. tostring(data.Idle)
-
-			local idleTrack = Humanoid:LoadAnimation(idleAnim)
-			idleTrack.Looped = true
+			local idleTrack      = Humanoid:LoadAnimation(idleAnim)
+			idleTrack.Looped     = true
 			idleTrack:Play()
+			table.insert(t65, idleTrack)
 
 			idleTrack.Stopped:Once(cleanup)
 		end)
 	else
-		mainTrack.Stopped:Once(cleanup)
+		v144.Stopped:Once(cleanup)
 	end
 
-	return mainTrack, bind
+	return v144, bind
 end
 
 return t1
