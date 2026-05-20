@@ -27003,14 +27003,17 @@ getgenv().Emote = function(EmoteName, Char, Hit)
 	end
 
 	-- ── Get emote data ────────────────────────────────────────────────
-	-- Use nil for p23 (same as t1:GetTable) so Play reaches the early-
-	-- return without hitting any ownership / character validation code.
-	-- p25 = true  → early-return t49 before any server code runs
-	-- p27 = true  → merge t64 (limited / kill emotes) into the table
-	-- Char is NOT passed here; we supply it explicitly to Startup below.
+	-- p23 = Char      → Startup closures capture the real character
+	-- p24 = EmoteName → Startup closures capture the correct emote name;
+	--                   critical because many Startups use p24 as vfxName
+	--                   in FireAllClients({Type="ReplicateEmoteVfx"}).
+	--                   Passing nil (old behaviour) caused vfxName=nil,
+	--                   silently breaking VFX for every emote that relies on p24.
+	-- p25 = true      → early-return t49 before any ownership/server code runs
+	-- p27 = true      → merge t64 (limited / kill emotes) into the table
 	local allEmotes
 	local ok, res = pcall(function()
-return t1:Play(Char, nil, true, nil, true)
+return t1:Play(Char, EmoteName, true, nil, true)
 	end)
 	if ok and type(res) == "table" then
 		allEmotes = res
