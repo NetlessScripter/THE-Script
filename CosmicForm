@@ -1,4 +1,4 @@
-local script = game.ReplicatedStorage.Emotes.VFX.VfxMods.CosmicTransformation
+local script = game:GetService("ReplicatedStorage").Resources.Cosmic
 local t1 = {}
 local libraryNew = require(script.Parent.libraryNew)
 local PlayAttachment = libraryNew.PlayAttachment
