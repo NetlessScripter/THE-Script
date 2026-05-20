@@ -1,0 +1,4168 @@
+local script = game.ReplicatedStorage.Emotes.VFX.VfxMods.CosmicTransformation
+local t1 = {}
+local libraryNew = require(script.Parent.libraryNew)
+local PlayAttachment = libraryNew.PlayAttachment
+local Maid = libraryNew.Maid
+local PlayTween = libraryNew.PlayTween
+local _ = libraryNew.CamShake
+local _ = libraryNew.PlayFlipBook
+local dtwait = libraryNew.dtwait
+local PlayMesh = libraryNew.PlayMesh
+local _ = libraryNew.Impact
+local _ = libraryNew.GlassLight
+local RaiseZIndex = libraryNew.RaiseZIndex
+local Able = libraryNew.Able
+local LifeScale = libraryNew.LifeScale
+local QuickFX = libraryNew.QuickFX
+local _ = libraryNew.QuickWeld
+local _ = libraryNew.Yield
+local _ = libraryNew.ProcessPart
+local _ = libraryNew.WeldObject
+local _ = libraryNew.Bezier
+local t2 = {}
+
+t2.__index = t2
+
+local random = Random.new()
+local TweenService = game:GetService("TweenService")
+
+game:GetService("PhysicsService")
+game:GetService("CollectionService")
+
+local CosmicAura = require(game.ReplicatedStorage.Resources.CosmicMods.CosmicAura)
+local MoonEmitter = require(game.ReplicatedStorage.Resources.MoonEmitter)
+local BeamLightning = require(game.ReplicatedStorage.Resources.CosmicMods.BeamLightning)
+local ObjectService = require(game.ReplicatedStorage.Resources.CosmicMods.ObjectService)
+local LoopService = require(game.ReplicatedStorage.Resources.CosmicMods.LoopService)
+local u29 = nil
+
+function t1.Transform(p1) -- line: 47
+	-- upvalues: libraryNew (copy), u29 (ref), t2 (copy), Maid (copy), CosmicAura (copy), MoonEmitter (copy), PlayTween (copy), QuickFX (copy), TweenService (copy), random (copy), dtwait (copy), PlayMesh (copy), Able (copy), LifeScale (copy), PlayAttachment (copy), RaiseZIndex (copy), ObjectService (copy), BeamLightning (copy), LoopService (copy)
+	local Data = p1.Data
+	local Char = Data.Char
+	local HumanoidRootPart = Char.HumanoidRootPart
+	local Humanoid = Char.Humanoid
+	local EFP = libraryNew.EFP
+	local v39 = workspace.CurrentCamera or game.Workspace.Camera
+	local t3 = {}
+	local u41 = false
+
+	game:GetService("UserInputService")
+	tick()
+
+	if not v39 or not v39.CameraType then
+	end
+
+	local function diagTraceback(_) -- line: 108
+	end
+
+	if Char ~= game.Players.LocalPlayer.Character then
+		task.spawn(function() -- line: 120
+			-- upvalues: Char (copy)
+			require(script.Parent.OutsideV2).FirstEvent({
+				Char = Char
+			})
+		end)
+		task.wait(0.3)
+
+		if not u29 then
+			u29 = true
+			task.delay(15, function() -- line: 126
+				-- upvalues: u29 (ref)
+				u29 = nil
+			end)
+			require(script.Parent.OutsideV2).StormEvent({
+				Char = Char
+			})
+		end
+
+		return
+	end
+
+	local v43 = setmetatable({}, t2)
+
+	v43._maid = Maid.new()
+
+	local u44 = false
+
+	task.delay(15, function() -- line: 146
+		-- upvalues: u44 (ref), v43 (copy)
+		if not u44 then
+			u44 = true
+			v43._maid:doCleaning()
+		end
+	end)
+	tick()
+
+	local clone = Data.music:Clone()
+
+	task.delay(120, function() -- line: 152
+		-- upvalues: clone (copy)
+		if clone and clone.Parent then
+			clone:Destroy()
+		end
+	end)
+
+	local musicTimePosition = Data.music.TimePosition
+
+	Data.music:Destroy()
+	Humanoid.Died:Once(function() -- line: 160
+		-- upvalues: clone (copy)
+		game:GetService("TweenService"):Create(clone, TweenInfo.new(1.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			Volume = 0
+		}):Play()
+	end)
+	clone.Parent = game.Players.LocalPlayer.PlayerGui
+	clone.TimePosition = musicTimePosition
+	clone.RollOffMaxDistance = 200
+	clone.RollOffMode = Enum.RollOffMode.LinearSquare
+	clone:Play()
+
+	local t4 = {}
+
+	tick()
+
+	local function v48(p3) -- line: 205
+		-- upvalues: t3 (copy), u41 (ref), Char (copy)
+		if p3 == 0 then
+			for k, v in pairs(t3) do
+				k.Transparency = v
+			end
+
+			table.clear(t3)
+
+			return
+		end
+
+		u41 = true
+
+		for _, v in pairs(workspace.Thrown:GetDescendants()) do
+			if tostring(v) == "Debris" and v:IsA("BasePart") and (Char.PrimaryPart.Position - v.Position).Magnitude <= 170 then
+				v.CFrame = CFrame.new(40000, 40000, 40000)
+			end
+		end
+
+		for _, v in pairs(workspace.Map:GetDescendants()) do
+			if v:IsA("BasePart") then
+				t3[v] = v.Transparency
+				v.Transparency = 1
+			end
+		end
+	end
+
+	local u49 = nil
+	local lib = require(Char.CharacterHandler:FindFirstChild("AnimationPlayer") or Char.CharacterHandler:WaitForChild("AnimationPlayer"))
+
+	local function v51(p4) -- line: 245
+		-- upvalues: lib (copy), Char (copy)
+		return lib.playAnimation(game.FindFirstChild(Char, "Humanoid"), p4)
+	end
+	local function Transform() -- line: 250
+		-- upvalues: HumanoidRootPart (copy), EFP (ref), libraryNew (copy), Char (copy), Char (copy), t4 (copy), CosmicAura (copy), clone (copy), v48 (copy), MoonEmitter (copy), v51 (copy), PlayTween (copy), t2 (copy), Maid (copy), QuickFX (copy), TweenService (copy), random (copy), dtwait (copy), v39 (copy), Humanoid (copy), v39 (copy), PlayMesh (copy), u49 (ref), t3 (copy), Able (copy), LifeScale (copy), PlayAttachment (copy), RaiseZIndex (copy), ObjectService (copy), BeamLightning (copy), LoopService (copy)
+		local Cosmic = game.ReplicatedStorage.Resources.Cosmic
+		local TweenService2 = game:GetService("TweenService")
+		local TweenService3 = game:GetService("TweenService")
+
+		HumanoidRootPart.Velocity = Vector3.new(0, 0, 0)
+
+		local vfx = Cosmic.vfx
+		local u71 = true
+		local Folder = Instance.new("Folder")
+
+		Folder.Name = "CosmicRigs"
+		Folder.Parent = EFP
+
+		local Folder2 = Instance.new("Folder")
+
+		Folder2.Parent = EFP
+		Folder2.Name = "CosmicEffects"
+		EFP = Folder2
+		task.delay(33, function() -- line: 274
+			-- upvalues: EFP (ref), Folder2 (copy), libraryNew (copy)
+			if EFP == Folder2 then
+				EFP = libraryNew.EFP
+			end
+
+			if Folder2 and Folder2.Parent then
+				Folder2:Destroy()
+			end
+		end)
+
+		local Clouds = game.Workspace.Terrain:FindFirstChild("Clouds")
+
+		if Clouds then
+			Clouds.Enabled = false
+		end
+
+		local clone2 = Cosmic.Camrig:Clone()
+
+		clone2.Parent = Folder
+
+		local raycastParams = RaycastParams.new()
+
+		raycastParams.FilterType = Enum.RaycastFilterType.Include
+		raycastParams.FilterDescendantsInstances = {
+			game.Workspace.Map,
+			game.Workspace.Built
+		}
+
+		local raycastResult = game.workspace:Raycast(HumanoidRootPart.Position, Vector3.new(0, -10000, 0), raycastParams)
+		local v78 = HumanoidRootPart.Position.Y - HumanoidRootPart.Size.Y * 1.5
+
+		if raycastResult then
+			v78 = raycastResult.Position.Y
+		end
+
+		local HumanoidRootPartCFrame = HumanoidRootPart.CFrame
+		local _, v81, _ = Char:GetPivot():ToOrientation()
+
+		Char:PivotTo(CFrame.new(HumanoidRootPart.Position.X, v78, HumanoidRootPart.Position.Z) * CFrame.Angles(0, v81, 0) * CFrame.new(-13, -1445.5, -883):Inverse())
+
+		local clone3 = Cosmic.SceneRig:Clone()
+
+		clone3:PivotTo(HumanoidRootPart.CFrame * clone3:GetAttribute("Offset"):Inverse())
+		clone3.Parent = Folder
+		table.insert(t4, clone3)
+
+		local clone4 = Cosmic.GOD:Clone()
+		local Humanoid2 = clone4.Humanoid
+		local _ = clone4.HumanoidRootPart
+
+		clone4.Parent = Folder
+		clone4:PivotTo(HumanoidRootPart.CFrame * clone4:GetAttribute("Offset"):Inverse())
+
+		local FallSequence = nil
+
+		CosmicAura.Off({
+			Char = Char
+		})
+
+		local v88 = shared.sfx({
+			SoundId = "rbxassetid://90822795706347",
+			Volume = 2.5,
+			Parent = workspace
+		})
+
+		v88:Play()
+		clone:Play()
+		TweenService3:Create(clone, TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			Volume = 5
+		}):Play()
+		TweenService3:Create(v88, TweenInfo.new(9.45, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			Volume = 5
+		}):Play()
+
+		local v89 = clone2.AnimationController:LoadAnimation(script.FallSequence.SecondCamera)
+
+		v48(1)
+		workspace:SetAttribute("MapInvis", true)
+
+		function FallSequence() -- line: 736
+			-- upvalues: vfx (copy), clone2 (copy), HumanoidRootPart (copy), v51 (copy), clone3 (copy), Cosmic (copy), Folder (copy), t4 (copy), TweenService3 (copy), clone (copy), Humanoid (copy), v89 (copy), v39 (copy), v39 (copy), EFP (ref), MoonEmitter (copy), Char (copy), PlayMesh (copy), dtwait (copy), u71 (ref), v48 (copy), CosmicAura (copy), Clouds (copy), u49 (ref), t2 (copy), Maid (copy), t3 (copy), TweenService (copy), QuickFX (copy), Able (copy), PlayTween (copy), LifeScale (copy), PlayAttachment (copy), random (copy), HumanoidRootPartCFrame (copy), RaiseZIndex (copy), ObjectService (copy), BeamLightning (copy), LoopService (copy), Folder2 (copy), Char (copy), TweenService2 (copy)
+			local FallSequence2 = vfx.FallSequence
+			local n1 = 1492
+			local FOV = script.FallSequence.FOV
+
+			clone2:PivotTo(HumanoidRootPart.CFrame * clone2:GetAttribute("Offset"):Inverse() * CFrame.new(0, 0, 0))
+
+			local v116 = v51(99080785512879)
+			local v117 = clone2.AnimationController:LoadAnimation(script.FallSequence.Cam)
+			local v118 = clone3.AnimationController:LoadAnimation(script.FallSequence.Scene)
+			local clone5 = Cosmic.Meshs:Clone()
+
+			clone5:PivotTo(HumanoidRootPart.CFrame * clone5:GetAttribute("Offset"):Inverse())
+			clone5.Parent = Folder
+			table.insert(t4, clone5)
+
+			local t5 = {}
+
+			v116:Play()
+			v117:Play()
+			v118:Play()
+
+			local CFrameValue = Instance.new("CFrameValue")
+			local NumberValue = Instance.new("NumberValue")
+
+			NumberValue.Value = 1
+			table.insert(t4, CFrameValue)
+			table.insert(t4, NumberValue)
+			table.insert(t5, v116)
+			table.insert(t5, v117)
+			table.insert(t5, v118)
+
+			for _, v in pairs(t5) do
+				v.TimePosition = 24.866666666666667
+			end
+
+			local u125 = false
+
+			local function Stop() -- line: 804
+				-- upvalues: u125 (ref), v116 (copy), TweenService3 (copy), clone (copy), Humanoid (copy), HumanoidRootPart (copy), t4 (copy), v117 (copy), v89 (copy), v39 (copy), v39 (copy), Folder (copy)
+				if u125 then
+					return
+				end
+
+				u125 = true
+				v116:Stop()
+				warn("f")
+
+				local CollectionService = game:GetService("CollectionService")
+
+				task.delay(0, function() -- line: 811
+					-- upvalues: TweenService3 (copy), clone (copy), Humanoid (copy), HumanoidRootPart (copy), CollectionService (copy)
+					game.Players.LocalPlayer:GetAttribute("S_UltMusic")
+					TweenService3:Create(clone, TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+						Volume = 2.35
+					}):Play()
+					Humanoid.Died:Once(function() -- line: 819
+						-- upvalues: TweenService3 (copy), clone (copy)
+						TweenService3:Create(clone, TweenInfo.new(3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+							Volume = 0
+						}):Play()
+					end)
+					task.wait(1)
+					shared.repfire({
+						Effect = "Music Transition",
+						Vol = true,
+						Theme = clone,
+						Root = HumanoidRootPart
+					})
+					CollectionService:AddTag(clone, "UltimateMusic")
+				end)
+
+				for _, v in pairs(t4) do
+					if typeof(v) == "RBXScriptConnection" then
+						v:Disconnect()
+					else
+						v:Destroy()
+					end
+				end
+
+				v117:Stop()
+				v89:Stop()
+				shared.smoothout(v39.CFrame)
+				shared.SetCore(true, 3)
+				task.delay(0.85, function() -- line: 856
+					-- upvalues: v39 (copy)
+					game:GetService("TweenService"):Create(v39, TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+						FieldOfView = game.Players.LocalPlayer:GetAttribute("S_FOV") or 70
+					}):Play()
+				end)
+				Folder:Destroy()
+			end
+			local function GodFlesh() -- line: 874
+				-- upvalues: FallSequence2 (copy), EFP (ref), t4 (copy), MoonEmitter (copy), v116 (copy), Char (copy), HumanoidRootPart (copy), PlayMesh (copy), dtwait (copy)
+				local clone6 = FallSequence2.JustCCS:Clone()
+
+				clone6.Parent = EFP
+				table.insert(t4, clone6)
+
+				local v162 = MoonEmitter.new(clone6)
+
+				v162:SetTime(24.866666666666667)
+				v162:SetTime(v116.TimePosition)
+				v162:Play()
+				task.delay(3, function() -- line: 886
+					-- upvalues: v162 (copy), clone6 (copy)
+					v162:Destroy()
+					clone6:Destroy()
+				end)
+				table.insert(t4, v162)
+
+				local t6 = {}
+
+				for _, v in pairs(FallSequence2.Dast1:GetChildren()) do
+					if v:IsA("Part") then
+						local clone7 = v:Clone()
+
+						game.Debris:AddItem(clone7, 10)
+						clone7:PivotTo(Char:GetPivot() * clone7:GetAttribute("Offset"):Inverse())
+						clone7.Parent = EFP
+						t6[clone7.Name] = clone7
+					end
+				end
+
+				local Line = t6.Line
+
+				for _, v in pairs(Line:GetDescendants()) do
+					if v:IsA("ParticleEmitter") then
+						v.Enabled = true
+					end
+				end
+
+				local clone8 = FallSequence2.Dast1.Attachment:Clone()
+
+				game.Debris:AddItem(clone8, 10)
+				clone8.Parent = Char.Torso
+				table.insert(t4, clone8)
+
+				for _, v in pairs(clone8:GetDescendants()) do
+					if v:IsA("ParticleEmitter") then
+						v.Enabled = true
+					end
+				end
+
+				task.delay(3, function() -- line: 922
+					-- upvalues: clone8 (copy)
+					for _, v in pairs(clone8:GetDescendants()) do
+						if v:IsA("ParticleEmitter") then
+							v.Enabled = false
+						end
+					end
+				end)
+				task.spawn(function() -- line: 930
+					-- upvalues: FallSequence2 (copy), HumanoidRootPart (copy), PlayMesh (copy), Char (copy), dtwait (copy)
+					local timestamp = tick()
+
+					while tick() - timestamp < 3 do
+						local clone9 = FallSequence2.FallWind:Clone()
+
+						clone9:ScaleTo(0.5)
+
+						local v236, v237, v238 = HumanoidRootPart.CFrame:ToOrientation()
+
+						PlayMesh({
+							T = 0.5,
+							EndT = 1,
+							Model = clone9,
+							Anchor = CFrame.new(Char.Torso.Position) * CFrame.Angles(v236, v237, v238) * CFrame.Angles(1.5707963267948966, 0, 0),
+							Info = TweenInfo.new(0.1, Enum.EasingStyle.Exponential)
+						})
+						dtwait(0.1)
+					end
+				end)
+			end
+
+			if not u71 then
+				u71 = true
+				Stop()
+			else
+				task.delay(3.3, function() -- line: 954
+				end)
+			end
+
+			local function inside() -- line: 960
+				-- upvalues: v48 (copy), t4 (copy), NumberValue (copy), TweenService3 (copy), Char (copy), n1 (ref), FOV (ref), clone2 (copy), CosmicAura (copy), Clouds (copy), EFP (ref), v116 (copy), v117 (copy), v51 (copy), HumanoidRootPart (copy), v89 (copy), Stop (copy), u49 (ref), t2 (copy), Maid (copy), vfx (copy), MoonEmitter (copy), t3 (copy), TweenService (copy), QuickFX (copy), Able (copy), PlayTween (copy), LifeScale (copy), PlayAttachment (copy), random (copy), dtwait (copy), HumanoidRootPartCFrame (copy), PlayMesh (copy)
+				v48(1)
+				workspace:SetAttribute("MapInvis", true)
+
+				local ColorCorrectionEffect = Instance.new("ColorCorrectionEffect")
+
+				ColorCorrectionEffect.Parent = game.Lighting
+				ColorCorrectionEffect.Brightness = 1
+				table.insert(t4, ColorCorrectionEffect)
+				NumberValue.Value = 0.8
+				TweenService3:Create(NumberValue, TweenInfo.new(3, Enum.EasingStyle.Sine), {
+					Value = 1.4
+				}):Play()
+
+				local v174 = Char
+
+				n1 = 1850
+				FOV = script.FallSequence.FOVBeam
+				clone2:PivotTo(clone2:GetPivot() * CFrame.new(0, -17, 0))
+				CosmicAura.On({
+					Char = Char
+				})
+
+				if Clouds then
+					Clouds.Enabled = true
+				end
+
+				local MainBeam = EFP:FindFirstChild("MainBeam")
+
+				if MainBeam then
+					MainBeam:SetAttribute("Done", true)
+				end
+
+				for _, v in pairs(EFP:GetChildren()) do
+					if v.Name ~= "CosmicAura" then
+						v:Destroy()
+					end
+				end
+
+				local t7 = {}
+
+				v116:Stop()
+				v117:Stop()
+
+				local v179 = v51(80897999245441)
+
+				Char:PivotTo(HumanoidRootPart:GetPivot() * CFrame.new(13, 1442.5, 883, 1, 0, 0, 0, 1, 0, 0, 0, 1):Inverse())
+				v179:Play()
+				v89:Play()
+				table.insert(t7, v179)
+				table.insert(t7, v89)
+
+				for _, v in pairs(t7) do
+					v.TimePosition = 30.833333333333332
+				end
+
+				v89:GetMarkerReachedSignal("end"):Connect(function() -- line: 1026
+					-- upvalues: v89 (copy), Stop (copy), u49 (ref)
+					v89:Stop()
+					Stop()
+					u49 = true
+				end)
+				TweenService3:Create(ColorCorrectionEffect, TweenInfo.new(0.2, Enum.EasingStyle.Sine), {
+					Brightness = 0
+				}):Play()
+
+				local v182 = setmetatable({}, t2)
+
+				v182._maid = Maid.new()
+
+				local u183 = false
+
+				task.delay(15, function() -- line: 1053
+					-- upvalues: u183 (ref), v182 (copy)
+					if not u183 then
+						u183 = true
+						v182._maid:doCleaning()
+					end
+				end)
+
+				local beam = vfx.beam
+
+				MoonEmitter.new(beam["AfterBeam MeshEmitter"]):Play()
+
+				local t12 = {
+					fall = function() -- line: 1065
+						-- upvalues: t3 (copy), vfx (copy), v174 (copy), v182 (copy), TweenService (copy), QuickFX (copy), Able (copy), PlayTween (copy), EFP (ref), MoonEmitter (copy), HumanoidRootPart (copy), LifeScale (copy), PlayAttachment (copy)
+						for k, v in pairs(t3) do
+							k.Transparency = v
+						end
+
+						table.clear(t3)
+						workspace:SetAttribute("MapInvis", nil)
+						task.spawn(function() --[[ FallEvent ]] -- line: 1069
+							-- upvalues: vfx (copy), v174 (copy), v182 (copy), TweenService (copy), QuickFX (copy), Able (copy), PlayTween (copy), EFP (ref), MoonEmitter (copy), HumanoidRootPart (copy), LifeScale (copy), PlayAttachment (copy)
+							local fallvfx = vfx.fallvfx
+
+							require(script.Parent.CosmicLandbubble):Attack(v174)
+							task.wait(0.1)
+
+							local v316 = v182._maid:give(Instance.new("Highlight"))
+
+							v316.FillTransparency = 0
+							v316.OutlineTransparency = 1
+							v316.FillColor = Color3.fromRGB(255, 255, 255)
+							v316.Parent = v174
+							TweenService:Create(v316, TweenInfo.new(1, Enum.EasingStyle.Sine), {
+								FillTransparency = 1
+							}):Play()
+
+							local v317 = QuickFX({
+								FX = fallvfx.portal2,
+								Maid = v182._maid,
+								Anchor = v174:GetPivot() * fallvfx.portal2:GetAttribute("Offset"):Inverse() * CFrame.new(0, 1, -9)
+							})
+							local v318 = v182._maid:give(Instance.new("NumberValue"))
+
+							v182._maid:giveTask(v318.Changed:Connect(function() -- line: 1088
+								-- upvalues: v317 (copy), v318 (copy)
+								v317:ScaleTo(v318.Value)
+							end))
+							v317:ScaleTo(0.01)
+							TweenService:Create(v318, TweenInfo.new(1, Enum.EasingStyle.Sine), {
+								Value = 1.5
+							}):Play()
+							v318.Value = v317:GetScale()
+
+							for _, v in pairs(v317:GetDescendants()) do
+								if v:IsA("ParticleEmitter") then
+									local vLifetime = v.Lifetime
+
+									v.Lifetime = NumberRange.new(vLifetime.Min / 3, vLifetime.Max / 3)
+									v.Rate = v.Rate * 3
+								elseif v:IsA("Beam") then
+									v.TextureSpeed = v.TextureSpeed * 3
+								end
+							end
+
+							task.delay(0.6, function() -- line: 1107
+								-- upvalues: Able (copy), v317 (copy), PlayTween (copy), TweenService (copy)
+								Able({
+									On = false,
+									FX = v317
+								})
+
+								for _, v in pairs(v317:GetDescendants()) do
+									if v:IsA("Beam") then
+										PlayTween(v, {
+											Time = 0.35,
+											EasingStyle = "Sine",
+											Goal = {
+												Transparency = NumberSequence.new(1)
+											}
+										})
+									elseif v:IsA("PointLight") then
+										TweenService:Create(v, TweenInfo.new(1, Enum.EasingStyle.Sine), {
+											Range = 0
+										}):Play()
+									end
+								end
+							end)
+							task.spawn(function() -- line: 1118
+								-- upvalues: fallvfx (copy), EFP (ref), MoonEmitter (copy), HumanoidRootPart (copy)
+								local clone10 = fallvfx["mr cool additions MeshEmitter1"]:Clone()
+
+								clone10.Name = "1"
+								clone10.Parent = EFP
+								game.Debris:AddItem(clone10, 10)
+
+								local v554 = MoonEmitter.new(clone10)
+
+								v554:SetAnchor(HumanoidRootPart.CFrame * CFrame.new(0, 24, -2) * CFrame.Angles(0, 0, 0))
+								v554:SetScale(0.2)
+								v554:SetTime(3.18)
+								v554:SetSpeed(0.5)
+								v554:Play()
+								v554:OnCompleted(function() -- line: 1137
+									-- upvalues: clone10 (copy), v554 (copy)
+									clone10:Destroy()
+									v554:Destroy()
+								end)
+								task.delay(1, function() -- line: 1142
+									-- upvalues: v554 (copy)
+									v554:SetSpeed(1.8)
+								end)
+
+								local clone11 = fallvfx["mr cool additions MeshEmitter1"]:Clone()
+
+								clone11.Name = "1"
+								clone11.Parent = EFP
+								game.Debris:AddItem(clone11, 10)
+
+								local v556 = MoonEmitter.new(clone11)
+
+								v556:SetAnchor(HumanoidRootPart.CFrame * CFrame.new(-2, 24, -2) * CFrame.new(0, 0, 20) * CFrame.Angles(0, 2.007128639793479, 0))
+								v556:SetScale(0.2)
+								v556:SetTime(3.18)
+								v556:SetSpeed(0.5)
+								v556:Play()
+								v556:OnCompleted(function() -- line: 1162
+									-- upvalues: clone11 (copy), v556 (copy)
+									clone11:Destroy()
+									v556:Destroy()
+								end)
+								task.delay(0.5, function() -- line: 1167
+									-- upvalues: v556 (copy), clone11 (copy)
+									v556:Destroy()
+									clone11:Destroy()
+								end)
+							end)
+							task.wait(0.5)
+							task.spawn(function() -- line: 1177
+								-- upvalues: fallvfx (copy), EFP (ref), MoonEmitter (copy), HumanoidRootPart (copy)
+								local clone12 = fallvfx["mr cool additions MeshEmitter1"]:Clone()
+
+								clone12.Parent = EFP
+								game.Debris:AddItem(clone12, 10)
+
+								local v558 = MoonEmitter.new(clone12)
+
+								v558:SetAnchor(HumanoidRootPart.CFrame * CFrame.new(0, -0.6000000000000001, -2))
+								v558:SetScale(0.020000000000000004)
+								v558:SetTime(2)
+								v558:Play()
+								v558:OnCompleted(function() -- line: 1196
+									-- upvalues: clone12 (copy), v558 (copy)
+									clone12:Destroy()
+									v558:Destroy()
+								end)
+
+								local clone13 = fallvfx["mr cool additions MeshEmitter1"]:Clone()
+
+								clone13.Parent = EFP
+								game.Debris:AddItem(clone13, 10)
+
+								local v560 = MoonEmitter.new(clone13)
+
+								v560:SetAnchor(HumanoidRootPart.CFrame * CFrame.new(0, 24, -2))
+								v560:SetScale(0.2)
+								v560:SetTime(2.5)
+								v560:SetSpeed(1)
+								v560:Play()
+								v560:OnCompleted(function() -- line: 1216
+									-- upvalues: clone13 (copy), v560 (copy)
+									clone13:Destroy()
+									v560:Destroy()
+								end)
+							end)
+
+							local u322 = nil
+
+							task.delay(0.1, function() -- line: 1228
+								-- upvalues: u322 (ref), QuickFX (copy), fallvfx (copy), v182 (copy), HumanoidRootPart (copy)
+								u322 = QuickFX({
+									FX = fallvfx.flooraura,
+									Maid = v182._maid,
+									Anchor = HumanoidRootPart.CFrame * fallvfx.flooraura:GetAttribute("Offset"):Inverse()
+								})
+								u322:ScaleTo(3)
+
+								for _, v in pairs(u322:GetDescendants()) do
+									if v:IsA("PointLight") then
+										v.Range = 13
+										v.Color = Color3.new(0.85098, 0, 1)
+									end
+								end
+							end)
+							task.delay(3.5, function() -- line: 1247
+								-- upvalues: u322 (ref), TweenService (copy)
+								for _, v in pairs(u322:GetDescendants()) do
+									if v:IsA("PointLight") then
+										TweenService:Create(v, TweenInfo.new(1, Enum.EasingStyle.Sine), {
+											Brightness = 0
+										}):Play()
+									end
+								end
+							end)
+
+							local v323 = QuickFX({
+								FX = fallvfx.balls,
+								Maid = v182._maid,
+								Anchor = HumanoidRootPart.CFrame * CFrame.new(0, -HumanoidRootPart.Size.Y * 1.5, 0)
+							})
+
+							LifeScale({
+								Scale = 0.1,
+								FX = v323.Part.Attachment
+							})
+							LifeScale({
+								Scale = 1,
+								FX = v323.Part.Hit9
+							})
+							v323:ScaleTo(1.3)
+
+							for _, v in pairs(v323:GetDescendants()) do
+								if v:IsA("ParticleEmitter") then
+									local EmitCount = v:GetAttribute("EmitCount")
+
+									if EmitCount then
+										v:Emit(EmitCount)
+									end
+								end
+							end
+
+							task.delay(1.5, function() -- line: 1286
+								-- upvalues: u322 (ref)
+								for _, v in pairs(u322:GetDescendants()) do
+									if v.Name == "up" then
+										v.Enabled = false
+									end
+								end
+
+								task.wait(1.5)
+
+								for _, v in pairs(u322:GetDescendants()) do
+									if string.match(string.lower(v.Name), "specs") then
+										v.Enabled = false
+									end
+								end
+							end)
+							task.delay(4, function() -- line: 1305
+								-- upvalues: Able (copy), u322 (ref), PlayAttachment (copy)
+								Able({
+									On = false,
+									FX = u322
+								})
+								PlayAttachment(u322)
+								task.wait(0.15)
+							end)
+
+							local v327 = QuickFX({
+								FX = fallvfx.Side,
+								Maid = v182._maid,
+								Anchor = HumanoidRootPart.CFrame * fallvfx.Side:GetAttribute("Offset"):Inverse()
+							})
+
+							v327:ScaleTo(2)
+							task.delay(0.1, function() -- line: 1326
+								-- upvalues: Able (copy), v327 (copy), PlayTween (copy)
+								Able({
+									On = false,
+									FX = v327
+								})
+
+								for _, v in pairs(v327:GetDescendants()) do
+									if v:IsA("Beam") then
+										PlayTween(v, {
+											Time = 1,
+											EasingStyle = "Sine",
+											Goal = {
+												Transparency = NumberSequence.new(1)
+											}
+										})
+									end
+								end
+							end)
+						end)
+					end,
+					omg = function() -- line: 1342
+						-- upvalues: vfx (copy), EFP (ref), v182 (copy), v174 (copy), HumanoidRootPart (copy)
+						local fallvfx = vfx.fallvfx
+
+						task.spawn(function() --[[ OmgEvent ]] -- line: 1345
+							-- upvalues: EFP (ref), fallvfx (copy), v182 (copy), v174 (copy), HumanoidRootPart (copy);
+							(function() --[[ Effect ]] -- line: 1346
+								-- upvalues: EFP (ref), fallvfx (copy), v182 (copy), v174 (copy), HumanoidRootPart (copy)
+								game:GetService("RunService")
+								game:GetService("ReplicatedStorage")
+								game:GetService("TweenService")
+
+								local _ = EFP
+
+								require(game.ReplicatedStorage.Resources.CosmicMods.SebasUtil)
+								require(game.ReplicatedStorage.Resources.CosmicMods.MeshSprite)
+
+								local v572 = require(game.ReplicatedStorage.Resources.CosmicMods.GroundCrack).new(fallvfx.CrackModel:Clone(), CFrame.new(0, 0, 0))
+
+								v572:setSize((Vector3.new(v572.Model:GetExtentsSize().X / 2 - 5, 0.1, v572.Model:GetExtentsSize().Z / 2 - 5)))
+								v572.SurfaceGui.ClipsDescendants = false
+
+								local t8 = {}
+								local _ = v572.Model:GetPivot() * CFrame.new(0, 4, 0) * CFrame.Angles(0.6108652381980153, 0, 0) * CFrame.new(0, 2, 0)
+								local t9 = {}
+								local u576 = v182._maid:give(game.StarterPlayer.StarterCharacter:Clone())
+
+								u576.Parent = v572.Viewport.WorldModel
+
+								for _, v in pairs(u576:GetChildren()) do
+									if v.Name == "TEMPLATE" then
+										v:Destroy()
+									end
+								end
+
+								local HumanoidDescriptionFromUserId = game.Players:GetHumanoidDescriptionFromUserId(game.Players.LocalPlayer.UserId)
+
+								u576.Humanoid:ApplyDescription(HumanoidDescriptionFromUserId)
+								task.delay(4, function() -- line: 1422
+									-- upvalues: v572 (copy), u576 (ref), t9 (copy)
+									v572:Destroy()
+
+									if u576 then
+										u576:Destroy()
+									end
+
+									for _, v in pairs(t9) do
+										v:Destroy()
+									end
+								end)
+								task.spawn(function() -- line: 1434
+									-- upvalues: v572 (copy), v174 (copy), v182 (copy), fallvfx (copy), EFP (ref), t9 (copy), HumanoidRootPart (copy), u576 (ref), t8 (copy)
+									v572:setSize((Vector3.new(11.600000381469727, 2.4000000953674316, 11.600000381469727)))
+									v572.Model:ScaleTo(24.72)
+
+									local t10 = {
+										["Right Arm"] = "Right Shoulder",
+										["Left Arm"] = "Left Shoulder",
+										["Right Leg"] = "Right Hip",
+										["Left Leg"] = "Left Hip",
+										Head = "Neck",
+										Torso = "RootJoint"
+									}
+
+									local function MirrorCFrame(cFrame: CFrame) -- line: 1458
+										local cFramePosition = cFrame.Position
+										local RightVector = cFrame.RightVector
+										local UpVector = cFrame.UpVector
+										local v1134 = -cFrame.LookVector
+										local v1135 = -Vector3.new(-RightVector.X, RightVector.Y, RightVector.Z)
+										local vector3 = Vector3.new(-UpVector.X, UpVector.Y, UpVector.Z)
+										local vector3_2 = Vector3.new(-v1134.X, v1134.Y, v1134.Z)
+										local vector3_3 = Vector3.new(-cFramePosition.X, cFramePosition.Y, cFramePosition.Z)
+
+										return CFrame.fromMatrix(vector3_3, v1135, vector3, vector3_2)
+									end
+
+									for _, v in pairs({
+										"Right Leg",
+										"Left Leg"
+									}) do
+										local v2 = v174:FindFirstChild(v)
+
+										if v2 then
+											local v887 = v182._maid:give(fallvfx.step:Clone())
+
+											v887.Parent = EFP
+											t9[v2] = v887
+										end
+									end
+
+									local timestamp = tick()
+
+									while tick() - timestamp < 30 and v572 and v572.Model and v572.Model.Parent do
+										v572:setCFrame(HumanoidRootPart.CFrame * CFrame.new(0, -HumanoidRootPart.Size.Y * 2.07, -3) * CFrame.Angles(0, 0, 0))
+
+										if u576 and u576.Parent then
+											u576:PivotTo(HumanoidRootPart:GetPivot() * CFrame.new(0, HumanoidRootPart.Size.Y * -3, 0) * CFrame.Angles(3.141592653589793, 3.141592653589793, 0))
+
+											for k, v in pairs(t9) do
+												if k and v and v.Parent then
+													local v891 = HumanoidRootPart.CFrame * CFrame.new(0, -HumanoidRootPart.Size.Y * 1.475, 0)
+
+													v:PivotTo(CFrame.new(k.Position.X, v891.Position.Y, k.Position.Z))
+												end
+											end
+
+											for _, v in pairs(u576:GetChildren()) do
+												if v:IsA("BasePart") then
+													local v894 = t10[v.Name]
+
+													if v894 then
+														local v895 = u576:FindFirstChild("Torso") and u576.Torso:FindFirstChild(v894) or u576:FindFirstChild("HumanoidRootPart") and u576.HumanoidRootPart:FindFirstChild(v894)
+
+														if v895 then
+															v895.C0 = CFrame.new()
+
+															local vName = v.Name
+															local v897 = ((if not vName:find("^Left ") then (if not vName:find("^Right ") then vName else vName:gsub("^Right ", "Left ")) else vName:gsub("^Left ", "Right "))) or v.Name
+															local v898 = v174:FindFirstChild(v897)
+
+															if v898 then
+																if v.Name == "Torso" then
+																	v895.C1 = MirrorCFrame((v898.CFrame:ToObjectSpace(v174.HumanoidRootPart.CFrame)))
+																else
+																	v895.C1 = MirrorCFrame((v898.CFrame:ToObjectSpace(v174.Torso.CFrame)))
+																end
+															end
+														end
+													end
+												end
+											end
+										end
+
+										for _, v in pairs(v572.Model:GetChildren()) do
+											if v.Name == "untitled" then
+												v:PivotTo(v:GetPivot() * CFrame.Angles(0, 0.0005235987755982988, 0))
+											end
+										end
+
+										for k, v in pairs(t8) do
+											v.Total = v.Total + v.Spin.Value
+											k:PivotTo(v572.Model:GetPivot() * CFrame.new(0, 5 - tonumber(k.Name) * 0.3, 0) * CFrame.Angles(0.08726646259971647, 0, 0) * CFrame.new(0, 2, 0) * CFrame.Angles(0, v.angle + math.rad(v.Total), 0) * CFrame.new(0, 0, v.Distance) * CFrame.Angles(1.5707963267948966, 0, 3.141592653589793))
+										end
+
+										game:GetService("RunService").Heartbeat:Wait()
+									end
+								end)
+							end)()
+						end)
+					end,
+					step = function() -- line: 1567
+						-- upvalues: TweenService3 (copy), vfx (copy), v182 (copy), QuickFX (copy), HumanoidRootPart (copy), PlayAttachment (copy), EFP (ref), random (copy), TweenService (copy), dtwait (copy)
+						task.spawn(function() --[[ LegEvent ]] -- line: 1568
+							-- upvalues: TweenService3 (copy), vfx (copy), v182 (copy), QuickFX (copy), HumanoidRootPart (copy), PlayAttachment (copy), EFP (ref), random (copy), TweenService (copy), dtwait (copy)
+							for _, v in pairs(game.Lighting:GetChildren()) do
+								if v.Name == "CosmicField" then
+									TweenService3:Create(v, TweenInfo.new(1, Enum.EasingStyle.Sine), {
+										NearIntensity = 0,
+										FarIntensity = 0
+									}):Play()
+								end
+							end
+
+							local fallvfx = vfx.fallvfx
+							local v331 = v182._maid:give(fallvfx["dragon trail"]:Clone())
+							local t11 = {}
+
+							task.delay(0.5, function() -- line: 1584
+								-- upvalues: QuickFX (copy), fallvfx (copy), v182 (copy), HumanoidRootPart (copy), PlayAttachment (copy)
+								local v580 = QuickFX({
+									FX = fallvfx.leg,
+									Maid = v182._maid,
+									Anchor = HumanoidRootPart.CFrame * fallvfx.leg:GetAttribute("Offset"):Inverse()
+								})
+
+								PlayAttachment(v580)
+							end)
+
+							local v333 = v182._maid:give(Instance.new("CFrameValue"))
+
+							v333.Value = CFrame.new(0, -0.5, 0)
+
+							local v334 = v182._maid:give(Instance.new("NumberValue"))
+
+							v334.Value = 5
+
+							local v335 = v182._maid:give(Instance.new("NumberValue"))
+
+							v335.Value = 1
+							task.delay(0.5, function() -- line: 1599
+								-- upvalues: t11 (copy), v331 (copy), v335 (copy), v334 (copy), v333 (copy)
+								t11[v331] = {
+									total = -60,
+									distance = v335,
+									Spin = v334,
+									Offset = v333
+								}
+							end)
+							task.spawn(function() -- line: 1604
+								-- upvalues: v182 (copy), EFP (ref), HumanoidRootPart (copy), random (copy), TweenService (copy)
+								task.wait(0.5)
+
+								local v581 = v182._maid:give(Instance.new("Model"))
+
+								v581.Name = "legparts"
+								v581.Parent = EFP
+
+								local v582 = v182._maid:give(Instance.new("Highlight"))
+
+								v582.FillTransparency = 1
+								v582.DepthMode = Enum.HighlightDepthMode.Occluded
+								v582.Parent = v581
+
+								for _ = 1, 15 do
+									local v584 = HumanoidRootPart.CFrame * CFrame.new(0.187666506, 1.98115647, 2.03225183, 0.977235913, -0.141425863, -0.158140242, 0.134847969, 0.989520073, -0.0516338125, 0.163785294, 0.0291335285, 0.986065447):Inverse() * CFrame.new(random:NextNumber(-1, 1), 0, random:NextNumber(-1, 1))
+									local raycastParams2 = RaycastParams.new()
+
+									raycastParams2.FilterType = Enum.RaycastFilterType.Include
+									raycastParams2.FilterDescendantsInstances = {
+										game.Workspace.Map,
+										game.Workspace.Built
+									}
+
+									local raycastResult2 = game.Workspace:Raycast(v584.Position, Vector3.new(0, -20, 0), raycastParams2)
+
+									if raycastResult2 then
+										local v587 = v182._maid:give(Instance.new("Part"))
+
+										v587.Material = raycastResult2.Material
+										v587.Color = raycastResult2.Instance.Color
+										v587.Anchored = true
+										v587.Name = "Idek2"
+										v587.CanCollide = false
+										v587.Size = Vector3.new(0, 0, 0)
+
+										local v588 = random:NextNumber(0.03, 0.1)
+
+										TweenService:Create(v587, TweenInfo.new(random:NextNumber(0.05, 0.1), Enum.EasingStyle.Sine), {
+											Size = Vector3.new(v588, v588, v588)
+										}):Play()
+										v587.CanCollide = false
+										TweenService:Create(v587, TweenInfo.new(random:NextNumber(0.5, 2), Enum.EasingStyle.Sine), {
+											CFrame = CFrame.new(raycastResult2.Position + Vector3.new(0, random:NextNumber(0.5, 1.5), 0)) * CFrame.Angles(random:NextNumber(-4, 4), random:NextNumber(-4, 4), random:NextNumber(-4, 4))
+										}):Play()
+										task.delay(0.1, function() -- line: 1639
+											-- upvalues: TweenService (copy), v587 (copy), random (copy)
+											TweenService:Create(v587, TweenInfo.new(random:NextNumber(0.5, 1.5), Enum.EasingStyle.Sine), {
+												Size = Vector3.new(0, 0, 0)
+											}):Play()
+										end)
+										v587.CFrame = CFrame.new(raycastResult2.Position + Vector3.new(0, -v587.Size.Y, 0)) * CFrame.Angles(random:NextNumber(-4, 4), random:NextNumber(-4, 4), random:NextNumber(-4, 4))
+										v587.Parent = v581
+									end
+								end
+							end)
+							task.wait(0.1)
+
+							local v336 = v182._maid:give(fallvfx["dragon trail2"]:Clone())
+
+							v336.Parent = EFP
+
+							local v337 = v182._maid:give(Instance.new("CFrameValue"))
+
+							v337.Value = CFrame.new(0, -1, 0)
+							TweenService:Create(v337, TweenInfo.new(2, Enum.EasingStyle.Sine), {
+								Value = CFrame.new(0, 1, 0)
+							}):Play()
+
+							local v338 = v182._maid:give(Instance.new("NumberValue"))
+
+							v338.Value = 4
+
+							local v339 = v182._maid:give(Instance.new("NumberValue"))
+
+							v339.Value = 0.6
+							TweenService:Create(v339, TweenInfo.new(3, Enum.EasingStyle.Sine), {
+								Value = 1
+							}):Play()
+							t11[v336] = {
+								total = 0,
+								distance = v339,
+								Spin = v338,
+								Offset = v337
+							}
+							v336:ScaleTo(0.7)
+
+							local v340 = v182._maid:give(fallvfx["dragon trail2"]:Clone())
+
+							v340.Parent = EFP
+
+							local v341 = v182._maid:give(Instance.new("CFrameValue"))
+
+							v341.Value = CFrame.new(0, -1, 0)
+							TweenService:Create(v341, TweenInfo.new(4, Enum.EasingStyle.Sine), {
+								Value = CFrame.new(0, 3, 0)
+							}):Play()
+
+							local v342 = v182._maid:give(Instance.new("NumberValue"))
+
+							v342.Value = 6
+
+							local v343 = v182._maid:give(Instance.new("NumberValue"))
+
+							v343.Value = 1.6
+							TweenService:Create(v343, TweenInfo.new(3, Enum.EasingStyle.Sine), {
+								Value = 2
+							}):Play()
+							t11[v340] = {
+								total = -60,
+								distance = v343,
+								Spin = v342,
+								Offset = v341
+							}
+							v340:ScaleTo(0.3)
+
+							for i = 1, 4 do
+								local v345 = v182._maid:give(fallvfx["dragon trail2"]:Clone())
+
+								v345.Parent = EFP
+
+								local v346 = v182._maid:give(Instance.new("CFrameValue"))
+
+								v346.Value = CFrame.new(0, -1, 0)
+								TweenService:Create(v346, TweenInfo.new(3, Enum.EasingStyle.Sine), {
+									Value = CFrame.new(0, i + 3, 0)
+								}):Play()
+
+								local v347 = v182._maid:give(Instance.new("NumberValue"))
+
+								v347.Value = 6 - i
+
+								local v348 = v182._maid:give(Instance.new("NumberValue"))
+
+								v348.Value = 1.6
+								TweenService:Create(v348, TweenInfo.new(3, Enum.EasingStyle.Sine), {
+									Value = i + 5
+								}):Play()
+								task.delay(0.5, function() -- line: 1698
+									-- upvalues: t11 (copy), v345 (copy), v348 (copy), v347 (copy), v346 (copy), i (copy)
+									t11[v345] = {
+										total = -60,
+										distance = v348,
+										Spin = v347,
+										Offset = v346
+									}
+									v345:ScaleTo(i + 1)
+								end)
+							end
+
+							task.spawn(function() -- line: 1707
+								-- upvalues: t11 (copy), HumanoidRootPart (copy), EFP (ref), dtwait (copy)
+								local timestamp = tick()
+
+								while tick() - timestamp < 2.5 do
+									for k, v in pairs(t11) do
+										v.total = v.total + v.Spin.Value
+
+										local _ = v.ogpivot
+
+										k:PivotTo(HumanoidRootPart.CFrame * CFrame.new(0.187666506, 1.98115647, 2.03225183, 0.977235913, -0.141425863, -0.158140242, 0.134847969, 0.989520073, -0.0516338125, 0.163785294, 0.0291335285, 0.986065447):Inverse() * v.Offset.Value * CFrame.Angles(0, math.rad(v.total), 0) * CFrame.new(0, 0, v.distance.Value))
+										k.Parent = EFP
+									end
+
+									dtwait(0.01)
+								end
+							end)
+						end)
+					end
+				}
+
+				for k, v in pairs(t12) do
+					local connection = v179:GetMarkerReachedSignal(k):Connect(v)
+
+					v182._maid:give(connection)
+				end
+
+				task.spawn(function() --[[ FirstEvent ]] -- line: 1743
+					-- upvalues: QuickFX (copy), beam (copy), v182 (copy), v174 (copy), PlayTween (copy), dtwait (copy), TweenService (copy), HumanoidRootPartCFrame (copy), random (copy), PlayMesh (copy), Able (copy), EFP (ref), t2 (copy), Maid (copy)
+					task.spawn(function() -- line: 1820
+						-- upvalues: QuickFX (copy), beam (copy), v182 (copy), v174 (copy), TweenService (copy), dtwait (copy)
+						local v408 = QuickFX({
+							FX = beam.Cubes2,
+							Maid = v182._maid,
+							Anchor = v174:GetPivot() * beam.Cubes:GetAttribute("Offset"):Inverse() * CFrame.Angles(0, 0, 0)
+						})
+
+						v408:ScaleTo(2)
+						game.Debris:AddItem(v408, 3.8)
+
+						local v409 = QuickFX({
+							FX = beam.RoomReal22,
+							Maid = v182._maid,
+							Anchor = v174:GetPivot() * beam.Cubes:GetAttribute("Offset"):Inverse()
+						})
+
+						v409:ScaleTo(2.5)
+						game.Debris:AddItem(v409, 3.8)
+
+						for _, v in pairs(v409:GetDescendants()) do
+							if v:IsA("BasePart") or v:IsA("Texture") then
+								TweenService:Create(v, TweenInfo.new(1, Enum.EasingStyle.Sine), {
+									Transparency = 1
+								}):Play()
+							end
+						end
+
+						task.delay(3.8, function() -- line: 1839
+						end)
+
+						local timestamp = tick()
+						local n2 = 0
+
+						while tick() - timestamp < 3 do
+							n2 += 1
+							v409:PivotTo(v409:GetPivot() * CFrame.Angles(0, 0, 0.0017453292519943296))
+							dtwait(0.01)
+						end
+					end)
+
+					local function CloudBeam(p5) -- line: 1930
+						-- upvalues: QuickFX (copy), beam (copy), v182 (copy), TweenService (copy), PlayTween (copy)
+						local v415 = QuickFX({
+							FX = beam.CloudBeam,
+							Maid = v182._maid,
+							Anchor = p5
+						})
+
+						v415:ScaleTo(0.2)
+
+						for _, v in pairs(v415:GetDescendants()) do
+							if v:IsA("Beam") then
+								local TextureSpeed = v.TextureSpeed
+
+								v.FaceCamera = true
+
+								local vTransparency = v.Transparency
+
+								v.Width0 = v.Width0 * 2
+								v.Width1 = v.Width1 * 2
+								v.Transparency = NumberSequence.new({
+									NumberSequenceKeypoint.new(0, 1),
+									NumberSequenceKeypoint.new(1, 1)
+								})
+								TweenService:Create(v, TweenInfo.new(0.8, Enum.EasingStyle.Sine), {
+									TextureSpeed = TextureSpeed * -295
+								}):Play()
+								task.delay(0.15, function() -- line: 1947
+									-- upvalues: PlayTween (copy), v (copy), vTransparency (copy)
+									PlayTween(v, {
+										Time = 0.15,
+										EasingStyle = "Sine",
+										Goal = {
+											Transparency = vTransparency
+										}
+									})
+								end)
+							end
+						end
+
+						game.Debris:AddItem(v415, 3)
+					end
+
+					task.delay(0.3, function() -- line: 1959
+						-- upvalues: CloudBeam (copy), HumanoidRootPartCFrame (copy)
+						CloudBeam(HumanoidRootPartCFrame * CFrame.new(-51, 7.93533087, 1.0231297, -4.37113883E-08, 1, 4.37113883E-08, 1, 4.37113918E-08, -4.37113847E-08, -4.37113883E-08, 4.37113847E-08, -1):Inverse())
+						CloudBeam(HumanoidRootPartCFrame * CFrame.new(-51, -9.0646677, 31.0231304, -4.37113883E-08, 1, 4.37113883E-08, 1, 4.37113918E-08, -4.37113847E-08, -4.37113883E-08, 4.37113847E-08, -1):Inverse())
+						CloudBeam(HumanoidRootPartCFrame * CFrame.new(-51, -1.02313006, -22.0646687, -4.37113883E-08, 1, 4.37113883E-08, 0, -4.37113883E-08, 1, 1, 4.37113883E-08, 1.91068547E-15):Inverse())
+						CloudBeam(HumanoidRootPartCFrame * CFrame.new(51, -41.0231285, -18.0646687, -4.37113883E-08, 1, 4.37113883E-08, 0, -4.37113883E-08, 1, 1, 4.37113883E-08, 1.91068547E-15):Inverse())
+					end);
+					(function() --[[ Long ]] -- line: 1978
+						-- upvalues: QuickFX (copy), beam (copy), v182 (copy), v174 (copy), TweenService (copy), PlayTween (copy)
+						local v353 = QuickFX({
+							FX = beam.Long4,
+							Maid = v182._maid,
+							Anchor = v174:GetPivot() * CFrame.new(0, 40, 0)
+						})
+
+						v353:ScaleTo(4)
+
+						for _, v in pairs(v353:GetDescendants()) do
+							if v:IsA("Beam") then
+								v.Brightness = 1
+
+								local v356 = v.Width0 * 41
+								local v357 = v.Width1 * 11
+
+								v.Width0 = 0
+								v.Width1 = 0
+								v.TextureSpeed = v.TextureSpeed * -1
+								TweenService:Create(v, TweenInfo.new(2, Enum.EasingStyle.Sine), {
+									TextureSpeed = -8,
+									Width0 = v356,
+									Width1 = v357
+								}):Play()
+							end
+						end
+
+						task.delay(0.45, function() -- line: 1998
+							-- upvalues: v353 (copy), PlayTween (copy)
+							for _, v in pairs(v353:GetDescendants()) do
+								if v:IsA("Beam") then
+									PlayTween(v, {
+										Time = 0.5,
+										EasingStyle = "Sine",
+										Goal = {
+											Transparency = NumberSequence.new({
+												NumberSequenceKeypoint.new(0, 1),
+												NumberSequenceKeypoint.new(1, 1)
+											})
+										}
+									})
+									game.Debris:AddItem(v, 0.5)
+								end
+							end
+						end)
+						game.Debris:AddItem(v353, 3)
+
+						local v358 = QuickFX({
+							FX = beam.Kick2,
+							Maid = v182._maid,
+							Anchor = v174:GetPivot() * CFrame.new(0, 10, 0)
+						})
+
+						v358:ScaleTo(35)
+						game.Debris:AddItem(v358, 3.8)
+
+						local v359 = v182._maid:give(Instance.new("NumberValue"))
+
+						v182._maid:giveTask(v359.Changed:Connect(function() -- line: 2015
+							-- upvalues: v358 (copy), v359 (copy)
+							v358:ScaleTo(v359.Value)
+						end))
+
+						local t13 = {}
+
+						for _, v in pairs(v358:GetDescendants()) do
+							if v:IsA("Beam") then
+								v.TextureSpeed = v.TextureSpeed * 0.8
+
+								local vTransparency = v.Transparency
+
+								v.Width0 = v.Width0 * 2
+								v.Width1 = v.Width1 * 2
+								v.Transparency = NumberSequence.new({
+									NumberSequenceKeypoint.new(0, 1),
+									NumberSequenceKeypoint.new(1, 1)
+								})
+								t13[v] = vTransparency
+							end
+						end
+
+						v359.Value = 0.1
+						task.delay(0.45, function() -- line: 2035
+							-- upvalues: t13 (copy), PlayTween (copy), TweenService (copy), v359 (copy)
+							for k, v in pairs(t13) do
+								PlayTween(k, {
+									Time = 0.15,
+									EasingStyle = "Sine",
+									Goal = {
+										Transparency = v
+									}
+								})
+							end
+
+							TweenService:Create(v359, TweenInfo.new(1, Enum.EasingStyle.Sine), {
+								Value = 25
+							}):Play()
+							task.wait(2.7)
+
+							for k, _ in pairs(t13) do
+								PlayTween(k, {
+									Time = 0.35,
+									EasingStyle = "Sine",
+									Goal = {
+										Transparency = NumberSequence.new({
+											NumberSequenceKeypoint.new(0, 1),
+											NumberSequenceKeypoint.new(1, 1)
+										})
+									}
+								})
+								game.Debris:AddItem(k, 0.35)
+							end
+						end)
+					end)()
+					task.spawn(function() -- line: 2611
+						-- upvalues: HumanoidRootPartCFrame (copy), beam (copy), EFP (ref), v182 (copy), random (copy), TweenService (copy), dtwait (copy)
+						local t14 = {}
+						local v421 = HumanoidRootPartCFrame * CFrame.new(0, -20, 0)
+
+						task.spawn(function() -- line: 2617
+							-- upvalues: beam (copy), EFP (ref), v182 (copy), random (copy), v421 (copy), TweenService (copy), t14 (copy)
+							for _ = 1, 20 do
+								for _ = 1, 1 do
+									local clone14 = beam.Part3:Clone()
+
+									clone14.Name = "Idek3"
+									clone14.Anchored = true
+									clone14.CanCollide = false
+									clone14.Shape = Enum.PartType.Ball
+									clone14.Material = Enum.Material.Neon
+									clone14.Parent = EFP
+									clone14.Color = Color3.fromRGB(255, 255, 255)
+									v182._maid:give(clone14)
+
+									local v707 = random:NextNumber(0.2, 0.4) * 4
+
+									clone14.Size = Vector3.new(v707, v707, v707)
+									clone14.CFrame = v421 * CFrame.new(random:NextNumber(-20, 20), random:NextNumber(-20, 0), random:NextNumber(-20, 20))
+
+									local v708 = random:NextNumber(2, 3)
+									local v709 = v182._maid:give(Instance.new("NumberValue"))
+
+									v709.Value = random:NextNumber(10, 45)
+									TweenService:Create(clone14, TweenInfo.new(v708, Enum.EasingStyle.Sine), {
+										Size = clone14.Size * 1.5
+									}):Play()
+									task.delay(v708, function() -- line: 2642
+										-- upvalues: TweenService (copy), clone14 (copy), v708 (copy)
+										TweenService:Create(clone14, TweenInfo.new(v708, Enum.EasingStyle.Sine), {
+											Size = Vector3.new(0, 0, 0)
+										}):Play()
+									end)
+
+									local cFrame = CFrame.Angles(math.rad((math.random(0, 360))), math.rad((math.random(0, 360))), (math.rad((math.random(0, 360)))))
+
+									t14[clone14] = {
+										Range = v709,
+										Orientation = cFrame,
+										Speed = random:NextNumber(0.1, 1) * 0.1,
+										Rise = random:NextNumber(0.05, 0.3) * 28
+									}
+								end
+
+								task.wait(0.03)
+							end
+						end)
+
+						local timestamp = tick()
+						local n3 = 0
+
+						while tick() - timestamp < 3.9 do
+							n3 += 1
+
+							for k, v in pairs(t14) do
+								local _ = v.Range
+
+								k.CFrame = k.CFrame * CFrame.new(0, v.Rise, 0)
+							end
+
+							dtwait(0.01)
+						end
+					end)
+					task.spawn(function() -- line: 2054
+						-- upvalues: v182 (copy), TweenService (copy), v174 (copy), beam (copy), random (copy), PlayMesh (copy), dtwait (copy)
+						local timestamp = tick()
+						local v428 = v182._maid:give(Instance.new("NumberValue"))
+
+						v428.Value = 60
+						TweenService:Create(v428, TweenInfo.new(1, Enum.EasingStyle.Sine), {
+							Value = 10
+						}):Play()
+
+						local n4 = 0
+
+						while tick() - timestamp < 3.5999999999999996 do
+							n4 += 1
+
+							local v430 = v174:GetPivot() * CFrame.new(0, v428.Value, 0)
+
+							if n4 % 5 == 0 then
+								local clone15 = beam.Test2:Clone()
+
+								clone15:ScaleTo(random:NextNumber(3, 4))
+								PlayMesh({
+									EndT = 1,
+									Model = clone15,
+									Anchor = v430 * CFrame.Angles(3.141592653589793, 0, 0) * CFrame.Angles(0, math.rad((random:NextNumber(-360, 360))), 0),
+									Info = TweenInfo.new(0.1, Enum.EasingStyle.Quad)
+								})
+							end
+
+							dtwait(0.01)
+						end
+					end)
+
+					local Pivot = v174:GetPivot()
+					local v244 = v182._maid:give(Instance.new("Part"))
+
+					v244.Anchored = true
+					v244.CanCollide = false
+					v244.Name = "Anchor2"
+					v244.Transparency = 1
+					v244.CFrame = Pivot * CFrame.new(0, 20, 0)
+					v244.Parent = EFP
+				end)
+			end
+			local function Thebeam() -- line: 2893
+				-- upvalues: t2 (copy), Maid (copy), TweenService3 (copy), CFrameValue (copy), NumberValue (copy), clone2 (copy), Char (copy), TweenService (copy), vfx (copy), Cosmic (copy), HumanoidRootPart (copy), EFP (ref)
+				local v189 = setmetatable({}, t2)
+
+				v189._maid = Maid.new()
+
+				local u190 = false
+
+				task.delay(15, function() -- line: 2906
+					-- upvalues: u190 (ref), v189 (copy)
+					if not u190 then
+						u190 = true
+						v189._maid:doCleaning()
+					end
+				end)
+				task.spawn(function() --[[ FirstEvent ]] -- line: 2911
+					-- upvalues: TweenService3 (copy), CFrameValue (copy), NumberValue (copy), clone2 (copy), v189 (copy), Char (copy), TweenService (copy), vfx (copy), Cosmic (copy), HumanoidRootPart (copy), EFP (ref)
+					task.delay(0.3, function() -- line: 2913
+						-- upvalues: TweenService3 (copy), CFrameValue (copy), NumberValue (copy), clone2 (copy)
+						TweenService3:Create(CFrameValue, TweenInfo.new(0.5, Enum.EasingStyle.Sine), {
+							Value = CFrame.Angles(-0.4363323129985824, 0, 0.2617993877991494)
+						}):Play()
+						TweenService3:Create(NumberValue, TweenInfo.new(0.5, Enum.EasingStyle.Sine), {
+							Value = 1.3
+						}):Play()
+						task.wait(0.3)
+						TweenService3:Create(clone2.PrimaryPart, TweenInfo.new(0.5, Enum.EasingStyle.Sine), {
+							CFrame = clone2.PrimaryPart.CFrame * CFrame.new(0, 50, 0)
+						}):Play()
+					end)
+					task.delay(0.55, function() -- line: 2920
+						-- upvalues: TweenService3 (copy), CFrameValue (copy), NumberValue (copy)
+						TweenService3:Create(CFrameValue, TweenInfo.new(2.5, Enum.EasingStyle.Quad), {
+							Value = CFrame.Angles(0, 0, 0)
+						}):Play()
+						TweenService3:Create(NumberValue, TweenInfo.new(1, Enum.EasingStyle.Quad), {
+							Value = 1
+						}):Play()
+					end)
+
+					local v245 = v189._maid:give(Instance.new("Highlight"))
+
+					v245.Parent = Char
+					v245.FillColor = Color3.new(0, 0, 0)
+					v245.FillTransparency = 0
+					v245.OutlineTransparency = 1
+					task.delay(1, function() -- line: 2932
+						-- upvalues: TweenService (copy), v245 (copy)
+						TweenService:Create(v245, TweenInfo.new(3, Enum.EasingStyle.Sine), {
+							FillTransparency = 1
+						}):Play()
+						game.Debris:AddItem(v245, 3)
+					end)
+					game:GetService("ReplicatedStorage")
+					game:GetService("UserInputService")
+
+					local TweenService4 = game:GetService("TweenService")
+					local Debris = game:GetService("Debris")
+					local RunService = game:GetService("RunService")
+					local VFX = vfx.VFX
+					local MeshFlipbookConfig = require(game.ReplicatedStorage.Resources.CosmicMods.MeshFlipbookConfig)
+					local MeshFlipbook = require(game.ReplicatedStorage.Resources.CosmicMods.MeshFlipbook)
+					local particle_functions = require(game.ReplicatedStorage.Resources.CosmicMods.particle_functions)
+					local Part = require(game.ReplicatedStorage.Resources.CosmicMods.Part)
+
+					local function v254(n5: number, n6: number, t15: {[any]: any}, color3: Color3) -- line: 3003
+						for _, v460 in t15 do
+							local Highlight = Instance.new("Highlight")
+
+							Highlight.Name = "ImpactHighlight"
+							Highlight.FillColor = color3
+							Highlight.OutlineTransparency = 1
+							Highlight.Parent = v460
+						end
+
+						local Impact = game.Lighting:FindFirstChild("Impact")
+
+						if not Impact then
+							Impact = Instance.new("ColorCorrectionEffect")
+							Impact.Brightness = 0
+							Impact.Contrast = 0
+							Impact.Saturation = 0
+							Impact.Enabled = true
+							Impact.TintColor = Color3.fromRGB(255, 255, 255)
+							Impact.Name = "Impact"
+							Impact.Parent = game.Lighting
+							game.Debris:AddItem(Impact, 3)
+						end
+
+						local clone16 = Impact:Clone()
+
+						clone16.Parent = game:GetService("Lighting")
+						clone16.Brightness = -1
+						clone16.Contrast = -100
+						clone16.Saturation = -1
+
+						for _ = 1, n6 do
+							clone16.Contrast = -100
+							task.wait(n5)
+							clone16.Contrast = 100
+							task.wait(n5)
+						end
+
+						clone16.Brightness = 0
+						clone16.Contrast = 0
+						clone16.Saturation = 0
+						clone16:Destroy()
+
+						for _, v466 in t15 do
+							if v466:FindFirstChild("ImpactHighlight") then
+								v466:Destroy()
+							end
+						end
+					end
+
+					local v255 = v189._maid:give(Instance.new("BlurEffect"))
+
+					v255.Size = 24
+					task.delay(6, function() -- line: 3061
+						-- upvalues: v255 (copy)
+						if v255 and v255.Parent then
+							v255:Destroy()
+						end
+					end)
+					v255.Parent = game.Lighting
+					TweenService3:Create(v255, TweenInfo.new(2, Enum.EasingStyle.Sine), {
+						Size = 0
+					}):Play()
+
+					local clone17 = Cosmic.StartPos:Clone()
+
+					clone17:PivotTo(HumanoidRootPart.CFrame * clone17:GetAttribute("Offset"):Inverse())
+					clone17.Parent = EFP
+
+					local clone18 = Cosmic.CameraPart1:Clone()
+
+					clone18:PivotTo(HumanoidRootPart.CFrame * clone18:GetAttribute("Offset"):Inverse())
+					clone18.Parent = EFP
+
+					local clone19 = Cosmic.CameraPart2:Clone()
+
+					clone19:PivotTo(HumanoidRootPart.CFrame * clone19:GetAttribute("Offset"):Inverse())
+					clone19.Parent = EFP
+
+					local _ = workspace.CurrentCamera
+					local clone20 = VFX.MainBeam:Clone()
+
+					clone20:PivotTo(clone17.CFrame * CFrame.new(0, -300, 0))
+
+					local BeamEnd = clone20.BeamEnd
+
+					BeamEnd.Position = BeamEnd.Position + Vector3.new(0, -145, 0)
+					clone20.Parent = EFP
+
+					for _, v263 in clone20.BeamEnd:GetDescendants() do
+						if v263:IsA("Beam") then
+							v263.Enabled = true
+						end
+					end
+
+					v189._maid:give(clone20)
+					task.delay(0.15, function() -- line: 3093
+						-- upvalues: clone17 (copy)
+						warn("trigger")
+
+						local function breakModelLikeMap(p6, p7) -- line: 3096
+							if not p6 or p6 == workspace then
+								return
+							end
+
+							local t16 = {
+								Effect = "Break Model",
+								Original = p6,
+								Velocity = p7
+							}
+							local Original = t16.Original
+
+							if not Original:GetAttribute("Destructible") and not Original:GetAttribute("Fragile") then
+								local v750 = Original
+
+								Original = Original.Parent
+								t16.Original = v750.Parent
+
+								if not t16.Original then
+									return
+								end
+
+								if t16.Original:IsA("Folder") then
+									t16.Original = v750
+									Original = v750
+								end
+							end
+
+							if not Original or not Original.Parent or Original.Parent == game.Lighting then
+								return
+							end
+
+							if Original:GetAttribute("Broken") then
+								return
+							end
+
+							Original:SetAttribute("Broken", true)
+
+							local t17 = {}
+
+							for _, v in pairs(Original:GetDescendants()) do
+								if v:IsA("BasePart") then
+									table.insert(t17, {
+										v,
+										v.CanQuery,
+										v.CanTouch,
+										v.Transparency,
+										v.CanCollide
+									})
+									v.Transparency = 1
+									v.CanCollide = false
+									v.CanTouch = false
+									v.CanQuery = false
+								end
+							end
+
+							task.delay((Original:GetAttribute("RespawnTime") or 60) - 1.5, function() -- line: 3145
+								-- upvalues: Original (ref), t17 (copy)
+								if Original and Original.Parent then
+									Original:SetAttribute("Broken", false)
+								end
+
+								for _, v in pairs(t17) do
+									local v987 = v[1]
+
+									if v987 and v987.Parent then
+										v987.Transparency = v[4]
+										v987.CanCollide = v[5]
+										v987.CanTouch = v[3]
+										v987.CanQuery = v[2]
+									end
+								end
+							end)
+							shared.repfire(t16)
+						end
+
+						local t18 = {}
+						local PartBoundsInRadius = workspace:GetPartBoundsInRadius(clone17.Position, 85)
+
+						for _, v in pairs(PartBoundsInRadius) do
+							if v:IsA("BasePart") then
+								local vParent = v.Parent
+
+								if vParent and ((vParent.Name == "Bench" or vParent.Name == "Trashcan" or v:GetAttribute("Destructible")) and not table.find(t18, vParent)) then
+									table.insert(t18, vParent)
+									breakModelLikeMap(v, math.random(15, 20) * 5)
+								end
+
+								if v:GetAttribute("IsTree") or v.Name == "TreeRoot" then
+									local v477 = v.Parent and v.Parent.Parent
+
+									if v477 and v477:FindFirstChildWhichIsA("BasePart", true) and not table.find(t18, v477) then
+										table.insert(t18, v477)
+										breakModelLikeMap(v477, math.random(75, 100) * 2)
+									end
+								end
+							end
+						end
+					end)
+
+					for _, v in pairs(clone20:GetDescendants()) do
+						if v:IsA("Beam") then
+							local Width0 = v.Width0
+							local Width1 = v.Width1
+
+							v.Width0 = v.Width0 * 13
+							v.Width1 = v.Width1 * 13
+							TweenService:Create(v, TweenInfo.new(0.5, Enum.EasingStyle.Sine), {
+								Width0 = Width0,
+								Width1 = Width1
+							}):Play()
+						end
+					end
+
+					local clone21 = VFX.RingBeams:Clone()
+
+					clone21:PivotTo(clone17.CFrame * CFrame.new(0, -300, 0))
+
+					for _, v270 in clone21:GetChildren() do
+						if v270.Name == "BeamEnd" then
+							v270.Position = v270.Position + Vector3.new(0, -100, 0)
+						end
+					end
+
+					clone21.Parent = EFP
+					v189._maid:give(clone21)
+
+					local clone22 = VFX.NoiseCylinder:Clone()
+
+					clone22.Position = clone17.Position + Vector3.new(0, -300, 0) + Vector3.new(1, 0, -1)
+					clone22.Mesh.Scale = Vector3.new(16, 12, 16)
+					clone22.Parent = EFP
+					v189._maid:giveTask(clone20:GetAttributeChangedSignal("Done"):Connect(function() -- line: 3215
+						-- upvalues: clone22 (copy), clone20 (copy), Char (copy), TweenService3 (copy), EFP (ref)
+						clone22:Destroy()
+						clone20:PivotTo(CFrame.new(Char.Torso.position))
+
+						for _, v in pairs(clone20:GetDescendants()) do
+							if v:IsA("Beam") then
+								TweenService3:Create(v, TweenInfo.new(2, Enum.EasingStyle.Bounce), {
+									Width0 = 0,
+									Width1 = 0
+								}):Play()
+								v:Destroy()
+							end
+						end
+
+						for _, v in pairs(EFP:GetChildren()) do
+							if v.Name == "BeamTrail" then
+								v:Destroy()
+							end
+						end
+					end))
+
+					local clone23 = VFX.WindBeams:Clone()
+
+					clone23:PivotTo(clone17.CFrame * CFrame.new(0, -300, 0))
+					clone23.Parent = EFP
+					v189._maid:give(clone23)
+
+					local function spawnCrescentFlipbook(p8) -- line: 3307
+						-- upvalues: VFX (copy), clone17 (copy), EFP (ref), Debris (copy), RunService (copy), TweenService4 (copy), MeshFlipbook (copy), MeshFlipbookConfig (copy)
+						for _ = 1, p8 do
+							local v505 = math.random(1, 360)
+							local v506 = math.random(-4, 4)
+							local v507 = math.random(10, 60)
+							local v508 = math.random(50, 55) / 100
+							local v509 = math.random(-13, 13)
+							local v510 = math.random(4, 10)
+							local v511 = math.random(34, 50)
+							local v512 = Random.new():NextInteger(1, 2)
+							local clone24 = VFX.CrescentDissolve:Clone()
+
+							clone24.Mesh.Scale = Vector3.new(v511, v510, v511)
+							clone24.CFrame = clone17.CFrame * CFrame.Angles(math.rad(v509), math.rad(v505), 0)
+
+							if v512 == 1 then
+								clone24.Decal.Color3 = Color3.fromRGB(9, 15, 62)
+							else
+								clone24.Decal.Color3 = Color3.fromRGB(79, 1, 86)
+							end
+
+							clone24.Parent = EFP
+							Debris:AddItem(clone24, 2)
+
+							local n7 = 0
+							local connection = nil
+							local s1 = "Y"
+
+							connection = RunService.Heartbeat:Connect(function(dt) -- line: 2952
+								-- upvalues: n7 (ref), s1 (copy), clone24 (copy), v506 (copy), connection (ref)
+								n7 += dt
+
+								if s1 == "X" then
+									local v755 = clone24
+
+									v755.CFrame = v755.CFrame * CFrame.Angles(math.rad(v506), 0, 0)
+								elseif s1 == "Y" then
+									local v756 = clone24
+
+									v756.CFrame = v756.CFrame * CFrame.Angles(0, math.rad(v506), 0)
+								elseif s1 == "Z" then
+									local v757 = clone24
+
+									v757.CFrame = v757.CFrame * CFrame.Angles(0, 0, (math.rad(v506)))
+								end
+
+								if n7 > 5 and connection then
+									connection:Disconnect()
+								end
+							end)
+
+							local t19 = {
+								EasingDirection = "Out",
+								Easing = "Sine",
+								Time = v508,
+								Goal = {
+									Position = clone17.Position + Vector3.new(0, v507, 0)
+								}
+							}
+							local tweenInfo = TweenInfo.new(t19.Time, Enum.EasingStyle[t19.Easing], Enum.EasingDirection[t19.EasingDirection])
+
+							TweenService4:Create(clone24, tweenInfo, t19.Goal):Play()
+
+							local Mesh = clone24.Mesh
+							local t20 = {
+								EasingDirection = "Out",
+								Easing = "Linear",
+								Time = v508,
+								Goal = {
+									Scale = Vector3.new(v511 / 1.4, 2, v511 / 1.4)
+								}
+							}
+							local tweenInfo2 = TweenInfo.new(t20.Time, Enum.EasingStyle[t20.Easing], Enum.EasingDirection[t20.EasingDirection])
+
+							TweenService4:Create(Mesh, tweenInfo2, t20.Goal):Play()
+							MeshFlipbook.flipbook(clone24.Decal, MeshFlipbookConfig.DissolvingCrescent, v508)
+						end
+					end;
+
+					(function() --[[ beam ]] -- line: 3396
+						-- upvalues: VFX (copy), clone17 (copy), EFP (ref), Debris (copy), TweenService4 (copy), v254 (copy), clone20 (copy), clone21 (copy), Part (copy), MeshFlipbook (copy), MeshFlipbookConfig (copy), clone22 (copy), v189 (copy), clone23 (copy), particle_functions (copy), spawnCrescentFlipbook (copy)
+						local clone25 = VFX.Outer:Clone()
+
+						clone25.Position = clone17.Position + Vector3.new(0, -20, 0)
+						clone25.Size = Vector3.new(55.34299850463867, 49.13399887084961, 36.39400100708008)
+						clone25.Parent = EFP
+						Debris:AddItem(clone25, 0.25)
+
+						local clone26 = VFX.Inner:Clone()
+
+						clone26.Position = clone17.Position + Vector3.new(0, -20, 0)
+						clone26.Size = Vector3.new(49.57400131225586, 46.01599884033203, 32.8380012512207)
+						clone26.Parent = EFP
+						Debris:AddItem(clone26, 0.25)
+
+						local t21 = {
+							EasingDirection = "In",
+							Easing = "Cubic",
+							Time = 0.15,
+							Goal = {
+								Size = Vector3.new(45, 115, 35),
+								Position = clone17.Position + Vector3.new(0, 15, 0)
+							}
+						}
+						local tweenInfo = TweenInfo.new(t21.Time, Enum.EasingStyle[t21.Easing], Enum.EasingDirection[t21.EasingDirection])
+
+						TweenService4:Create(clone26, tweenInfo, t21.Goal):Play()
+
+						local t22 = {
+							EasingDirection = "In",
+							Easing = "Cubic",
+							Time = 0.15,
+							Goal = {
+								Size = Vector3.new(50, 120, 38),
+								Position = clone17.Position + Vector3.new(0, 17, 0)
+							}
+						}
+						local tweenInfo3 = TweenInfo.new(t22.Time, Enum.EasingStyle[t22.Easing], Enum.EasingDirection[t22.EasingDirection])
+
+						TweenService4:Create(clone25, tweenInfo3, t22.Goal):Play()
+						task.delay(0.075, function() -- line: 3430
+							-- upvalues: v254 (copy), clone25 (copy), clone26 (copy)
+							v254(0.08, 1, {
+								clone25,
+								clone26
+							}, Color3.new(0, 0, 0))
+						end)
+						task.delay(0.15, function() -- line: 3435
+							-- upvalues: clone26 (copy), clone17 (copy), TweenService4 (copy), clone25 (copy)
+							local v758 = clone26
+							local t23 = {
+								EasingDirection = "In",
+								Easing = "Cubic",
+								Time = 0.1,
+								Goal = {
+									Size = Vector3.new(10, 57.43600082397461, 10),
+									Position = clone17.Position + Vector3.new(0, -25, 0)
+								}
+							}
+							local tweenInfo4 = TweenInfo.new(t23.Time, Enum.EasingStyle[t23.Easing], Enum.EasingDirection[t23.EasingDirection])
+
+							TweenService4:Create(v758, tweenInfo4, t23.Goal):Play()
+
+							local v761 = clone25
+							local t24 = {
+								EasingDirection = "In",
+								Easing = "Cubic",
+								Time = 0.1,
+								Goal = {
+									Size = Vector3.new(12, 53.165000915527344, 12),
+									Position = clone17.Position + Vector3.new(0, -23, 0)
+								}
+							}
+							local tweenInfo5 = TweenInfo.new(t24.Time, Enum.EasingStyle[t24.Easing], Enum.EasingDirection[t24.EasingDirection])
+
+							TweenService4:Create(v761, tweenInfo5, t24.Goal):Play()
+						end)
+						task.delay(0.22, function() -- line: 3457
+							-- upvalues: clone20 (copy), clone17 (copy), TweenService4 (copy), clone21 (copy), VFX (copy), EFP (ref), Part (copy), Debris (copy), MeshFlipbook (copy), MeshFlipbookConfig (copy), clone22 (copy), v189 (copy), clone23 (copy), particle_functions (copy), spawnCrescentFlipbook (copy)
+							clone20:PivotTo(clone17.CFrame)
+
+							local BeamEnd2 = clone20.BeamEnd
+							local t25 = {
+								EasingDirection = "Out",
+								Easing = "Sine",
+								Time = 0.5,
+								Goal = {
+									Position = clone20.BeamEnd.Position + Vector3.new(0, 145, 0)
+								}
+							}
+							local tweenInfo6 = TweenInfo.new(t25.Time, Enum.EasingStyle[t25.Easing], Enum.EasingDirection[t25.EasingDirection])
+
+							TweenService4:Create(BeamEnd2, tweenInfo6, t25.Goal):Play()
+							task.delay(4, function() -- line: 3466
+								-- upvalues: clone20 (copy), clone17 (copy)
+								if clone20.Parent then
+									clone20:PivotTo(clone17.CFrame * CFrame.new(0, -300, 0))
+
+									local BeamEnd3 = clone20.BeamEnd
+
+									BeamEnd3.Position = BeamEnd3.Position + Vector3.new(0, -145, 0)
+								end
+							end)
+							clone21:PivotTo(clone17.CFrame)
+
+							for _, v768 in clone21:GetChildren() do
+								if v768.Name == "BeamEnd" then
+									local t26 = {
+										EasingDirection = "Out",
+										Easing = "Sine",
+										Time = 0.5,
+										Goal = {
+											Position = v768.Position + Vector3.new(0, 100, 0)
+										}
+									}
+									local tweenInfo7 = TweenInfo.new(t26.Time, Enum.EasingStyle[t26.Easing], Enum.EasingDirection[t26.EasingDirection])
+
+									TweenService4:Create(v768, tweenInfo7, t26.Goal):Play()
+								end
+							end
+
+							task.delay(4, function() -- line: 3485
+								-- upvalues: clone21 (copy), clone17 (copy)
+								clone21:PivotTo(clone17.CFrame * CFrame.new(0, -300, 0))
+
+								for _, v990 in clone21:GetChildren() do
+									if v990.Name == "BeamEnd" then
+										v990.Position = v990.Position + Vector3.new(0, -100, 0)
+									end
+								end
+							end)
+
+							local clone27 = VFX.CylinderMesh:Clone()
+
+							clone27.Position = clone17.Position + Vector3.new(0, -5, 0)
+							clone27.Parent = EFP
+							clone27.Factors.Enabled.Value = true
+							Part:Enable(clone27)
+							Debris:AddItem(clone27, 4)
+
+							local clone28 = VFX.ShockMesh:Clone()
+
+							clone28.Position = clone17.Position + Vector3.new(0, -5, 0)
+							clone28.Parent = EFP
+							clone28.Factors.Enabled.Value = true
+							Part:Enable(clone28)
+							Debris:AddItem(clone28, 4)
+
+							local clone29 = VFX.CylinderDissolve:Clone()
+
+							clone29.Position = clone17.Position + Vector3.new(0, 18, 0)
+							clone29.Parent = EFP
+							MeshFlipbook.flipbook(clone29.Decal, MeshFlipbookConfig.DissolvingCylinder, 4)
+							Debris:AddItem(clone29, 4)
+							MeshFlipbook.flipbook(clone22.Decal, MeshFlipbookConfig.NoiseCylinder, 4)
+							clone22.Position = clone17.Position + Vector3.new(0, 30, 0)
+
+							local Mesh = clone22.Mesh
+							local t27 = {
+								EasingDirection = "Out",
+								Easing = "Sine",
+								Time = 0.5,
+								Goal = {
+									Scale = Vector3.new(16, 70, 16)
+								}
+							}
+							local tweenInfo8 = TweenInfo.new(t27.Time, Enum.EasingStyle[t27.Easing], Enum.EasingDirection[t27.EasingDirection])
+
+							TweenService4:Create(Mesh, tweenInfo8, t27.Goal):Play()
+
+							local v777 = clone22
+							local t28 = {
+								EasingDirection = "Out",
+								Easing = "Sine",
+								Time = 0.5,
+								Goal = {
+									Position = clone17.Position + Vector3.new(0, 65, 0) + Vector3.new(1, 0, -1)
+								}
+							}
+							local tweenInfo9 = TweenInfo.new(t28.Time, Enum.EasingStyle[t28.Easing], Enum.EasingDirection[t28.EasingDirection])
+
+							TweenService4:Create(v777, tweenInfo9, t28.Goal):Play()
+							v189._maid:give(clone22)
+							task.delay(4, function() -- line: 3532
+								-- upvalues: clone22 (copy), clone17 (copy)
+								if clone22.Parent then
+									clone22.Position = clone17.Position + Vector3.new(0, -300, 0) + Vector3.new(1, 0, -1)
+									clone22.Mesh.Scale = Vector3.new(16, 12, 16)
+								end
+							end)
+							clone23:PivotTo(clone17.CFrame)
+							task.delay(4, function() -- line: 3541
+								-- upvalues: clone23 (copy), clone17 (copy)
+								clone23:PivotTo(clone17.CFrame * CFrame.new(0, -300, 0))
+							end)
+
+							local clone30 = VFX.SideSpecs:Clone()
+
+							clone30:PivotTo(clone17.CFrame)
+							clone30.Parent = EFP
+							particle_functions.Enable(clone30, true)
+							Debris:AddItem(clone30, 5)
+							task.delay(4, function() -- line: 3550
+								-- upvalues: particle_functions (copy), clone30 (copy)
+								particle_functions.Enable(clone30, false)
+							end)
+
+							local clone31 = VFX.BeamSpecs:Clone()
+
+							clone31.Position = clone17.Position
+							clone31.Parent = EFP
+							particle_functions.Enable(clone31, true)
+							Debris:AddItem(clone31, 5)
+							task.delay(4, function() -- line: 3559
+								-- upvalues: particle_functions (copy), clone31 (copy)
+								particle_functions.Enable(clone31, false)
+							end)
+							task.spawn(function() -- line: 3563
+								-- upvalues: spawnCrescentFlipbook (copy)
+								for _ = 1, 25 do
+									spawnCrescentFlipbook(4)
+									task.wait(0.12)
+								end
+							end)
+							task.delay(3, function() -- line: 3570
+							end)
+						end)
+					end)()
+				end)
+			end
+
+			local t29 = {
+				hand = function() -- line: 3598
+					-- upvalues: Stop (copy)
+					task.wait(1)
+					Stop()
+				end
+			}
+			local t42 = {
+				flesh = function() -- line: 3607
+					-- upvalues: GodFlesh (copy)
+					GodFlesh()
+				end,
+				inside = function() -- line: 3611
+					-- upvalues: inside (copy)
+					inside()
+				end,
+				land = function() -- line: 3615
+					-- upvalues: t3 (copy), Stop (copy), FOV (ref), n1 (ref), clone2 (copy), v116 (copy), v117 (copy), vfx (copy), EFP (ref), MoonEmitter (copy), t2 (copy), Maid (copy), TweenService (copy), RaiseZIndex (copy), Able (copy), v39 (copy), QuickFX (copy), PlayAttachment (copy), dtwait (copy), random (copy), PlayTween (copy), Thebeam (copy), inside (copy);
+					(function() --[[ NewLand ]] -- line: 3617
+						-- upvalues: t3 (copy), Stop (copy), FOV (ref), n1 (ref), clone2 (copy), v116 (copy), v117 (copy), vfx (copy), EFP (ref), MoonEmitter (copy), t2 (copy), Maid (copy), TweenService (copy), RaiseZIndex (copy), Able (copy), v39 (copy), QuickFX (copy), PlayAttachment (copy), dtwait (copy), random (copy), PlayTween (copy), Thebeam (copy), inside (copy)
+						for k, v in pairs(t3) do
+							k.Transparency = v
+						end
+
+						table.clear(t3)
+						workspace:SetAttribute("MapInvis", nil)
+						task.delay(14, function() -- line: 3622
+							-- upvalues: Stop (copy)
+							Stop()
+						end)
+						FOV = script.FallSequence.AccurateFOV
+						n1 = 42
+						clone2:PivotTo(clone2:GetPivot() * CFrame.new(0, 10, 0))
+
+						local t30 = {}
+
+						v116:AdjustSpeed(0)
+						v117:AdjustSpeed(0)
+						v117:Stop()
+
+						local v277 = clone2.AnimationController:LoadAnimation(script.FallSequence.AccurateCam)
+
+						v277:Play()
+						v277.TimePosition = 0.7
+
+						for _, v in pairs(t30) do
+							v.TimePosition = 0.8166666666666667
+						end
+
+						tick()
+
+						local morevfx = vfx.morevfx
+
+						game.Lighting.EnvironmentDiffuseScale = 1
+						game.Lighting.EnvironmentSpecularScale = 1
+						task.delay(4, function() -- line: 3664
+							game.Lighting.EnvironmentDiffuseScale = 0
+							game.Lighting.EnvironmentSpecularScale = 0
+						end)
+
+						local t37 = {
+							start = function() -- line: 3672
+								-- upvalues: clone2 (copy), morevfx (copy), EFP (ref), MoonEmitter (copy)
+								clone2:PivotTo(clone2:GetPivot() * CFrame.new(0, 10, 0))
+
+								local clone32 = morevfx["AdjustedStar MeshEmitter"]:Clone()
+
+								clone32.Parent = EFP
+								game.Debris:AddItem(clone32, 10)
+
+								local v536 = MoonEmitter.new(clone32)
+
+								v536:SetAnchor(clone2:GetPivot() * clone32:GetAttribute("Offset"):Inverse() * CFrame.new(1, 0, 0))
+
+								local DepthOfFieldEffect = Instance.new("DepthOfFieldEffect")
+
+								DepthOfFieldEffect.FarIntensity = 0.733
+								DepthOfFieldEffect.NearIntensity = 0.75
+								DepthOfFieldEffect.InFocusRadius = 30
+								DepthOfFieldEffect.FocusDistance = 0
+								DepthOfFieldEffect.Parent = game.Lighting
+								DepthOfFieldEffect.Name = "CosmicField"
+								game.Debris:AddItem(DepthOfFieldEffect, 21)
+
+								local BloomEffect = Instance.new("BloomEffect")
+
+								BloomEffect.Size = 21
+								BloomEffect.Intensity = 1
+								BloomEffect.Threshold = 2
+								BloomEffect.Parent = game.Lighting
+								game.Debris:AddItem(BloomEffect, 21)
+
+								local ColorCorrectionEffect = Instance.new("ColorCorrectionEffect")
+
+								ColorCorrectionEffect.Parent = game.Lighting
+								game.Debris:AddItem(ColorCorrectionEffect, 21)
+								v536:AssignExternal("ColorCorrection", ColorCorrectionEffect)
+								v536:SetTime(0.7999999999999999)
+								v536:Play()
+							end,
+							boom = function() -- line: 3726
+								-- upvalues: clone2 (copy), t2 (copy), Maid (copy), EFP (ref), vfx (copy), morevfx (copy), TweenService (copy), RaiseZIndex (copy), Able (copy), v39 (copy), QuickFX (copy), PlayAttachment (copy), dtwait (copy), random (copy), PlayTween (copy)
+								local u540 = clone2:GetPivot() * CFrame.new(0, 103, 0, -1.1920929E-07, 0, 1.00000012, 0, 1, 0, -1.00000012, 0, -1.1920929E-07):Inverse()
+								local v541 = setmetatable({}, t2)
+
+								v541._maid = Maid.new()
+
+								local u542 = false
+
+								task.delay(15, function() -- line: 3741
+									-- upvalues: u542 (ref), v541 (copy)
+									if not u542 then
+										u542 = true
+										v541._maid:doCleaning()
+									end
+								end)
+
+								local v543 = v541._maid:give(Instance.new("Folder"))
+
+								v543.Parent = EFP
+								v543.Name = "NewFolder"
+								task.delay(0.15, function() --[[ Boom ]] -- line: 4087
+									-- upvalues: v541 (copy), morevfx (copy), v543 (copy), v39 (copy), u540 (ref), QuickFX (copy), random (copy), PlayTween (copy), TweenService (copy), RaiseZIndex (copy), dtwait (copy), PlayAttachment (copy), Able (copy)
+									local v783 = v541._maid:give(morevfx.Glass:Clone())
+
+									v783.Parent = v543
+									v783:ScaleTo(5)
+									v783:PivotTo(CFrame.new(v39.CFrame.Position) * CFrame.Angles(1.5707963267948966, 0, 0))
+									game.Debris:AddItem(v783, 0.8)
+
+									local elapsed = os.clock()
+									local CurrentCamera = game.Workspace.CurrentCamera
+									local t31 = {}
+									local n8 = 0
+									local n9 = 0
+									local _ = {
+										Front = Vector3.new(0, 0, -1),
+										Back = Vector3.new(0, 0, 1),
+										Left = Vector3.new(-1, 0, 0),
+										Right = Vector3.new(1, 0, 0),
+										Top = Vector3.new(0, 1, 0),
+										Bottom = Vector3.new(0, -1, 0)
+									}
+									local t32 = {
+										Front = {
+											rx = 1,
+											lz = 0,
+											uy = -1,
+											lzY = 0
+										},
+										Back = {
+											rx = -1,
+											lz = 0,
+											uy = -1,
+											lzY = 0
+										},
+										Left = {
+											rx = 0,
+											lz = -1,
+											uy = -1,
+											lzY = 0
+										},
+										Right = {
+											rx = 0,
+											lz = 1,
+											uy = -1,
+											lzY = 0
+										},
+										Top = {
+											rx = 1,
+											lz = 0,
+											uy = 0,
+											lzY = -1
+										},
+										Bottom = {
+											rx = 1,
+											lz = 0,
+											uy = 0,
+											lzY = 1
+										}
+									}
+
+									for _, v in pairs(v783:GetDescendants()) do
+										if v:IsA("Texture") then
+											(function(p9) --[[ registerTexture ]] -- line: 4132
+												-- upvalues: t31 (copy), t32 (copy)
+												local v1022 = p9:GetAttribute("Face") or tostring(p9.Face)
+												local v1023 = Enum.NormalId[v1022]
+
+												if not v1023 then
+													return
+												end
+
+												table.insert(t31, {
+													texture = p9,
+													map = t32[v1023.Name]
+												})
+											end)(v)
+										end
+									end
+
+									local connection = game:GetService("RunService").RenderStepped:Connect(function() -- line: 4150
+										-- upvalues: elapsed (ref), CurrentCamera (copy), u540 (ref), n8 (ref), n9 (ref), t31 (copy), v783 (copy)
+										local elapsed2 = os.clock()
+										local v1025 = elapsed2 - elapsed
+
+										elapsed = elapsed2
+
+										local CurrentCameraCFrame = CurrentCamera.CFrame
+										local _ = CurrentCameraCFrame.RightVector.X
+										local _ = CurrentCameraCFrame.LookVector.Z
+										local _ = CurrentCameraCFrame.UpVector.Y
+										local v1030 = math.clamp(((CurrentCamera.CFrame.Position - u540.Position).Magnitude - 2) / 13, 0, 1)
+										local _ = v1030 * -2 + 8
+										local v1032 = (v1030 * 0.9 + 0.1) * 1.1
+
+										n8 += v1032 * v1025
+										n9 += v1032 * v1025 * 0.5
+
+										for _, v in ipairs(t31) do
+											local texture = v.texture
+
+											texture.StudsPerTileU = texture.StudsPerTileU + 3
+
+											local texture2 = v.texture
+
+											texture2.StudsPerTileV = texture2.StudsPerTileV + 3
+										end
+
+										v783:PivotTo(v783:GetPivot() * CFrame.Angles(0, 0.017453292519943295, 0))
+
+										for _, v in ipairs(t31) do
+											local texture = v.texture
+											local _ = v.map
+											local _ = 5 * texture.ZIndex
+
+											texture.OffsetStudsU = texture.OffsetStudsU + 5
+											texture.OffsetStudsV = texture.OffsetStudsV + 5
+										end
+									end)
+
+									task.delay(1, function() -- line: 4195
+										-- upvalues: connection (ref)
+										connection:Disconnect()
+									end)
+									u540 *= CFrame.new(0, 0, 0)
+
+									local v794 = QuickFX({
+										FX = morevfx.SpaceBoom2,
+										Maid = v541._maid,
+										Anchor = u540 * CFrame.new(1, -13, 0)
+									})
+
+									v794:ScaleTo(0.3)
+									v794.Parent = v543
+
+									local v795 = u540
+									local v796 = v541._maid:give(Instance.new("NumberValue"))
+
+									v796.Value = 2
+									task.spawn(function() -- line: 4216
+										-- upvalues: v541 (copy), v543 (copy), random (copy), morevfx (copy), v795 (copy), v796 (copy), PlayTween (copy)
+										task.wait(0.5)
+
+										local v1044 = v541._maid:give(Instance.new("Model"))
+
+										v1044.Parent = v543
+
+										local v1045 = v541._maid:give(Instance.new("Highlight"))
+
+										v1045.OutlineTransparency = -11
+										v1045.FillTransparency = -10
+										v1045.Parent = v1044
+										v1045.FillColor = Color3.fromRGB(167, 40, 241)
+										v1045.DepthMode = Enum.HighlightDepthMode.Occluded
+
+										local timestamp = tick()
+
+										while tick() - timestamp < 2 do
+											for _ = 1, 3 do
+												local v1048 = random:NextNumber(0.05, 0.07)
+												local clone33 = morevfx.ShardSphere:Clone()
+
+												if math.random(1, 2) ~= 1 then
+												end
+
+												game.Debris:AddItem(clone33, v1048)
+												clone33.Color = Color3.fromRGB(101, 255, 152)
+
+												local v1050 = random:NextNumber(-20, 20) * 2
+												local v1051 = random:NextNumber(-20, 20) * 2
+												local v1052 = v795 * CFrame.new(v1050, math.random(90, 200), v1051)
+
+												clone33.CFrame = CFrame.new(v795 * CFrame.new(v1050, math.random(10, 15), v1051).Position, v1052.Position) * CFrame.Angles(1.5707963267948966, 0, 0)
+												clone33.Parent = v1044
+
+												local v1053 = random:NextNumber(1, 3)
+
+												clone33.Mesh.Scale = Vector3.new(v1053, math.random(25, 35), v1053) * 1.4 * v796.Value
+												PlayTween(clone33, {
+													EasingStyle = "Sine",
+													Time = v1048,
+													Goal = {
+														Position = v1052.Position
+													}
+												})
+												PlayTween(clone33.Mesh, {
+													EasingStyle = "Sine",
+													Time = v1048,
+													Goal = {
+														Scale = Vector3.new(0, math.random(30, 40) * 1.4 * v796.Value, 0)
+													}
+												})
+											end
+
+											task.wait(0.05)
+										end
+									end)
+
+									local v797 = v541._maid:give(Instance.new("NumberValue"))
+
+									v541._maid:giveTask(v797.Changed:Connect(function() -- line: 4269
+										-- upvalues: v794 (copy), v797 (copy)
+										v794:ScaleTo(v797.Value)
+									end))
+
+									for _, v in pairs(v794:GetDescendants()) do
+										if v:IsA("ParticleEmitter") then
+											local vLifetime = v.Lifetime
+											local vSpeed = v.Speed
+
+											v.Rate = v.Rate * 2
+											v.Speed = NumberRange.new(vSpeed.Min / 2, vSpeed.Max / 2)
+											v.Lifetime = NumberRange.new(vLifetime.Min / 2, vLifetime.Max / 2)
+											v.Drag = v.Drag * 2
+										end
+									end
+
+									local u802 = nil
+
+									task.delay(0.2, function() -- line: 4288
+										-- upvalues: u802 (ref), v541 (copy), morevfx (copy), u540 (ref), v543 (copy), TweenService (copy), RaiseZIndex (copy), random (copy), dtwait (copy)
+										u802 = v541._maid:give(morevfx.Glint:Clone())
+										u802:ScaleTo(0.01)
+										u802:PivotTo(u540)
+										u802.Parent = v543
+
+										local v1054 = v541._maid:give(Instance.new("NumberValue"))
+
+										v541._maid:giveTask(v1054.Changed:Connect(function() -- line: 4294
+											-- upvalues: u802 (ref), v1054 (copy)
+											u802:ScaleTo(v1054.Value)
+										end))
+										v1054.Value = u802:GetScale()
+										TweenService:Create(v1054, TweenInfo.new(1.5, Enum.EasingStyle.Sine), {
+											Value = 2
+										}):Play()
+										RaiseZIndex({
+											Count = 15,
+											FX = u802
+										})
+
+										local v1055 = v541._maid:give(Instance.new("CFrameValue"))
+
+										v1055.Value = u802:GetPivot()
+
+										local v1056 = v541._maid:give(Instance.new("NumberValue"))
+
+										v1056.Value = 1
+										TweenService:Create(v1056, TweenInfo.new(2, Enum.EasingStyle.Sine), {
+											Value = 3
+										}):Play()
+										TweenService:Create(v1055, TweenInfo.new(3, Enum.EasingStyle.Sine), {
+											Value = v1055.Value * CFrame.new(0, 75, 0)
+										}):Play()
+										task.spawn(function() -- line: 4334
+											-- upvalues: u802 (ref), v1055 (copy), random (copy), v1056 (copy), dtwait (copy)
+											local timestamp = tick()
+
+											while tick() - timestamp < 4 do
+												u802:PivotTo(v1055.Value * CFrame.new(random:NextNumber(-v1056.Value, v1056.Value), random:NextNumber(-v1056.Value, v1056.Value), random:NextNumber(-v1056.Value, v1056.Value)))
+												dtwait(0.01)
+											end
+										end)
+									end)
+									task.delay(0.5, function() -- line: 4345
+										-- upvalues: QuickFX (copy), morevfx (copy), v541 (copy), u540 (ref), v543 (copy), PlayAttachment (copy)
+										local v1057 = QuickFX({
+											FX = morevfx.Done,
+											Maid = v541._maid,
+											Anchor = u540
+										})
+
+										v1057.Parent = v543
+										PlayAttachment(v1057)
+									end)
+									task.spawn(function() -- line: 4353
+										-- upvalues: v541 (copy), morevfx (copy), u540 (ref), v543 (copy)
+										local n10 = 0
+
+										for _ = 1, 5 do
+											local v1060 = v541._maid:give(morevfx.mybrainissocookedatthispoint:Clone())
+
+											v1060:PivotTo(u540 * CFrame.new(0, n10 * 2, 0))
+											v1060.Parent = v543
+											v1060:ScaleTo(n10 * 0.1 + 0.5)
+
+											for _, v in pairs(v1060:GetDescendants()) do
+												local EffectDuration = v:GetAttribute("EffectDuration")
+
+												if EffectDuration then
+													v:SetAttribute("EffectDuration", NumberRange.new(EffectDuration.Min * 0.5, EffectDuration.Max * 0.5))
+												end
+											end
+
+											n10 += 1
+											shared.vfx.emit(v1060)
+											task.wait(0.1)
+										end
+									end)
+									v797.Value = v794:GetScale()
+									task.wait(0.3)
+									Able({
+										On = false,
+										FX = u802
+									})
+									TweenService:Create(v797, TweenInfo.new(4, Enum.EasingStyle.Sine), {
+										Value = 4
+									}):Play()
+									task.delay(1, function() -- line: 4383
+										-- upvalues: TweenService (copy), v797 (copy)
+										TweenService:Create(v797, TweenInfo.new(1, Enum.EasingStyle.Sine), {
+											Value = 1
+										}):Play()
+									end)
+									task.delay(0.5, function() -- line: 4386
+										-- upvalues: Able (copy), u802 (ref), v794 (copy)
+										Able({
+											On = false,
+											FX = u802
+										})
+										task.wait(1.7)
+										Able({
+											On = false,
+											FX = v794
+										})
+									end)
+								end)
+
+								local main = vfx.main;
+
+								(function() --[[ ExploEvent ]] -- line: 3754
+									-- upvalues: v541 (copy), morevfx (copy), v543 (copy), u540 (ref), TweenService (copy), main (copy), RaiseZIndex (copy), Able (copy), v39 (copy), QuickFX (copy), PlayAttachment (copy), dtwait (copy), random (copy), PlayTween (copy)
+									local v803 = v541._maid:give(morevfx["explosion MeshEmitter"]:Clone())
+
+									v803.Parent = v543
+									v803:ScaleTo(0.01)
+
+									local v804 = v541._maid:give(Instance.new("NumberValue"))
+
+									v541._maid:giveTask(v804.Changed:Connect(function() -- line: 3761
+										-- upvalues: v803 (copy), v804 (copy)
+										v803:ScaleTo(v804.Value)
+									end))
+									v803:PivotTo(u540 * CFrame.new(0, -6, 0))
+									v804.Value = v803:GetScale()
+									TweenService:Create(v804, TweenInfo.new(1, Enum.EasingStyle.Sine), {
+										Value = 2
+									}):Play()
+									TweenService:Create(v803.PrimaryPart, TweenInfo.new(3, Enum.EasingStyle.Quad), {
+										CFrame = v803:GetPivot() * CFrame.new(0, 50, 0)
+									}):Play()
+									task.delay(0.5, function() -- line: 3770
+										-- upvalues: TweenService (copy), v803 (copy)
+										TweenService:Create(v803.PrimaryPart, TweenInfo.new(3, Enum.EasingStyle.Quad), {
+											CFrame = v803:GetPivot() * CFrame.new(0, 120, 0)
+										}):Play()
+									end)
+									task.wait(0.32)
+									task.delay(0.2, function() -- line: 3775
+										-- upvalues: TweenService (copy), v804 (copy)
+										TweenService:Create(v804, TweenInfo.new(0.7, Enum.EasingStyle.Exponential), {
+											Value = 0.01
+										}):Play()
+									end)
+
+									local v805 = v541._maid:give(main.Fireball:Clone())
+									local v806 = v541._maid:give(Instance.new("NumberValue"))
+
+									v806.Value = 0
+
+									local n11 = 0
+
+									RaiseZIndex({
+										Count = -2,
+										FX = v805
+									})
+									v806.Changed:Connect(function() -- line: 3784
+										-- upvalues: n11 (ref), v805 (copy), v806 (copy), u540 (ref)
+										n11 += 1
+										v805:ScaleTo(v806.Value)
+										v805:PivotTo(u540 * CFrame.new(0, 6 * v805:GetScale(), 0) * CFrame.Angles(0, math.rad(n11 * 5), 0))
+									end)
+									v805.Parent = v543
+									game.Debris:AddItem(v805, 0.2)
+
+									local v808 = v541._maid:give(main.ScreenLines:Clone())
+
+									v808.Parent = v543
+									Able({
+										On = false,
+										FX = v808
+									})
+									task.spawn(function() -- line: 3798
+										-- upvalues: v808 (copy), v39 (copy), Able (copy)
+										local timestamp = tick()
+
+										while tick() - timestamp < 1 do
+											v808:PivotTo(v39.CFrame * CFrame.new(0, 0, -1) * CFrame.Angles(0, 3.141592653589793, 0))
+											game:GetService("RunService").RenderStepped:Wait()
+										end
+
+										Able({
+											On = false,
+											FX = v808
+										})
+									end)
+									task.delay(0.1, function() -- line: 3810
+										-- upvalues: QuickFX (copy), main (copy), u540 (ref), v541 (copy), PlayAttachment (copy)
+										local v1065 = QuickFX({
+											FX = main.Done,
+											Anchor = u540 * CFrame.new(0, -20, 0),
+											Maid = v541._maid
+										})
+
+										v1065:ScaleTo(3)
+										PlayAttachment(v1065)
+									end)
+
+									local v809 = true
+
+									task.spawn(function() -- line: 3817
+										-- upvalues: v809 (copy), TweenService (copy)
+										if v809 then
+											TweenService:Create(game.Lighting, TweenInfo.new(1.827, Enum.EasingStyle.Quad), {
+												Brightness = 0,
+												Ambient = Color3.fromRGB(0, 0, 0),
+												OutdoorAmbient = Color3.fromRGB(25, 25, 25)
+											}):Play()
+											TweenService:Create(game.Lighting, TweenInfo.new(0.65, Enum.EasingStyle.Quad), {
+												ClockTime = 0
+											}):Play()
+
+											return
+										end
+
+										TweenService:Create(game.Lighting, TweenInfo.new(1.827, Enum.EasingStyle.Quad), {
+											Brightness = 2,
+											Ambient = Color3.fromRGB(138, 138, 138),
+											OutdoorAmbient = Color3.fromRGB(128, 128, 128)
+										}):Play()
+										TweenService:Create(game.Lighting, TweenInfo.new(0.65, Enum.EasingStyle.Quad), {
+											ClockTime = 12.302
+										}):Play()
+									end)
+									task.wait(0.2)
+
+									local v810 = QuickFX({
+										FX = main.explo,
+										Maid = v541._maid,
+										Anchor = CFrame.new(0, 0, 0)
+									})
+
+									v810:ScaleTo(0.4)
+									RaiseZIndex({
+										Count = 4,
+										FX = v810
+									})
+									v810:PivotTo(u540 * CFrame.new(0, 7, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1):Inverse())
+
+									local v811 = v541._maid:give(main.Space:Clone())
+
+									v811:PivotTo(u540 * v811:GetAttribute("Offset"):Inverse() * CFrame.new(0, 20, 0))
+									v811.Parent = v543
+									task.delay(0.6, function() -- line: 3850
+										-- upvalues: PlayAttachment (copy), v810 (copy), RaiseZIndex (copy)
+										PlayAttachment(v810)
+										RaiseZIndex({
+											Count = -9,
+											FX = v810
+										})
+									end)
+									task.wait(0.2)
+
+									local v812 = QuickFX({
+										FX = main.FinalCrack,
+										Anchor = u540 * CFrame.new(-5, 0.2, 0) * CFrame.Angles(0, 0, 0),
+										Maid = v541._maid
+									})
+
+									for _, v in pairs(v812:GetDescendants()) do
+										if v:IsA("Beam") then
+											v.Color = ColorSequence.new(Color3.fromRGB(60, 42, 255))
+										end
+									end
+
+									v812:ScaleTo(3)
+
+									local v815 = QuickFX({
+										FX = main.Wisp,
+										Anchor = u540,
+										Maid = v541._maid
+									})
+
+									game.Debris:AddItem(v815, 2)
+									task.delay(0.1, function() -- line: 3873
+										-- upvalues: PlayAttachment (copy), v815 (copy), dtwait (copy), TweenService (copy)
+										PlayAttachment(v815)
+										dtwait(0.5)
+
+										for _, v in pairs(v815:GetDescendants()) do
+											if v:IsA("ParticleEmitter") then
+												TweenService:Create(v, TweenInfo.new(0.2), {
+													TimeScale = 0
+												}):Play()
+											end
+										end
+
+										dtwait(1)
+
+										for _, v in pairs(v815:GetDescendants()) do
+											if v:IsA("ParticleEmitter") then
+												TweenService:Create(v, TweenInfo.new(0.2), {
+													TimeScale = 1
+												}):Play()
+											end
+										end
+									end)
+
+									local t33 = {}
+
+									task.spawn(function() -- line: 3897
+										-- upvalues: t33 (copy), dtwait (copy)
+										local timestamp = tick()
+
+										while tick() - timestamp < 1.5 do
+											for _, v in pairs(t33) do
+												if v.Parent and v:IsA("Model") then
+													v:SetPrimaryPartCFrame(v.PrimaryPart.CFrame * CFrame.Angles(0, -0.017453292519943295, 0))
+												end
+											end
+
+											dtwait(0.02)
+										end
+									end)
+									task.delay(0.2, function() -- line: 3913
+										-- upvalues: QuickFX (copy), main (copy), v541 (copy), u540 (ref), PlayAttachment (copy)
+										local v1074 = QuickFX({
+											FX = main.Glints,
+											Maid = v541._maid,
+											Anchor = u540
+										})
+
+										v1074:ScaleTo(0.4)
+										PlayAttachment(v1074)
+									end)
+									task.spawn(function() -- line: 3920
+										-- upvalues: u540 (ref), main (copy), v543 (copy), v541 (copy), random (copy), TweenService (copy), dtwait (copy)
+										local t34 = {}
+										local v1076 = u540 * CFrame.new(0, -35, 0)
+
+										for _ = 1, 30 do
+											local clone34 = main.Part:Clone()
+
+											clone34.Shape = Enum.PartType.Ball
+											clone34.Material = Enum.Material.Neon
+											clone34.Parent = v543
+											clone34.Name = "BeamTrail"
+											clone34.Anchored = true
+											clone34.CanCollide = false
+											clone34.Name = "TrailPart"
+											clone34.Color = Color3.fromRGB(255, 255, 255)
+											v541._maid:give(clone34)
+
+											local v1079 = random:NextNumber(0.2, 0.4) * 4
+
+											clone34.Size = Vector3.new(v1079, v1079, v1079)
+											clone34.CFrame = v1076
+
+											local v1080 = random:NextNumber(2, 3)
+											local v1081 = v541._maid:give(Instance.new("NumberValue"))
+
+											v1081.Value = 0
+											TweenService:Create(v1081, TweenInfo.new(v1080, Enum.EasingStyle.Sine), {
+												Value = random:NextNumber(10, 20) * 4
+											}):Play()
+											TweenService:Create(clone34, TweenInfo.new(v1080, Enum.EasingStyle.Sine), {
+												Size = clone34.Size * 1.5
+											}):Play()
+											task.delay(v1080, function() -- line: 3950
+												-- upvalues: TweenService (copy), clone34 (copy), v1080 (copy)
+												TweenService:Create(clone34, TweenInfo.new(v1080, Enum.EasingStyle.Sine), {
+													Size = Vector3.new(0, 0, 0)
+												}):Play()
+											end)
+
+											local cFrame = CFrame.Angles(math.rad((math.random(0, 360))), math.rad((math.random(0, 360))), (math.rad((math.random(0, 360)))))
+
+											t34[clone34] = {
+												Range = v1081,
+												Orientation = cFrame,
+												Speed = random:NextNumber(0.1, 1) * 6,
+												Rise = random:NextNumber(0.05, 0.3) * 8
+											}
+										end
+
+										local timestamp = tick()
+										local n12 = 0
+
+										while tick() - timestamp < 3.4 do
+											n12 += 1
+
+											for k, v in pairs(t34) do
+												local vRange = v.Range
+
+												k.CFrame = v1076 * CFrame.new(0, v.Rise * n12, 0) * CFrame.Angles(0.4363323129985824, math.rad(n12 * v.Speed), 0) * v.Orientation * CFrame.Angles(0, 0, 0) * CFrame.new(0, 0, vRange.Value)
+											end
+
+											dtwait(0.01)
+										end
+									end)
+
+									local t35 = {}
+
+									for _, v in pairs(v812:GetChildren()) do
+										if v:IsA("BasePart") then
+											local t36 = {}
+
+											for i = 1, 6 do
+												local v822 = v:FindFirstChild("Top" .. i)
+												local v823 = v:FindFirstChild("Bottom" .. i)
+												local v824 = v:FindFirstChild("Bottom" .. i - 1)
+
+												v:FindFirstChild("Bottom" .. i + 1)
+
+												if v822 and v823 then
+													local CFrame2 = v823.CFrame
+													local v826 = v824 and t36[i - 1].Original or v823.CFrame
+
+													v823.CFrame = v826
+													v822.CFrame = v826
+													t36[i] = {
+														Top = v822,
+														Bottom = v823,
+														Original = CFrame2
+													}
+												end
+											end
+
+											local raycastParams3 = RaycastParams.new()
+
+											raycastParams3.FilterType = Enum.RaycastFilterType.Include
+											raycastParams3.FilterDescendantsInstances = {
+												game.Workspace.Built,
+												game.Workspace.Map
+											}
+											task.spawn(function() -- line: 4001
+												-- upvalues: t36 (copy), TweenService (copy), dtwait (copy), raycastParams3 (copy), v812 (copy), v541 (copy), main (copy), random (copy), v543 (copy), t35 (copy), PlayTween (copy)
+												task.spawn(function() -- line: 4002
+													-- upvalues: t36 (copy), TweenService (copy), dtwait (copy), raycastParams3 (copy), v812 (copy), v541 (copy), main (copy), random (copy), v543 (copy), t35 (copy)
+													for k, v3 in pairs(t36) do
+														local Top = v3.Top
+														local Bottom = v3.Bottom
+														local Original = v3.Original
+
+														TweenService:Create(Bottom, TweenInfo.new(0.05, Enum.EasingStyle.Sine), {
+															CFrame = Original
+														}):Play()
+														TweenService:Create(Top, TweenInfo.new(0.05, Enum.EasingStyle.Sine), {
+															CFrame = Original * CFrame.new(5 * k, 0, 0)
+														}):Play()
+														dtwait(0.05)
+
+														local raycastResult3 = game.Workspace:Raycast(Top.WorldCFrame.Position, Vector3.new(0, -50, 0), raycastParams3)
+
+														if raycastResult3 and math.random(1, 2) == 1 and (raycastResult3.Position - v812:GetPivot().Position).Magnitude >= 30 then
+															local v1184 = v541._maid:give(main.RockTemplates:GetChildren()[math.random(1, #main.RockTemplates:GetChildren())]:Clone())
+
+															v1184.Material = raycastResult3.Instance.Material
+															v1184.Color = raycastResult3.Instance.Color
+															v1184.CanCollide = false
+															v1184.Anchored = true
+															v1184.CFrame = Bottom.WorldCFrame * CFrame.new(random:NextNumber(-10, 10), 0, random:NextNumber(-10, 10)) * CFrame.Angles(math.rad((math.random(0, 360))), math.rad((math.random(0, 360))), (math.rad((math.random(0, 360)))))
+															v1184.Position = Vector3.new(v1184.Position.X, raycastResult3.Position.Y - math.max(v1184.Size.X, v1184.Size.Y, v1184.Size.Z), v1184.Position.Z)
+															v1184.Size = v1184.Size * random:NextNumber(1.2, 1.6)
+															v1184.Parent = v543
+															game.Debris:AddItem(v1184, 2.5)
+
+															local PointLight = Instance.new("PointLight")
+
+															PointLight.Parent = v1184
+															PointLight.Brightness = 8
+															PointLight.Color = Color3.new(1, 0, 0)
+															PointLight.Range = 10
+															table.insert(t35, v1184)
+															TweenService:Create(v1184, TweenInfo.new(random:NextNumber(1, 2), Enum.EasingStyle.Exponential), {
+																CFrame = CFrame.new(v1184.Position + Vector3.new(0, random:NextNumber(10, 35), 0)) * CFrame.Angles(math.rad((math.random(0, 360))), math.rad((math.random(0, 360))), (math.rad((math.random(0, 360)))))
+															}):Play()
+														end
+													end
+												end)
+												task.spawn(function() -- line: 4044
+													-- upvalues: dtwait (copy), v812 (copy), TweenService (copy), PlayTween (copy)
+													dtwait(0.3)
+
+													for _, v4 in pairs(v812:GetDescendants()) do
+														if v4:IsA("Beam") then
+															TweenService:Create(v4, TweenInfo.new(tonumber(v4.Name) / 20 + 0.5, Enum.EasingStyle.Sine), {
+																TextureSpeed = 0
+															}):Play()
+														end
+													end
+
+													task.wait(1)
+
+													for _, v5 in pairs(v812:GetDescendants()) do
+														if v5:IsA("Beam") then
+															PlayTween(v5, {
+																Time = 0.15,
+																EasingStyle = "Sine",
+																Goal = {
+																	Transparency = NumberSequence.new({
+																		NumberSequenceKeypoint.new(0, 1),
+																		NumberSequenceKeypoint.new(1, 1)
+																	})
+																}
+															})
+															game.Debris:AddItem(v5, 0.15)
+														end
+													end
+												end)
+											end)
+										end
+									end
+
+									dtwait(4.2)
+
+									local v828 = QuickFX({
+										FX = main.Done,
+										Anchor = u540 * CFrame.new(0, 10, 0),
+										Maid = v541._maid
+									})
+
+									PlayAttachment(v828)
+
+									local v829 = false
+
+									task.spawn(function() -- line: 3817
+										-- upvalues: v829 (copy), TweenService (copy)
+										if v829 then
+											TweenService:Create(game.Lighting, TweenInfo.new(1.827, Enum.EasingStyle.Quad), {
+												Brightness = 0,
+												Ambient = Color3.fromRGB(0, 0, 0),
+												OutdoorAmbient = Color3.fromRGB(25, 25, 25)
+											}):Play()
+											TweenService:Create(game.Lighting, TweenInfo.new(0.65, Enum.EasingStyle.Quad), {
+												ClockTime = 0
+											}):Play()
+
+											return
+										end
+
+										TweenService:Create(game.Lighting, TweenInfo.new(1.827, Enum.EasingStyle.Quad), {
+											Brightness = 2,
+											Ambient = Color3.fromRGB(138, 138, 138),
+											OutdoorAmbient = Color3.fromRGB(128, 128, 128)
+										}):Play()
+										TweenService:Create(game.Lighting, TweenInfo.new(0.65, Enum.EasingStyle.Quad), {
+											ClockTime = 12.302
+										}):Play()
+									end)
+									dtwait(1.4)
+									v812:Destroy()
+
+									for _, v in pairs(t35) do
+										v:Destroy()
+									end
+								end)()
+							end,
+							pillar = function() -- line: 4402
+								-- upvalues: Thebeam (copy), t30 (copy), v277 (copy), inside (copy), clone2 (copy)
+								Thebeam()
+								task.wait(2.45)
+
+								for _, v in pairs(t30) do
+									v:Stop()
+								end
+
+								v277:Stop()
+								inside()
+								clone2:PivotTo(clone2:GetPivot() * CFrame.new(0, -10, 0))
+							end
+						}
+						local t38 = {}
+
+						for k, v in pairs(t37) do
+							table.insert(t38, (v277:GetMarkerReachedSignal(k):Connect(v)))
+						end
+
+						task.delay(20, function() -- line: 4428
+							-- upvalues: t38 (copy)
+							for _, v in pairs(t38) do
+								v:Disconnect()
+							end
+						end)
+					end)()
+				end,
+				torn = function() -- line: 4444
+					-- upvalues: t2 (copy), Maid (copy), vfx (copy), HumanoidRootPartCFrame (copy), QuickFX (copy), LifeScale (copy), PlayAttachment (copy), TweenService (copy), EFP (ref), clone2 (copy), PlayMesh (copy), PlayTween (copy), ObjectService (copy), BeamLightning (copy), random (copy), LoopService (copy), dtwait (copy), Folder2 (copy), Folder (copy)
+					task.wait(0.2)
+
+					local t39 = {
+						[1] = {
+							"rbxassetid://126345619062862",
+							"rbxassetid://99303886332474",
+							"rbxassetid://121637092604416",
+							"rbxassetid://113029456950748",
+							"rbxassetid://138572874693768",
+							"rbxassetid://92607920533530",
+							"rbxassetid://138142224621278",
+							"rbxassetid://120065192728444",
+							"rbxassetid://70411827948913",
+							"rbxassetid://71491448109970",
+							"rbxassetid://85524876848679",
+							"rbxassetid://84060367679631",
+							"rbxassetid://98004646393019",
+							"rbxassetid://139881862115187",
+							"rbxassetid://75646293133592",
+							"rbxassetid://82260360973815",
+							"rbxassetid://80749449158947",
+							"rbxassetid://75562819739007",
+							"rbxassetid://78560402198235",
+							"rbxassetid://134122785594190",
+							"rbxassetid://122238912891286",
+							"rbxassetid://83757815885857"
+						},
+						[2] = {
+							"rbxassetid://79659437605905",
+							"rbxassetid://118290359008121",
+							"rbxassetid://93612183410156",
+							"rbxassetid://79503345167950",
+							"rbxassetid://75259404133000",
+							"rbxassetid://123404852590285",
+							"rbxassetid://89121436722950",
+							"rbxassetid://122757847245395",
+							"rbxassetid://110337433498526",
+							"rbxassetid://82000074938026",
+							"rbxassetid://96669627548575",
+							"rbxassetid://113917452449518",
+							"rbxassetid://133381373610534",
+							"rbxassetid://138651759212140",
+							"rbxassetid://120620024709807",
+							"rbxassetid://95006064285568",
+							"rbxassetid://135806306899349",
+							"rbxassetid://134049946195990",
+							"rbxassetid://77590421805120",
+							"rbxassetid://71393365951006",
+							"rbxassetid://94079431186519"
+						}
+					}
+					local v192 = setmetatable({}, t2)
+
+					v192._maid = Maid.new()
+
+					local u193 = false
+
+					task.delay(15, function() -- line: 4512
+						-- upvalues: u193 (ref), v192 (copy)
+						if not u193 then
+							u193 = true
+							v192._maid:doCleaning()
+						end
+					end)
+
+					local main = vfx.main
+					local v195 = HumanoidRootPartCFrame * CFrame.new(11, -3, 0)
+
+					game.Lighting.ClockTime = 6.4
+					task.delay(0.1, function() -- line: 4520
+						-- upvalues: QuickFX (copy), vfx (copy), v192 (copy), v195 (copy), LifeScale (copy), PlayAttachment (copy)
+						local v285 = QuickFX({
+							FX = vfx.main.Pre,
+							Maid = v192._maid,
+							Anchor = v195 * CFrame.new(0, 800, 0)
+						})
+
+						v285:ScaleTo(6)
+						LifeScale({
+							Scale = 1,
+							FX = v285
+						})
+						PlayAttachment(v285)
+					end)
+					task.spawn(function() -- line: 4529
+						-- upvalues: TweenService (copy), v192 (copy), main (copy), EFP (ref), clone2 (copy), PlayAttachment (copy), PlayMesh (copy), QuickFX (copy), PlayTween (copy), ObjectService (copy), BeamLightning (copy), random (copy), LoopService (copy), t39 (copy), dtwait (copy), u193 (ref), v195 (copy), Folder2 (copy), Folder (copy)
+						local Part = Instance.new("Part")
+
+						Part.Size = Vector3.new(15, 15, 15)
+						Part.Anchored = true
+						Part.CanCollide = false
+						Part.CFrame = v195 * CFrame.new(-100, 800, 0)
+						Part.Transparency = 1
+						Part:PivotTo(clone2:GetPivot() * CFrame.new(89.4429779, -703, -3.57936382, 0, 0, 1, 0, 1, 0, -1, 0, 0):Inverse())
+						Instance.new("Highlight").Parent = Part
+						Part.Parent = EFP
+
+						local v287 = clone2:GetPivot() * CFrame.new(-13.7550583, 97, -1.41651678, 0, 0, 1, 0, 1, 0, -1, 0, 0):Inverse()
+
+						TweenService:Create(Part, TweenInfo.new(0.9, Enum.EasingStyle.Sine), {
+							CFrame = v287
+						}):Play()
+						game.Debris:AddItem(Part, 3)
+						Folder2:ClearAllChildren()
+
+						for _, v in pairs(Folder:GetChildren()) do
+							if v.Name == "SceneRig" or v.Name == "Meshs" or v.Name == "RoomReal" or v.Name == "JustStars" then
+								v:Destroy()
+							end
+						end;
+
+						(function(p10) --[[ OPTornado ]] -- line: 4531
+							-- upvalues: TweenService (copy), v192 (copy), main (copy), EFP (ref), clone2 (copy), PlayAttachment (copy), PlayMesh (copy), QuickFX (copy), PlayTween (copy), ObjectService (copy), BeamLightning (copy), random (copy), LoopService (copy), t39 (copy), dtwait (copy), u193 (ref)
+							local v550 = true
+
+							task.spawn(function() -- line: 4537
+								-- upvalues: v550 (copy), TweenService (copy)
+								if v550 then
+									TweenService:Create(game.Lighting, TweenInfo.new(1.827, Enum.EasingStyle.Quad), {
+										Brightness = 0,
+										Ambient = Color3.fromRGB(0, 0, 0),
+										OutdoorAmbient = Color3.fromRGB(25, 25, 25)
+									}):Play()
+									TweenService:Create(game.Lighting, TweenInfo.new(0.65, Enum.EasingStyle.Quad), {
+										ClockTime = 6.4
+									}):Play()
+
+									return
+								end
+
+								TweenService:Create(game.Lighting, TweenInfo.new(1.827, Enum.EasingStyle.Quad), {
+									Brightness = 2,
+									Ambient = Color3.fromRGB(138, 138, 138),
+									OutdoorAmbient = Color3.fromRGB(128, 128, 128)
+								}):Play()
+								TweenService:Create(game.Lighting, TweenInfo.new(0.65, Enum.EasingStyle.Quad), {
+									ClockTime = 12.302
+								}):Play()
+							end)
+							task.spawn(function() -- line: 4632
+								-- upvalues: v192 (copy), main (copy), p10 (copy), EFP (ref), clone2 (copy), PlayAttachment (copy), PlayMesh (copy), QuickFX (copy), TweenService (copy), PlayTween (copy), ObjectService (copy), BeamLightning (copy), random (copy), LoopService (copy), t39 (copy), dtwait (copy), u193 (ref)
+								local timestamp = tick()
+								local n13 = 0
+								local t40 = {}
+								local t41 = {}
+								local v837 = v192._maid:give(main.TornPart:Clone())
+
+								v837.CFrame = p10.CFrame * CFrame.new(0, 20, 0)
+								v837.Anchored = true
+								v837.Transparency = 1
+								v837.Parent = EFP
+								v837:PivotTo(clone2:GetPivot() * CFrame.new(89.4429779, -723, -3.57936382, 0, 0, 1, 0, 1, 0, -1, 0, 0):Inverse())
+								PlayAttachment(v837)
+
+								local clone35 = main.SkyRing:Clone()
+
+								clone35:ScaleTo(2)
+								PlayMesh({
+									Model = clone35,
+									Anchor = v837.CFrame,
+									Info = TweenInfo.new(2, Enum.EasingStyle.Exponential)
+								})
+
+								local v839 = clone2:GetPivot() * CFrame.new(89.4429779, -703, -3.57936382, 0, 0, 1, 0, 1, 0, -1, 0, 0):Inverse()
+
+								local function CloudBeam(p11) -- line: 4661
+									-- upvalues: QuickFX (copy), main (copy), v192 (copy), TweenService (copy), PlayTween (copy)
+									local v1089 = QuickFX({
+										FX = main.CloudBeam,
+										Maid = v192._maid,
+										Anchor = p11
+									})
+
+									v1089:ScaleTo(2)
+
+									for _, v in pairs(v1089:GetDescendants()) do
+										if v:IsA("Beam") then
+											local TextureSpeed = v.TextureSpeed
+
+											v.FaceCamera = true
+											v.TextureSpeed = v.TextureSpeed * -25
+											v.Brightness = v.Brightness * 13
+
+											local vTransparency = v.Transparency
+
+											v.Width0 = v.Width0 * 2
+											v.Width1 = v.Width1 * 2
+											v.Transparency = NumberSequence.new({
+												NumberSequenceKeypoint.new(0, 1),
+												NumberSequenceKeypoint.new(1, 1)
+											})
+											TweenService:Create(v, TweenInfo.new(0.8, Enum.EasingStyle.Sine), {
+												TextureSpeed = TextureSpeed * -295
+											}):Play()
+											task.delay(0.15, function() -- line: 4678
+												-- upvalues: PlayTween (copy), v (copy), vTransparency (copy)
+												PlayTween(v, {
+													Time = 0.15,
+													EasingStyle = "Sine",
+													Goal = {
+														Transparency = vTransparency
+													}
+												})
+											end)
+										end
+									end
+
+									game.Debris:AddItem(v1089, 3)
+								end
+
+								CloudBeam(v839 * CFrame.new(750, -63.5003738, -3.09774566, -4.37113883E-08, 1, 4.37113883E-08, 1, 4.37113918E-08, -4.37113847E-08, -4.37113883E-08, 4.37113847E-08, -1):Inverse())
+								CloudBeam(v839 * CFrame.new(750, -148.500366, 146.902252, -4.37113883E-08, 1, 4.37113883E-08, 1, 4.37113918E-08, -4.37113847E-08, -4.37113883E-08, 4.37113847E-08, -1):Inverse())
+								CloudBeam(v839 * CFrame.new(750, 3.09774828, -213.500366, -4.37113883E-08, 1, 4.37113883E-08, 0, -4.37113883E-08, 1, 1, 4.37113883E-08, 1.91068547E-15):Inverse())
+								CloudBeam(v839 * CFrame.new(750, -196.902252, -193.500366, -4.37113883E-08, 1, 4.37113883E-08, 0, -4.37113883E-08, 1, 1, 4.37113883E-08, 1.91068547E-15):Inverse())
+
+								local function LightningRod(p12, _) -- line: 4724
+									-- upvalues: ObjectService (copy), main (copy), v837 (copy), EFP (ref), random (copy), BeamLightning (copy)
+									local _ = math.random(-25, -5) * 44
+									local v1108 = math.random(-180, 180)
+									local v1109 = p12 or 1
+									local v1110 = ObjectService.CreateEffect("Model", main.LightningStrike, v837.CFrame * CFrame.new(0, 0, 2) * CFrame.Angles(0, math.rad(v1108), 0), EFP)
+
+									v1110.Object.Bottom.CFrame = v837.CFrame
+									v1110.Object.Top.CFrame = v837.CFrame * CFrame.new(random:NextNumber(-90, 90), random:NextNumber(0, 180), random:NextNumber(-90, 90))
+									BeamLightning.new(v1110.Object.Top, v1110.Object.Bottom, 10, 10, CFrame.new(math.random(-10, 10), 0, 0), 4, math.random(2, 4) * 4, math.random(2, 4) * 4, 0.5 / v1109, "Cubic", "Out", 0.25, 3.75, nil, main.Beam5):Destroy(0.15 / v1109, 0.55 / v1109, "Bounce", "Out")
+									v1110:Destroy(0.15 / v1109)
+								end
+								local function LightningRod2(p14, _) -- line: 4742
+									-- upvalues: ObjectService (copy), main (copy), v837 (copy), EFP (ref), random (copy), BeamLightning (copy)
+									local v1113 = math.random(-25, -5)
+									local v1114 = math.random(-180, 180)
+									local v1115 = p14 or 1
+									local v1116 = math.random(-75, 75)
+									local v1117 = math.random(-75, 75)
+									local v1118 = ObjectService.CreateEffect("Model", main.LightningStrike2, v837.CFrame * CFrame.new(0, 0, 2) * CFrame.Angles(0, math.rad(v1114), 0) * CFrame.new(v1113, -3, 0) * CFrame.Angles(math.rad(v1116), 0, (math.rad(v1117))), EFP)
+
+									v1118.Object.Bottom.CFrame = v837.CFrame
+									v1118.Object.Top.CFrame = v837.CFrame * CFrame.new(random:NextNumber(-90, 90), random:NextNumber(0, 180), random:NextNumber(-90, 90))
+									BeamLightning.new(v1118.Object.Top, v1118.Object.Bottom, 7, 10, CFrame.new(math.random(-10, 10), 0, 0), 4, math.random(2, 4) * 4, math.random(2, 4) * 4, 0.5 / v1115, "Cubic", "Out", 0.25, 3.75, nil, main.Beam5):Destroy(0.15 / v1115, 0.55 / v1115, "Bounce", "Out")
+									v1118:Destroy(0.15 / v1115)
+								end
+
+								local v843 = LoopService.LoopWithFunctions(0.01, {
+									{
+										Iterations = 8,
+										Function = function() --[[ Function ]] -- line: 4780
+										end
+									},
+									{
+										Iterations = 8,
+										Function = function() --[[ Function ]] -- line: 4784
+											-- upvalues: LightningRod (copy), LightningRod2 (copy)
+											LightningRod()
+											LightningRod2()
+										end
+									},
+									{
+										Iterations = 2,
+										Function = function() --[[ Function ]] -- line: 4790
+										end
+									}
+								})
+
+								task.delay(1, function() -- line: 4797
+									-- upvalues: v843 (copy)
+									v843:EndLoop()
+								end)
+
+								local v844 = v192._maid:give(main.Inner:Clone())
+								local v845 = v192._maid:give(Instance.new("NumberValue"))
+
+								v845.Value = 0
+								TweenService:Create(v845, TweenInfo.new(0.5, Enum.EasingStyle.Bounce), {
+									Value = 775
+								}):Play()
+
+								local v846 = v192._maid:give(Instance.new("NumberValue"))
+
+								v846.Value = 1
+
+								local v847 = v192._maid:give(Instance.new("NumberValue"))
+
+								v847.Value = 5
+								TweenService:Create(v847, TweenInfo.new(0.6, Enum.EasingStyle.Sine), {
+									Value = 1
+								}):Play()
+								task.delay(0.1, function() -- line: 4832
+									-- upvalues: TweenService (copy), v845 (copy)
+									TweenService:Create(v845, TweenInfo.new(0.45, Enum.EasingStyle.Bounce), {
+										Value = 11
+									}):Play()
+									task.wait(0.75)
+									TweenService:Create(v845, TweenInfo.new(0.25, Enum.EasingStyle.Bounce), {
+										Value = 21
+									}):Play()
+								end)
+
+								local v848 = v192._maid:give(Instance.new("NumberValue"))
+
+								v848.Value = 0
+								TweenService:Create(v848, TweenInfo.new(1, Enum.EasingStyle.Sine), {
+									Value = 195
+								}):Play()
+
+								local v849 = v192._maid:give(Instance.new("NumberValue"))
+
+								v849.Value = 0.1
+								TweenService:Create(v849, TweenInfo.new(0.1, Enum.EasingStyle.Sine), {
+									Value = 4
+								}):Play()
+								task.delay(0.1, function() -- line: 4847
+									-- upvalues: TweenService (copy), v849 (copy)
+									TweenService:Create(v849, TweenInfo.new(0.7, Enum.EasingStyle.Sine), {
+										Value = 1
+									}):Play()
+								end)
+
+								local v850 = v192._maid:give(Instance.new("NumberValue"))
+
+								v850.Value = 1
+								TweenService:Create(v850, TweenInfo.new(1, Enum.EasingStyle.Sine), {
+									Value = 21
+								}):Play()
+
+								local v851 = v192._maid:give(Instance.new("NumberValue"))
+
+								v851.Value = 0
+								TweenService:Create(v851, TweenInfo.new(0.5, Enum.EasingStyle.Sine), {
+									Value = 0.25
+								}):Play()
+
+								local v852 = v192._maid:give(Instance.new("NumberValue"))
+
+								v852.Value = 5
+								TweenService:Create(v852, TweenInfo.new(0.5, Enum.EasingStyle.Sine), {
+									Value = 0.5
+								}):Play()
+								task.delay(0.4, function() -- line: 4869
+									-- upvalues: TweenService (copy), v846 (copy), v849 (copy), v852 (copy)
+									TweenService:Create(v846, TweenInfo.new(1, Enum.EasingStyle.Sine), {
+										Value = 5
+									}):Play()
+									task.wait(0.2)
+									TweenService:Create(v849, TweenInfo.new(0.7, Enum.EasingStyle.Sine), {
+										Value = 1.4
+									}):Play()
+									TweenService:Create(v852, TweenInfo.new(1.5, Enum.EasingStyle.Sine), {
+										Value = 3
+									}):Play()
+									task.wait(0.25)
+								end)
+
+								while tick() - timestamp < 0.9 do
+									n13 += 0.5
+
+									local v853 = v192._maid:give(main.New:Clone())
+									local DecalColor3 = v853.PrimaryPart.Decal.Color3
+									local Value = v847.Value
+
+									v853.PrimaryPart.Decal.Color3 = Color3.fromRGB(855 * Value, 170 * Value, 50 * Value)
+									TweenService:Create(v853.PrimaryPart.Decal, TweenInfo.new(0.1 * v846.Value, Enum.EasingStyle.Sine), {
+										Color3 = DecalColor3
+									}):Play()
+
+									local v856, _, _ = CFrame.new(v837.Position, p10.CFrame * CFrame.new(0, v848.Value, 0).Position):ToOrientation()
+									local v859 = v856 * v851.Value
+
+									v853:PivotTo(v837.CFrame * CFrame.Angles(v859, 0, 0))
+									v853.Parent = EFP
+
+									local v860 = v192._maid:give(Instance.new("NumberValue"))
+
+									v860.Value = 0.2 * v849.Value
+									TweenService:Create(v860, TweenInfo.new(0.5, Enum.EasingStyle.Linear), {
+										Value = 1 * random:NextNumber(1, 1.5) * 2.5
+									}):Play()
+
+									local v861 = v192._maid:give(Instance.new("NumberValue"))
+
+									v861.Value = 0
+									TweenService:Create(v861, TweenInfo.new(0.3, Enum.EasingStyle.Linear), {
+										Value = 1
+									}):Play()
+
+									local v862 = v192._maid:give(Instance.new("NumberValue"))
+
+									v862.Value = 1
+									TweenService:Create(v862, TweenInfo.new(0.2, Enum.EasingStyle.Sine), {
+										Value = 25
+									}):Play()
+									v192._maid:giveTask(v860.Changed:Connect(function() -- line: 4927
+										-- upvalues: v853 (copy), v860 (copy), v849 (copy)
+										v853:ScaleTo(v860.Value * v849.Value)
+									end))
+
+									local v863 = random:NextNumber(0, 360)
+
+									t40[v853] = {
+										Scale = v860,
+										Rot = v863,
+										Progress = v861,
+										Original = v853:GetPivot(),
+										SpinSpeed = v862,
+										Angle = v859
+									}
+
+									if n13 % 2 == 0 and tick() - timestamp > 0.3 and tick() - timestamp < 0.75 then
+										local p10CFrame = p10.CFrame
+
+										for _ = 1, 3 do
+											local v866 = random:NextNumber(0.05, 0.07)
+											local clone36 = main.ShardSphere:Clone()
+
+											if math.random(1, 2) == 1 then
+												clone36.Color = Color3.new(0, 0, 0)
+												clone36.Color = Color3.new(1, 0.333333, 0.109804)
+											else
+												clone36.Color = Color3.new(1, 0.227451, 0.0901961)
+											end
+
+											game.Debris:AddItem(clone36, v866)
+
+											local v868 = random:NextNumber(-50, 50)
+											local v869 = random:NextNumber(-50, 50)
+											local v870 = p10CFrame * CFrame.new(v868, math.random(90, 200), v869)
+
+											clone36.CFrame = CFrame.new(p10CFrame * CFrame.new(v868, math.random(10, 15), v869).Position, v870.Position) * CFrame.Angles(1.5707963267948966, 0, 0)
+											clone36.Parent = EFP
+
+											local v871 = random:NextNumber(1, 3)
+
+											clone36.Mesh.Scale = Vector3.new(v871, math.random(25, 35), v871) * 1.4 * 1.3
+											PlayTween(clone36, {
+												EasingStyle = "Sine",
+												Time = v866,
+												Goal = {
+													Position = v870.Position
+												}
+											})
+											PlayTween(clone36.Mesh, {
+												EasingStyle = "Sine",
+												Time = v866,
+												Goal = {
+													Scale = Vector3.new(0, math.random(30, 40) * 1.4 * 1.3, 0)
+												}
+											})
+										end
+									end
+
+									if n13 % 1 == 0 then
+										task.spawn(function() -- line: 4978
+											-- upvalues: main (copy), v837 (copy), random (copy), v849 (copy), v852 (copy), t41 (copy), TweenService (copy), EFP (ref), t39 (copy), dtwait (copy)
+											for _ = 1, 6 do
+												local clone37 = main.Swirlnormalfaceorigin3:Clone()
+
+												clone37:PivotTo(v837.CFrame * CFrame.new(0, 0.3, 0) * CFrame.Angles(3.141592653589793, math.rad((random:NextNumber(-360, 360))), 0))
+												clone37.Size = clone37.Size * v849.Value
+
+												local Mesh = clone37.Mesh
+
+												Mesh.Scale = Mesh.Scale + Vector3.new(0, 0.5, 0)
+
+												local Mesh2 = clone37.Mesh
+
+												Mesh2.Scale = Mesh2.Scale * (5.5 * v852.Value)
+												t41[clone37] = {
+													Speed = random:NextNumber(0.5, 1)
+												}
+												TweenService:Create(clone37.Mesh, TweenInfo.new(0.7, Enum.EasingStyle.Sine), {
+													Scale = clone37.Mesh.Scale * 4
+												}):Play()
+												clone37.Parent = EFP
+												game.Debris:AddItem(clone37, 10)
+												random:NextNumber(3, 6)
+												random:NextNumber(0.0075, 0.015)
+
+												if random:NextInteger(1, 2) == 1 then
+												end
+
+												local v1128 = t39[math.random(1, 2)]
+
+												task.spawn(function() -- line: 5002
+													-- upvalues: v1128 (copy), clone37 (copy), dtwait (copy)
+													for i = 1, #v1128, 2 do
+														local v1191 = v1128[i]
+
+														if v1191 then
+															clone37.Decal.Texture = v1191
+														end
+
+														dtwait(0.0045)
+													end
+
+													clone37:Destroy()
+												end)
+												task.delay(0.015, function() -- line: 5015
+													-- upvalues: TweenService (copy), clone37 (copy)
+													TweenService:Create(clone37.Decal, TweenInfo.new(0.015, Enum.EasingStyle.Linear, Enum.EasingDirection.In), {
+														Color3 = Color3.fromRGB(34, 5, 5)
+													}):Play()
+												end)
+											end
+										end)
+									end
+
+									if n13 % 1 == 0 then
+										local v872 = QuickFX({
+											FX = main.Dotted,
+											Maid = v192._maid,
+											Anchor = v837.CFrame
+										})
+
+										v872:ScaleTo(v852.Value * 7)
+										PlayAttachment(v872)
+										t41[v872] = {
+											Speed = random:NextNumber(0.3, 0.5)
+										}
+									end
+
+									for k, v in pairs(t40) do
+										local _ = (k:GetPivot().Position - p10.CFrame.Position).Magnitude
+										local Progress = v.Progress
+
+										k:PivotTo(v.Original:Lerp(p10.CFrame * CFrame.new(0, v848.Value, 0), Progress.Value) * CFrame.Angles(0, v.Rot, 0) * CFrame.Angles(v.Angle, math.rad(v.SpinSpeed.Value * n13), 0))
+
+										if v.Progress.Value >= 1 then
+											k:Destroy()
+											t40[k] = nil
+										end
+									end
+
+									for k, v in pairs(t41) do
+										if not k.Parent then
+											t41[k] = nil
+										elseif k.Name == "Dotted" then
+											k:PivotTo(k:GetPivot() * CFrame.new(0, -1, 0) * CFrame.Angles(0, math.rad(v.Speed) * 25, 0))
+										else
+											k:PivotTo(k:GetPivot() * CFrame.Angles(0, math.rad(v.Speed) * 25, 0))
+										end
+									end
+
+									v837:PivotTo(p10.CFrame * CFrame.Angles(0, math.rad(v850.Value * n13), 0) * CFrame.new(0, 0, v845.Value))
+
+									local v879 = random:NextNumber(1.2, 2.4)
+
+									v844:PivotTo(CFrame.new(v837.Position, p10.CFrame * CFrame.new(0, v848.Value, 0).Position) * CFrame.Angles(0, 0, 0) * CFrame.Angles(0, 1.5707963267948966, 0) * CFrame.Angles(math.rad(v850.Value * n13 * 3), 0, 0) * CFrame.new(v848.Value * 0.3, 0, 0))
+									v844:ScaleTo(math.clamp(v849.Value, 0.01, 1e999) * v879)
+									dtwait(0.001)
+								end
+
+								if not u193 then
+									u193 = true
+									v192._maid:doCleaning()
+								end
+							end)
+						end)(Part)
+					end)
+				end
+			}
+			local timestamp = tick()
+
+			for k, v in pairs(t29) do
+				local connection = nil
+
+				connection = v116:GetMarkerReachedSignal(k):Connect(function() -- line: 5132
+					-- upvalues: timestamp (copy), connection (ref), v (copy)
+					if tick() - timestamp > 13 then
+						return connection:Disconnect()
+					end
+
+					return v()
+				end)
+				table.insert(t4, connection)
+			end
+
+			for k, v in pairs(t42) do
+				local connection = nil
+
+				connection = v117:GetMarkerReachedSignal(k):Connect(function() -- line: 5144
+					-- upvalues: timestamp (copy), connection (ref), v (copy)
+					if tick() - timestamp > 13 then
+						return connection:Disconnect()
+					end
+
+					return v()
+				end)
+				table.insert(t4, connection)
+			end
+
+			task.spawn(function() -- line: 5156
+				-- upvalues: TweenService3 (copy), u49 (ref), clone2 (copy), Humanoid (copy), Char (copy), n1 (ref), v39 (copy), CFrameValue (copy), FOV (ref), TweenService2 (copy), NumberValue (copy), Stop (copy), t4 (copy)
+				local t43 = {}
+				local NumberValue2 = Instance.new("NumberValue")
+
+				game.Debris:AddItem(NumberValue2, 22)
+				NumberValue2.Value = 0.1
+				TweenService3:Create(NumberValue2, TweenInfo.new(t43.LerpTime or 3, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), {
+					Value = 0.5
+				}):Play()
+
+				local u198 = false
+				local u199 = false
+				local u200 = false
+				local connection = nil
+
+				connection = game:GetService("RunService").RenderStepped:Connect(function(dt) -- line: 5173
+					-- upvalues: u49 (ref), clone2 (copy), Humanoid (copy), Char (copy), u198 (ref), u199 (ref), n1 (ref), v39 (copy), CFrameValue (copy), u200 (ref), FOV (ref), t43 (copy), NumberValue2 (copy), TweenService2 (copy), NumberValue (copy), connection (ref), Stop (copy)
+					if not u49 then
+						local v291 = clone2
+
+						if v291 and v291.Parent and Humanoid.Health > 0 then
+							if Char ~= game.Players.LocalPlayer.Character then
+							end
+						end
+					end
+
+					if not u49 then
+						local v292 = clone2
+
+						if v292 and (v292.Parent and (Humanoid.Health > 0 and Char == game.Players.LocalPlayer.Character)) then
+							if not u198 then
+								u198 = true
+							end
+
+							if dt > 0.08 and not u199 then
+								u199 = true
+							end
+
+							local v293 = dt * 60
+
+							n1 += v293
+
+							local num = tonumber((math.ceil(n1)))
+
+							if v39.CameraType ~= Enum.CameraType.Scriptable then
+								v39.CameraType = Enum.CameraType.Scriptable
+							end
+
+							local ok, _ = pcall(function() -- line: 5194
+								-- upvalues: v39 (copy), clone2 (copy), CFrameValue (copy)
+								v39.CFrame = clone2.Cam.CFrame * CFrameValue.Value + Vector3.new(0, 0, 0)
+							end)
+
+							if not ok and not u200 then
+								u200 = true
+							end
+
+							if FOV then
+								local v297 = FOV:FindFirstChild((tostring(num)))
+
+								if v297 then
+									local v298 = v297
+
+									if not v297:IsA("NumberValue") then
+										v298 = v297.Values:FindFirstChildOfClass("NumberValue")
+									end
+
+									if t43.NoLerp or t43.NoLerpAfter and NumberValue2.Value == 0.5 then
+										v39.FieldOfView = tonumber(v298.Value)
+
+										return
+									end
+
+									local Eases = v297:FindFirstChild("Eases")
+
+									if Eases then
+										local Params = Eases:FindFirstChild("Params")
+										local v301 = Params and Params:FindFirstChild("Direction")
+										local v302 = Params and Params:FindFirstChild("Type")
+										local v303 = v301 and v301.Value or "In"
+										local v304 = v302 and v302.Value or "Linear"
+										local Value = game:GetService("TweenService"):GetValue(0.35, Enum.EasingStyle[v304], Enum.EasingDirection[v303])
+
+										TweenService2:Create(v39, TweenInfo.new(Value), {})
+										v39.FieldOfView = v39.FieldOfView + (tonumber(v298.Value) - v39.FieldOfView) * Value * NumberValue.Value
+
+										return
+									end
+
+									local v306 = v39
+									local FieldOfView = v39.FieldOfView
+
+									v306.FieldOfView = FieldOfView + (tonumber(v298.Value) * NumberValue.Value - FieldOfView) * 0.25
+
+									return
+								end
+							end
+
+							return
+						end
+					end
+
+					connection:Disconnect()
+					Stop()
+				end)
+				table.insert(t4, connection)
+			end)
+		end;
+
+		(function() --[[ Sequence1 ]] -- line: 347
+			-- upvalues: vfx (copy), MoonEmitter (copy), clone2 (copy), HumanoidRootPart (copy), v51 (copy), Humanoid2 (copy), EFP (ref), t4 (copy), PlayTween (copy), TweenService3 (copy), u71 (ref), t2 (copy), Maid (copy), QuickFX (copy), clone4 (copy), TweenService (copy), random (copy), dtwait (copy), v39 (copy), FallSequence (ref), Humanoid (copy), Char (copy), TweenService2 (copy)
+			local FOV = script["1st Sequence"].FOV
+			local CFrameValue = Instance.new("CFrameValue")
+			local NumberValue = Instance.new("NumberValue")
+
+			NumberValue.Value = 1
+
+			local sequence1 = vfx.sequence1
+			local u96 = nil
+			local v97 = MoonEmitter.new(sequence1.ohyea)
+
+			v97:Play()
+			v97:AddLighting()
+			clone2:PivotTo(HumanoidRootPart.CFrame * clone2:GetAttribute("Offset"):Inverse())
+
+			local v98 = v51(107114358965793)
+			local v99 = clone2.AnimationController:LoadAnimation(script["1st Sequence"].Cam)
+			local v100 = Humanoid2:LoadAnimation(script["1st Sequence"].GOD)
+
+			task.delay(8, function() -- line: 375
+				-- upvalues: v97 (copy)
+				v97:Destroy()
+			end)
+
+			for _, v in pairs(sequence1.room:GetChildren()) do
+				local clone38 = v:Clone()
+
+				if v.Name == "auraLIGHT2" then
+					task.delay(2, function() -- line: 382
+						-- upvalues: u96 (ref), clone38 (copy), HumanoidRootPart (copy), v (copy), EFP (ref)
+						if not u96 then
+							clone38:PivotTo(HumanoidRootPart.CFrame * v:GetAttribute("Offset"):Inverse())
+							clone38.Parent = EFP
+						end
+					end)
+				else
+					clone38:PivotTo(HumanoidRootPart.CFrame * v:GetAttribute("Offset"):Inverse())
+					clone38.Parent = EFP
+				end
+
+				table.insert(t4, clone38)
+				task.delay(4.2, function() -- line: 394
+					-- upvalues: clone38 (copy), PlayTween (copy)
+					for _, v6 in pairs(clone38:GetDescendants()) do
+						if v6:IsA("Beam") then
+							PlayTween(v6, {
+								Time = 1,
+								EasingStyle = "Sine",
+								Goal = {
+									Transparency = NumberSequence.new(1)
+								}
+							})
+							game.Debris:AddItem(v6, 1)
+						end
+					end
+				end)
+			end
+
+			local t44 = {}
+
+			v98:Play()
+			v99:Play()
+			v100:Play()
+			shared.SetCore(false, 3)
+			table.insert(t44, v98)
+			table.insert(t44, v99)
+			table.insert(t44, v100)
+
+			local n14 = 0
+
+			for _, v in pairs(t44) do
+				v.TimePosition = 0
+			end;
+
+			(function() --[[ ScreenCover ]] -- line: 423
+				-- upvalues: TweenService3 (copy)
+				local ScreenGui = Instance.new("ScreenGui")
+
+				ScreenGui.IgnoreGuiInset = true
+				game.Debris:AddItem(ScreenGui, 8)
+				ScreenGui.Parent = game.Players.LocalPlayer.PlayerGui
+
+				local Frame = Instance.new("Frame")
+
+				Frame.Parent = ScreenGui
+				Frame.Size = UDim2.new(1, 0, 1, 0)
+				Frame.BackgroundColor3 = Color3.new(0, 0, 0)
+				TweenService3:Create(Frame, TweenInfo.new(1.5, Enum.EasingStyle.Sine), {
+					BackgroundTransparency = 1
+				}):Play()
+			end)()
+
+			if not u71 then
+				u71 = true
+				v98:Stop()
+				v99:Stop()
+				v100:Stop()
+				u96 = true
+			end
+
+			local t47 = {
+				look = function() -- line: 456
+					-- upvalues: t4 (copy), t2 (copy), Maid (copy), vfx (copy), QuickFX (copy), clone4 (copy), TweenService (copy), random (copy), dtwait (copy)
+					for _, v in pairs(t4) do
+						if typeof(v) ~= "RBXScriptConnection" and (v.Name == "auraLIGHT" or v.Name == "auraLIGHT2") then
+							for _, v7 in pairs(v:GetDescendants()) do
+								if v7:IsA("Beam") then
+									v7.Enabled = false
+								end
+							end
+						end
+					end;
+
+					(function() --[[ New ]] -- line: 471
+						-- upvalues: t2 (copy), Maid (copy), vfx (copy), QuickFX (copy), clone4 (copy), TweenService (copy), random (copy), dtwait (copy)
+						game.Lighting.ClockTime = 0
+
+						local v202 = setmetatable({}, t2)
+
+						v202._maid = Maid.new()
+
+						local u203 = false
+
+						task.delay(15, function() -- line: 485
+							-- upvalues: u203 (ref), v202 (copy)
+							if not u203 then
+								u203 = true
+								v202._maid:doCleaning()
+							end
+						end)
+
+						local sequence1_2 = vfx.sequence1
+						local v205 = QuickFX({
+							FX = sequence1_2.CrackModel3,
+							Maid = v202._maid,
+							Anchor = clone4:GetPivot() * sequence1_2.CrackModel3:GetAttribute("Offset"):Inverse() * CFrame.new(0, 0, -2.5)
+						})
+
+						game.Debris:AddItem(v205, 2)
+
+						local v206 = v202._maid:give(Instance.new("NumberValue"))
+
+						v206.Value = -0.1
+						TweenService:Create(v206, TweenInfo.new(3, Enum.EasingStyle.Sine), {
+							Value = 1
+						}):Play()
+
+						local timestamp = tick()
+						local t45 = {
+							"PillarsOfCreation1",
+							"PillarsOfCreation2",
+							"PillarsOfCreation3",
+							"PillarsOfCreation4",
+							"GasCloud"
+						}
+						local Pivot = v205:GetPivot()
+						local v210 = v202._maid:give(Instance.new("NumberValue"))
+
+						v210.Value = 0
+						TweenService:Create(v210, TweenInfo.new(3, Enum.EasingStyle.Sine), {
+							Value = 1
+						}):Play()
+
+						for _, v in pairs(v205:GetDescendants()) do
+							if v:IsA("PointLight") then
+								v.Color = Color3.new(0.635294, 0.454902, 1)
+								TweenService:Create(v, TweenInfo.new(2.5, Enum.EasingStyle.Sine), {
+									Color = Color3.new(1, 0, 0)
+								}):Play()
+							end
+						end
+
+						task.spawn(function() -- line: 520
+							-- upvalues: timestamp (copy), v205 (copy), v206 (copy), t45 (copy), random (copy), dtwait (copy), Pivot (copy), v210 (copy)
+							local t46 = {}
+
+							while tick() - timestamp < 2 do
+								for _, v in pairs(v205:GetDescendants()) do
+									if v:IsA("BasePart") then
+										local Mesh = v:FindFirstChild("Mesh")
+
+										if Mesh then
+											Mesh.Scale = Mesh.Scale + Vector3.new(v206.Value, 0, 0)
+										elseif table.find(t45, v.Name) then
+											local v312 = v.CFrame:ToObjectSpace(v205:GetPivot())
+											local v313 = t46[v]
+
+											if not v313 then
+												v313 = random:NextNumber(0.5, 1)
+												t46[v] = v313
+											end
+
+											v.CFrame = v205:GetPivot() * CFrame.new(0, -v206.Value * v313, 0) * v312:Inverse()
+										elseif v.Name == "BallGl" then
+											local v314 = v206.Value * 0.5
+
+											v.Size = v.Size + Vector3.new(v314, v314, v314 * 1)
+										else
+											v.Size = v.Size + Vector3.new(-v206.Value, v206.Value, -v206.Value)
+										end
+									end
+
+									if v:IsA("Texture") and not table.find(t45, v.Parent.Name) and v.Parent.Name == "CrackModel" then
+										v.StudsPerTileU = v.StudsPerTileU + v206.Value
+										v.StudsPerTileV = v.StudsPerTileV + v206.Value
+										v.Parent.CFrame = v.Parent.CFrame * CFrame.Angles(0, math.rad(v206.Value) * 0.6, 0)
+									end
+								end
+
+								dtwait(0.01)
+								v205:PivotTo(Pivot * CFrame.new(random:NextNumber(-v210.Value, v210.Value), random:NextNumber(-v210.Value, v210.Value), random:NextNumber(-v210.Value, v210.Value)))
+							end
+						end)
+					end)()
+				end,
+				hand = function() -- line: 573
+					-- upvalues: t44 (copy), FOV (ref), sequence1 (copy), EFP (ref), v39 (copy), MoonEmitter (copy), t4 (copy), v97 (copy), v98 (copy), v99 (copy), u96 (ref), FallSequence (ref)
+					task.delay(0.6, function() -- line: 575
+						-- upvalues: t44 (copy), FOV (ref)
+						for _, v in pairs(t44) do
+							v:AdjustSpeed(0)
+						end
+
+						FOV = nil
+					end)
+					task.wait(0.8)
+
+					local ScreenGui = Instance.new("ScreenGui")
+
+					ScreenGui.Parent = game.Players.LocalPlayer.PlayerGui
+					game.Debris:AddItem(ScreenGui, 15)
+					ScreenGui.IgnoreGuiInset = true
+
+					local Frame = Instance.new("Frame")
+
+					Frame.Size = UDim2.new(1, 0, 1, 0)
+					Frame.BackgroundColor3 = Color3.new(0, 0, 0)
+					Frame.Parent = ScreenGui
+					game.Lighting.ClockTime = 0
+
+					local clone39 = sequence1["Ehhhidk MeshEmitter"]:Clone()
+
+					clone39.Parent = EFP
+					v39.CFrame = CFrame.new(0, 100000, 0)
+					MoonEmitter.new(clone39):SetAnchor(v39.CFrame * clone39:GetAttribute("Offset"):Inverse())
+
+					local clone40 = sequence1.Preload2:Clone()
+
+					clone40.Parent = game.Players.LocalPlayer.PlayerGui
+					game.Debris:AddItem(clone40, 15)
+					table.insert(t4, clone40)
+					task.wait(1)
+					v97:Stop()
+					v97:Destroy()
+					v98:Stop()
+					v99:Stop()
+					task.delay(0.3, function() -- line: 615
+						-- upvalues: Frame (copy)
+						game:GetService("TweenService"):Create(Frame, TweenInfo.new(1, Enum.EasingStyle.Sine), {
+							BackgroundTransparency = 1
+						}):Play()
+					end)
+					u96 = true
+					FallSequence()
+				end
+			}
+			local timestamp = tick()
+
+			for k, v in pairs(t47) do
+				local connection = nil
+
+				connection = v98:GetMarkerReachedSignal(k):Connect(function() -- line: 628
+					-- upvalues: timestamp (copy), connection (ref), v (copy)
+					if tick() - timestamp > 13 then
+						return connection:Disconnect()
+					end
+
+					return v()
+				end)
+				table.insert(t4, connection)
+			end
+
+			task.spawn(function() -- line: 641
+				-- upvalues: TweenService3 (copy), u96 (ref), clone2 (copy), Humanoid (copy), Char (copy), n14 (ref), v39 (copy), CFrameValue (copy), FOV (ref), TweenService2 (copy), NumberValue (copy), v98 (copy), v99 (copy), v100 (copy)
+				local t48 = {}
+				local NumberValue3 = Instance.new("NumberValue")
+
+				game.Debris:AddItem(NumberValue3, 22)
+				NumberValue3.Value = 0.1
+				TweenService3:Create(NumberValue3, TweenInfo.new(t48.LerpTime or 3, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), {
+					Value = 0.5
+				}):Play()
+
+				local u153 = false
+				local u154 = false
+				local connection = nil
+
+				connection = game:GetService("RunService").RenderStepped:Connect(function(dt) -- line: 655
+					-- upvalues: u96 (ref), clone2 (copy), Humanoid (copy), Char (copy), u153 (ref), u154 (ref), n14 (ref), v39 (copy), CFrameValue (copy), FOV (ref), t48 (copy), NumberValue3 (copy), TweenService2 (copy), NumberValue (copy), connection (ref), v98 (copy), v99 (copy), v100 (copy)
+					local v216 = not u96
+
+					if v216 then
+						local v217 = clone2
+
+						v216 = not (v217 and (v217.Parent and (Humanoid.Health > 0 and Char == game.Players.LocalPlayer.Character)))
+					end
+
+					if not u96 then
+						local v218 = clone2
+
+						if v218 and (v218.Parent and (Humanoid.Health > 0 and Char == game.Players.LocalPlayer.Character)) then
+							if not u153 then
+								u153 = true
+							end
+
+							if dt > 0.08 and not u154 then
+								u154 = true
+							end
+
+							local v219 = dt * 60
+
+							n14 += v219
+
+							local num = tonumber((math.ceil(n14)))
+
+							if v39.CameraType ~= Enum.CameraType.Scriptable then
+								v39.CameraType = Enum.CameraType.Scriptable
+							end
+
+							v39.CFrame = clone2.Cam.CFrame * CFrameValue.Value + Vector3.new(0, 0, 0)
+
+							if FOV and not u96 then
+								local v221 = FOV:FindFirstChild((tostring(num)))
+
+								if v221 then
+									local v222 = v221
+
+									if not v221:IsA("NumberValue") then
+										v222 = v221.Values:FindFirstChildOfClass("NumberValue")
+									end
+
+									if t48.NoLerp or t48.NoLerpAfter and NumberValue3.Value == 0.5 then
+										v39.FieldOfView = tonumber(v222.Value)
+
+										return
+									end
+
+									local Eases = v221:FindFirstChild("Eases")
+
+									if Eases then
+										local Params = Eases:FindFirstChild("Params")
+										local v225 = Params and Params:FindFirstChild("Direction")
+										local v226 = Params and Params:FindFirstChild("Type")
+										local v227 = v225 and v225.Value or "In"
+										local v228 = v226 and v226.Value or "Linear"
+										local Value = game:GetService("TweenService"):GetValue(0.35, Enum.EasingStyle[v228], Enum.EasingDirection[v227])
+
+										TweenService2:Create(v39, TweenInfo.new(Value), {})
+										v39.FieldOfView = v39.FieldOfView + (tonumber(v222.Value) - v39.FieldOfView) * Value * NumberValue.Value
+
+										return
+									end
+
+									local v230 = v39
+									local FieldOfView = v39.FieldOfView
+
+									v230.FieldOfView = FieldOfView + (tonumber(v222.Value) * NumberValue.Value - FieldOfView) * 0.25
+
+									return
+								end
+							end
+
+							return
+						end
+					end
+
+					connection:Disconnect()
+					v98:Stop()
+					v99:Stop()
+					v100:Stop()
+					u96 = true
+
+					if v216 then
+						shared.smoothout(v39.CFrame)
+					end
+				end)
+			end)
+		end)()
+	end
+
+	task.spawn(function() -- line: 5268
+		-- upvalues: Transform (copy), diagTraceback (copy), v39 (copy)
+		local ok, _ = xpcall(Transform, diagTraceback)
+
+		if not ok then
+			pcall(function() -- line: 5271
+				-- upvalues: v39 (copy)
+				if v39 and v39.CameraType == Enum.CameraType.Scriptable then
+					shared.smoothout(v39.CFrame)
+				end
+			end)
+		end
+	end)
+	wait(10)
+
+	if not u44 then
+		u44 = true
+		v43._maid:doCleaning()
+	end
+end
+
+return t1
+
