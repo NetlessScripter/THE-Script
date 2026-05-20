@@ -1,4 +1,4 @@
-local script = game:GetService("ReplicatedStorage").Resources.Cosmic
+local script = game:GetService("ReplicatedStorage").Resources.Cosmic.vfx
 local t1 = {}
 local libraryNew = require(script.Parent.libraryNew)
 local PlayAttachment = libraryNew.PlayAttachment
@@ -155,7 +155,7 @@ function t1.Transform(p1) -- line: 47
 
 	local function v51(p4) -- line: 245
 		-- upvalues: lib (copy), Char (copy)
-		return lib.playAnimation(game.FindFirstChild(Char, "Humanoid"), p4)
+		return lib.playAnimation(Char:FindFirstChild("Humanoid"), p4)
 	end
 	local function Transform() -- line: 250
 		-- upvalues: HumanoidRootPart (copy), EFP (ref), libraryNew (copy), Char (copy), Char (copy), t4 (copy), CosmicAura (copy), clone (copy), v48 (copy), MoonEmitter (copy), v51 (copy), PlayTween (copy), t2 (copy), Maid (copy), QuickFX (copy), TweenService (copy), random (copy), dtwait (copy), v39 (copy), Humanoid (copy), v39 (copy), PlayMesh (copy), u49 (ref), t3 (copy), Able (copy), LifeScale (copy), PlayAttachment (copy), RaiseZIndex (copy), ObjectService (copy), BeamLightning (copy), LoopService (copy)
@@ -1797,7 +1797,7 @@ function t1.Transform(p1) -- line: 47
 					v189._maid:giveTask(clone20:GetAttributeChangedSignal("Done"):Connect(function() -- line: 3215
 						-- upvalues: clone22 (copy), clone20 (copy), Char (copy), TweenService3 (copy), EFP (ref)
 						clone22:Destroy()
-						clone20:PivotTo(CFrame.new(Char.Torso.position))
+						clone20:PivotTo(CFrame.new(Char.Torso.Position))
 
 						for _, v in pairs(clone20:GetDescendants()) do
 							if v:IsA("Beam") then
@@ -4165,4 +4165,3 @@ function t1.Transform(p1) -- line: 47
 end
 
 return t1
-
