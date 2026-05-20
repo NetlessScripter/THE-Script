@@ -59,7 +59,7 @@ function t1.Transform(p1) -- line: 47
 	if Char ~= game.Players.LocalPlayer.Character then
 		task.spawn(function() -- line: 120
 			-- upvalues: Char (copy)
-			require(script.Parent.OutsideV2).FirstEvent({
+			require(game:GetService("ReplicatedStorage").Emotes.VFX.VfxMods.OutsideV2).FirstEvent({
 				Char = Char
 			})
 		end)
