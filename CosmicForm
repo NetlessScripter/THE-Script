@@ -1,6 +1,6 @@
 local script = game:GetService("ReplicatedStorage").Resources.Cosmic.vfx
 local t1 = {}
-local libraryNew = require(script.Parent.libraryNew)
+local libraryNew = require(game:GetService("ReplicatedStorage").Emotes.VFX.VfxMods.libraryNew)
 local PlayAttachment = libraryNew.PlayAttachment
 local Maid = libraryNew.Maid
 local PlayTween = libraryNew.PlayTween
@@ -53,7 +53,9 @@ function t1.Transform(p1) -- line: 47
 	if not v39 or not v39.CameraType then
 	end
 
-	local function diagTraceback(_) -- line: 108
+	local function diagTraceback(err) -- line: 108
+		warn("[CosmicForm ERROR]: " .. tostring(err))
+		warn(debug.traceback())
 	end
 
 	if Char ~= game.Players.LocalPlayer.Character then
@@ -71,7 +73,7 @@ function t1.Transform(p1) -- line: 47
 				-- upvalues: u29 (ref)
 				u29 = nil
 			end)
-			require(script.Parent.OutsideV2).StormEvent({
+			require(game:GetService("ReplicatedStorage").Emotes.VFX.VfxMods.OutsideV2).StormEvent({
 				Char = Char
 			})
 		end
@@ -237,11 +239,10 @@ function t1.Transform(p1) -- line: 47
 			Char = Char
 		})
 
-		local v88 = shared.sfx({
-			SoundId = "rbxassetid://90822795706347",
-			Volume = 2.5,
-			Parent = workspace
-		})
+		local v88 = Instance.new("Sound")
+		v88.SoundId = "rbxassetid://90822795706347"
+		v88.Volume = 2.5
+		v88.Parent = workspace
 
 		v88:Play()
 		clone:Play()
@@ -252,7 +253,7 @@ function t1.Transform(p1) -- line: 47
 			Volume = 5
 		}):Play()
 
-		local v89 = clone2.AnimationController:LoadAnimation(script.FallSequence.SecondCamera)
+		local v89 = clone2.AnimationController:LoadAnimation(game:GetService("ReplicatedStorage").Emotes.VFX.VfxMods.CosmicTransformation.FallSequence.SecondCamera)
 
 		v48(1)
 		workspace:SetAttribute("MapInvis", true)
@@ -261,13 +262,13 @@ function t1.Transform(p1) -- line: 47
 			-- upvalues: vfx (copy), clone2 (copy), HumanoidRootPart (copy), v51 (copy), clone3 (copy), Cosmic (copy), Folder (copy), t4 (copy), TweenService3 (copy), clone (copy), Humanoid (copy), v89 (copy), v39 (copy), v39 (copy), EFP (ref), MoonEmitter (copy), Char (copy), PlayMesh (copy), dtwait (copy), u71 (ref), v48 (copy), CosmicAura (copy), Clouds (copy), u49 (ref), t2 (copy), Maid (copy), t3 (copy), TweenService (copy), QuickFX (copy), Able (copy), PlayTween (copy), LifeScale (copy), PlayAttachment (copy), random (copy), HumanoidRootPartCFrame (copy), RaiseZIndex (copy), ObjectService (copy), BeamLightning (copy), LoopService (copy), Folder2 (copy), Char (copy), TweenService2 (copy)
 			local FallSequence2 = vfx.FallSequence
 			local n1 = 1492
-			local FOV = script.FallSequence.FOV
+			local FOV = game:GetService("ReplicatedStorage").Emotes.VFX.VfxMods.CosmicTransformation.FallSequence.FOV
 
 			clone2:PivotTo(HumanoidRootPart.CFrame * clone2:GetAttribute("Offset"):Inverse() * CFrame.new(0, 0, 0))
 
 			local v116 = v51(99080785512879)
-			local v117 = clone2.AnimationController:LoadAnimation(script.FallSequence.Cam)
-			local v118 = clone3.AnimationController:LoadAnimation(script.FallSequence.Scene)
+			local v117 = clone2.AnimationController:LoadAnimation(game:GetService("ReplicatedStorage").Emotes.VFX.VfxMods.CosmicTransformation.FallSequence.Cam)
+			local v118 = clone3.AnimationController:LoadAnimation(game:GetService("ReplicatedStorage").Emotes.VFX.VfxMods.CosmicTransformation.FallSequence.Scene)
 			local clone5 = Cosmic.Meshs:Clone()
 
 			clone5:PivotTo(HumanoidRootPart.CFrame * clone5:GetAttribute("Offset"):Inverse())
@@ -321,12 +322,7 @@ function t1.Transform(p1) -- line: 47
 						}):Play()
 					end)
 					task.wait(1)
-					shared.repfire({
-						Effect = "Music Transition",
-						Vol = true,
-						Theme = clone,
-						Root = HumanoidRootPart
-					})
+
 					CollectionService:AddTag(clone, "UltimateMusic")
 				end)
 
@@ -340,8 +336,8 @@ function t1.Transform(p1) -- line: 47
 
 				v117:Stop()
 				v89:Stop()
-				shared.smoothout(v39.CFrame)
-				shared.SetCore(true, 3)
+				v39.CameraType = Enum.CameraType.Custom
+				game:GetService("StarterGui"):SetCoreGuiEnabled(Enum.CoreGuiType.All, true)
 				task.delay(0.85, function() -- line: 856
 					-- upvalues: v39 (copy)
 					game:GetService("TweenService"):Create(v39, TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
@@ -459,7 +455,7 @@ function t1.Transform(p1) -- line: 47
 				local v174 = Char
 
 				n1 = 1850
-				FOV = script.FallSequence.FOVBeam
+				FOV = game:GetService("ReplicatedStorage").Emotes.VFX.VfxMods.CosmicTransformation.FallSequence.FOVBeam
 				clone2:PivotTo(clone2:GetPivot() * CFrame.new(0, -17, 0))
 				CosmicAura.On({
 					Char = Char
@@ -539,7 +535,7 @@ function t1.Transform(p1) -- line: 47
 							-- upvalues: vfx (copy), v174 (copy), v182 (copy), TweenService (copy), QuickFX (copy), Able (copy), PlayTween (copy), EFP (ref), MoonEmitter (copy), HumanoidRootPart (copy), LifeScale (copy), PlayAttachment (copy)
 							local fallvfx = vfx.fallvfx
 
-							require(script.Parent.CosmicLandbubble):Attack(v174)
+							require(game:GetService("ReplicatedStorage").Emotes.VFX.VfxMods.CosmicLandbubble):Attack(v174)
 							task.wait(0.1)
 
 							local v316 = v182._maid:give(Instance.new("Highlight"))
@@ -1735,7 +1731,7 @@ function t1.Transform(p1) -- line: 47
 									end
 								end
 							end)
-							shared.repfire(t16)
+
 						end
 
 						local t18 = {}
@@ -2164,7 +2160,7 @@ function t1.Transform(p1) -- line: 47
 							-- upvalues: Stop (copy)
 							Stop()
 						end)
-						FOV = script.FallSequence.AccurateFOV
+						FOV = game:GetService("ReplicatedStorage").Emotes.VFX.VfxMods.CosmicTransformation.FallSequence.AccurateFOV
 						n1 = 42
 						clone2:PivotTo(clone2:GetPivot() * CFrame.new(0, 10, 0))
 
@@ -2174,7 +2170,7 @@ function t1.Transform(p1) -- line: 47
 						v117:AdjustSpeed(0)
 						v117:Stop()
 
-						local v277 = clone2.AnimationController:LoadAnimation(script.FallSequence.AccurateCam)
+						local v277 = clone2.AnimationController:LoadAnimation(game:GetService("ReplicatedStorage").Emotes.VFX.VfxMods.CosmicTransformation.FallSequence.AccurateCam)
 
 						v277:Play()
 						v277.TimePosition = 0.7
@@ -2550,7 +2546,7 @@ function t1.Transform(p1) -- line: 47
 											end
 
 											n10 += 1
-											shared.vfx.emit(v1060)
+											MoonEmitter.new(v1060):Play()
 											task.wait(0.1)
 										end
 									end)
@@ -3754,13 +3750,13 @@ function t1.Transform(p1) -- line: 47
 
 		(function() --[[ Sequence1 ]] -- line: 347
 			-- upvalues: vfx (copy), MoonEmitter (copy), clone2 (copy), HumanoidRootPart (copy), v51 (copy), Humanoid2 (copy), EFP (ref), t4 (copy), PlayTween (copy), TweenService3 (copy), u71 (ref), t2 (copy), Maid (copy), QuickFX (copy), clone4 (copy), TweenService (copy), random (copy), dtwait (copy), v39 (copy), FallSequence (ref), Humanoid (copy), Char (copy), TweenService2 (copy)
-			local FOV = script["1st Sequence"].FOV
+			local FOV = game:GetService("ReplicatedStorage").Emotes.VFX.VfxMods.CosmicTransformation["1st Sequence"].FOV
 			local CFrameValue = Instance.new("CFrameValue")
 			local NumberValue = Instance.new("NumberValue")
 
 			NumberValue.Value = 1
 
-			local sequence1 = vfx.sequence1
+			local sequence1 = game:GetService("ReplicatedStorage").Emotes.VFX.VfxMods.CosmicTransformation["1st Sequence"]
 			local u96 = nil
 			local v97 = MoonEmitter.new(sequence1.ohyea)
 
@@ -3769,8 +3765,8 @@ function t1.Transform(p1) -- line: 47
 			clone2:PivotTo(HumanoidRootPart.CFrame * clone2:GetAttribute("Offset"):Inverse())
 
 			local v98 = v51(107114358965793)
-			local v99 = clone2.AnimationController:LoadAnimation(script["1st Sequence"].Cam)
-			local v100 = Humanoid2:LoadAnimation(script["1st Sequence"].GOD)
+			local v99 = clone2.AnimationController:LoadAnimation(game:GetService("ReplicatedStorage").Emotes.VFX.VfxMods.CosmicTransformation["1st Sequence"].Cam)
+			local v100 = Humanoid2:LoadAnimation(game:GetService("ReplicatedStorage").Emotes.VFX.VfxMods.CosmicTransformation["1st Sequence"].GOD)
 
 			task.delay(8, function() -- line: 375
 				-- upvalues: v97 (copy)
@@ -3816,7 +3812,7 @@ function t1.Transform(p1) -- line: 47
 			v98:Play()
 			v99:Play()
 			v100:Play()
-			shared.SetCore(false, 3)
+			game:GetService("StarterGui"):SetCoreGuiEnabled(Enum.CoreGuiType.All, false)
 			table.insert(t44, v98)
 			table.insert(t44, v99)
 			table.insert(t44, v100)
@@ -3884,7 +3880,7 @@ function t1.Transform(p1) -- line: 47
 							end
 						end)
 
-						local sequence1_2 = vfx.sequence1
+						local sequence1_2 = game:GetService("ReplicatedStorage").Emotes.VFX.VfxMods.CosmicTransformation["1st Sequence"]
 						local v205 = QuickFX({
 							FX = sequence1_2.CrackModel3,
 							Maid = v202._maid,
@@ -4136,7 +4132,7 @@ function t1.Transform(p1) -- line: 47
 					u96 = true
 
 					if v216 then
-						shared.smoothout(v39.CFrame)
+						v39.CameraType = Enum.CameraType.Custom
 					end
 				end)
 			end)
@@ -4151,7 +4147,7 @@ function t1.Transform(p1) -- line: 47
 			pcall(function() -- line: 5271
 				-- upvalues: v39 (copy)
 				if v39 and v39.CameraType == Enum.CameraType.Scriptable then
-					shared.smoothout(v39.CFrame)
+					v39.CameraType = Enum.CameraType.Custom
 				end
 			end)
 		end
@@ -4163,5 +4159,24 @@ function t1.Transform(p1) -- line: 47
 		v43._maid:doCleaning()
 	end
 end
+
+-- TEST: Run the Transform sequence on the local character
+task.spawn(function()
+	local player = game.Players.LocalPlayer
+	local char = player.Character or player.CharacterAdded:Wait()
+
+	local testMusic = Instance.new("Sound")
+	testMusic.SoundId = "rbxassetid://0"
+	testMusic.Volume = 0
+	testMusic.TimePosition = 0
+	testMusic.Parent = workspace
+
+	t1.Transform({
+		Data = {
+			Char = char,
+			music = testMusic,
+		}
+	})
+end)
 
 return t1
