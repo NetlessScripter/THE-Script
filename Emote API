@@ -27059,11 +27059,38 @@ return t1:Play(Char, nil, true, nil, true)
 	-- still runs inside a plain pcall (props/welds work, VFX may not).
 	local VFX = require(game:GetService("ReplicatedStorage").Emotes.VFX)
 
+	-- ── VFX fallback helper ──────────────────────────────────────────────
+	-- Calls VFX:MainFunction directly using EmoteName as the vfxName.
+	-- Used when the normal FireAllClients hook path was never reached
+	-- (Startup crashed before its FireAllClients, or VFX is fired from the
+	-- server execution path outside of any Startup altogether).
+	local function callVfxFallback()
+		pcall(function()
+			if VFX[EmoteName] then
+				VFX:MainFunction({
+					Character      = Char,
+					vfxName        = EmoteName,
+					SpecificModule = game:GetService("ReplicatedStorage").Emotes.VFX,
+					AnimSent       = data.Animation,
+					RealBind       = bind,
+					EmoteBind      = bind,
+					Char           = Char,
+					RealAnim       = v144,
+					Bind           = bind,
+					CleanupTable   = t65,
+					StartFrom      = 0,
+					Victim         = Hit,
+				})
+			end
+		end)
+	end
+
 	if data.Startup then
 
 		local hooked   = false
 		local origCall = nil
 		local mt       = nil
+		local vfxCalled = false  -- set true when the hook successfully dispatches VFX:MainFunction
 
 		pcall(function()
 			mt = getrawmetatable(game)
@@ -27104,6 +27131,7 @@ return t1:Play(Char, nil, true, nil, true)
 									-- Kill emote
 									Victim         = Hit,
 								})
+								vfxCalled = true  -- mark: hook handled it, no fallback needed
 							end)
 						end
 					end
@@ -27127,6 +27155,27 @@ return t1:Play(Char, nil, true, nil, true)
 				setreadonly(mt, true)
 			end)
 		end
+
+		-- ── VFX fallback after Startup ────────────────────────────────────
+		-- If Startup errored before reaching its FireAllClients call (e.g.
+		-- Beast Form's AnimationController:LoadAnimation, script.tails:Clone,
+		-- etc. failing in the executor context), the hook above was in place
+		-- but never intercepted anything — vfxCalled stays false.
+		-- In that case drive VFX:MainFunction directly: p24 (the upvalue all
+		-- Startups capture as their vfxName) equals EmoteName, so this
+		-- produces the exact same dispatch the server would have sent.
+		if not vfxCalled then
+			callVfxFallback()
+		end
+	else
+		-- ── No Startup: direct VFX check ─────────────────────────────────
+		-- Some emotes have no Startup but still have a VFX entry because
+		-- the server fires ReplicateEmoteVfx from its own main execution path
+		-- (not inside any Startup callback) — e.g. kill emotes at the point
+		-- where VFX[p24] is checked before v179.Startup is called.
+		-- The executor never replicates that server-side code path, so we
+		-- call MainFunction directly here to cover it.
+		callVfxFallback()
 	end
 
 	-- ── Keyframes ─────────────────────────────────────────────────────
