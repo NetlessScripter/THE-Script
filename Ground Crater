@@ -1,752 +1,319 @@
 --[[
-    GroundCrater_Standalone.lua
-    Extracted from Stoic_Bomb__Port_.txt (TSB deobfuscated source)
+    GroundCrater_Standalone.lua  v2.0
+    Clean rewrite — no TSB workspace dependencies, no crashes.
 
-    Exposes a public API via getgenv().GroundCrater so any script can use it.
+    ── SETUP (run once) ──────────────────────────────────────────────────────
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/Ground%20Crater"))()
 
-    ── SETUP (run once, e.g. in your loader) ────────────────────────────────
-    loadstring(game:HttpGet("...your raw URL here..."))()
+    ── QUICK USE ─────────────────────────────────────────────────────────────
+    getgenv().GroundCrater.fireAtMe()              -- crater under your feet
+    getgenv().GroundCrater.fireAtMe({ size = 8 })  -- huge crater
 
-    ── USAGE (from any script, after setup) ─────────────────────────────────
+    ── FULL API ──────────────────────────────────────────────────────────────
+    getgenv().GroundCrater.fire(params)
+    getgenv().GroundCrater.fireAtMe(params)   (params optional)
+    getgenv().GroundCrater.ray(orig, dir)     → hit, hitPos, hitNormal
 
-    -- 1. Simple: raycast down and fire the crater
-    local GC = getgenv().GroundCrater
-    local hit, hitPos, _, hitNormal = GC.ray({
-        orig = Vector3.new(0, 10, 0),
-        dir  = Vector3.new(0, -50, 0),
-    })
-    if hit then
-        GC.fire({
-            cframe   = CFrame.new(hitPos),
-            ground   = hit,
-            normal   = hitNormal,
-            sizemult = 1,
-            amount   = 16,
-            add      = { sounds = true },
-        })
-    end
-
-    -- 2. Fire directly (if you already have ground / normal)
-    getgenv().GroundCrater.fire({
-        cframe   = myCFrame,
-        ground   = myGroundPart,
-        normal   = myNormal,
-        sizemult = 2,
-        amount   = 24,
-        add      = { sounds = true, less = false },
-    })
-
-    ── API REFERENCE ─────────────────────────────────────────────────────────
-    getgenv().GroundCrater.fire(params)   — spawn the crater VFX
-    getgenv().GroundCrater.ray(opts)      — raycast helper (returns inst, pos, mat, normal)
-    getgenv().GroundCrater.version        — "1.0.0"
-
-    params table (all fields optional except cframe, ground, normal):
-      .cframe       CFrame      impact origin
-      .ground       BasePart    surface that was hit
-      .normal       Vector3     surface normal
-      .sizemult     number      overall scale multiplier  (default 1)
-      .amount       number      ring slab count           (default 16)
-      .Seed         number      RNG seed for determinism
-      .add          table       flags: .sounds, .less, .keep
-      .nodebris     bool        skip flying debris chunks
-      .notiles      bool        skip stadium tile break
-      .nosound      bool        skip crater impact SFX
-      .dispersefast number      auto-hide slabs after N seconds
-      .customtween  TweenInfo
-      .new          {minR,maxR} custom ring radius range
-      .Double       number      spawn a second offset ring
-      .angle / .anglecfr        optional angle-gate for slab visibility
-      .dontcollide  Player      set CollisionGroup to nocol for LocalPlayer
+    params table:
+      .cframe    CFrame   impact origin           (required for .fire)
+      .ground    BasePart surface hit             (required for .fire)
+      .normal    Vector3  surface normal          (default Vector3.yAxis)
+      .size      number   scale multiplier        (default 1)
+      .amount    number   slab count              (default 16)
+      .rings     number   concentric ring count   (default 1)
+      .debris    bool     flying chunks           (default true)
+      .sounds    bool     impact sounds           (default true)
+      .keep      number   seconds before sinking  (default 6)
 ]]
 
--- ============================================================
--- SERVICES & GLOBALS
--- ============================================================
-local CollectionService = game:GetService("CollectionService")  -- v9
-local TweenService      = game:GetService("TweenService")       -- v10
-local Debris            = game:GetService("Debris")
+if getgenv().GroundCrater then return getgenv().GroundCrater end
 
-local LocalPlayer = game.Players.LocalPlayer                    -- l_LocalPlayer_0
-local RNG         = Random.new()                                -- v95
-local partPool    = {}                                          -- v107
-local sweepTimer  = tick()                                      -- v294
+-- ── Services ──────────────────────────────────────────────────────────────
+local TweenService = game:GetService("TweenService")
+local Debris       = game:GetService("Debris")
+local Players      = game:GetService("Players")
 
--- Raycast exclusion list (v472)
-local rayExclude = { workspace.Live, workspace.Thrown }
-for _, v in pairs(CollectionService:GetTagged("InvisibleWalls")) do
-    table.insert(rayExclude, v)
-end
-CollectionService:GetInstanceAddedSignal("InvisibleWalls"):Connect(function(v)
-    table.insert(rayExclude, v)
-end)
-for _, v in pairs(CollectionService:GetTagged("InfinityBall")) do
-    table.insert(rayExclude, v)
-end
-CollectionService:GetInstanceAddedSignal("InfinityBall"):Connect(function(v)
-    table.insert(rayExclude, v)
-end)
+local RNG      = Random.new()
+local partPool = {}
 
--- shared stubs
-shared.recentdebris = shared.recentdebris or {}
-shared.OnScreen = shared.OnScreen or function(pos)
-    local _, onScreen = workspace:FindFirstChildOfClass("Camera"):WorldToScreenPoint(pos)
-    return onScreen
-end
-
--- ============================================================
--- v102: random number helper
--- ============================================================
-local function randomNum(lo, hi, isInt, rng)
-    local r = rng or RNG
-    if not hi and lo then hi = lo; lo = 1 end
-    if not hi and not lo then lo = 0; hi = 1 end
-    if isInt then
-        return r:NextInteger(lo, hi)
-    else
-        return r:NextNumber(lo, hi)
+-- ── Safe part container ───────────────────────────────────────────────────
+-- Use a folder under workspace so we never touch game-specific folders.
+local function getContainer()
+    local c = workspace:FindFirstChild("__GCDebris")
+    if not c then
+        c = Instance.new("Folder")
+        c.Name   = "__GCDebris"
+        c.Parent = workspace
     end
+    return c
 end
 
--- ============================================================
--- v313: sound factory stub
--- (replace with your real v313 if you want crater impact sounds)
--- ============================================================
-local function soundFactory(props)
-    local s = Instance.new("Sound")
-    if props then
-        for k, v in pairs(props) do
-            if k ~= "CFrame" and k ~= "Parent" then
-                pcall(function() s[k] = v end)
-            end
-        end
-        if props.CFrame then
-            local a = Instance.new("Attachment")
-            a.CFrame = props.CFrame
-            a.Parent = workspace.Terrain
-            s.Parent = a
-            Debris:AddItem(a, 5)
-        elseif props.Parent then
-            s.Parent = props.Parent
-        else
-            s.Parent = workspace
+-- ── Part pool ─────────────────────────────────────────────────────────────
+local function acquirePart()
+    -- pull from pool first
+    while #partPool > 0 do
+        local p = table.remove(partPool, 1)
+        if p and p.Parent then
+            p.Anchored    = true
+            p.CanCollide  = false
+            p.CanTouch    = false
+            p.CanQuery    = false
+            p.Transparency = 1
+            p.Size        = Vector3.one
+            p.CFrame      = CFrame.new(0, -1e4, 0)
+            return p
         end
     end
-    return s
+    local p = Instance.new("Part")
+    p.TopSurface    = Enum.SurfaceType.Smooth
+    p.BottomSurface = Enum.SurfaceType.Smooth
+    p.Anchored      = true
+    p.CanCollide    = false
+    p.CanTouch      = false
+    p.CanQuery      = false
+    p.Transparency  = 1
+    p.CFrame        = CFrame.new(0, -1e4, 0)
+    p.Parent        = getContainer()
+    return p
 end
 
--- ============================================================
--- v327: CFrame rotation helper (from-to with fallback axis)
--- ============================================================
-local function cfFromTo(a, b, fallback)
+local function releasePart(p)
+    if not p or not p.Parent then return end
+    p.Anchored    = true
+    p.CanCollide  = false
+    p.CanTouch    = false
+    p.CanQuery    = false
+    p.CFrame      = CFrame.new(0, -1e4, 0)
+    table.insert(partPool, p)
+end
+
+-- ── Raycast helper ────────────────────────────────────────────────────────
+local function raycast(orig, dir, ignore)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = ignore or {}
+    local r = workspace:Raycast(orig, dir, params)
+    if r then return r.Instance, r.Position, r.Normal end
+end
+
+-- ── CFrame from-to rotation ───────────────────────────────────────────────
+local function cfFromTo(a, b)
     local dot   = a:Dot(b)
     local cross = a:Cross(b)
     if dot < -0.99999 then
-        return CFrame.fromAxisAngle(fallback, math.pi)
-    else
-        return CFrame.new(0, 0, 0, cross.x, cross.y, cross.z, 1 + dot)
+        return CFrame.fromAxisAngle(Vector3.new(1,0,0), math.pi)
+    end
+    return CFrame.new(0,0,0, cross.X, cross.Y, cross.Z, 1 + dot)
+end
+
+-- ── Impact sounds ─────────────────────────────────────────────────────────
+local SOUNDS = {
+    crack  = { "rbxassetid://3848076724", "rbxassetid://3848078820" },
+    rumble = {
+        "rbxassetid://4307208601","rbxassetid://4307207425",
+        "rbxassetid://4307207693","rbxassetid://4307205188",
+        "rbxassetid://3778609188","rbxassetid://3778608737",
+    },
+    impact = { "rbxassetid://4307204696", "rbxassetid://4307204452" },
+}
+
+local function playImpactSounds(parent)
+    for _, list in pairs(SOUNDS) do
+        local s = Instance.new("Sound")
+        s.SoundId = list[RNG:NextInteger(1, #list)]
+        s.Volume  = 1.5
+        s.Parent  = parent
+        s:Play()
+        Debris:AddItem(s, 5)
     end
 end
 
--- ============================================================
--- v338: get touching parts (fires a dummy Touched to wake physics)
--- ============================================================
-local function getTouching(part)
-    if not part then return end
-    if part.ClassName == "Model" then return end
-    local conn = part.Touched:Connect(function() end)
-    local touching = part:GetTouchingParts()
-    conn:Disconnect()
-    local result = {}
-    for _, p in pairs(touching) do
-        if p.Name ~= "InvisibleBorder" and p.Name ~= "InfBall" then
-            table.insert(result, p)
-        end
-    end
-    return result
+-- ── Fling a loose debris chunk ────────────────────────────────────────────
+local function spawnDebrisChunk(cf, mat, color, size)
+    local p = acquirePart()
+    p.Material    = mat
+    p.Color       = color
+    p.Size        = Vector3.new(size, size, size)
+    p.CFrame      = cf * CFrame.Angles(
+        math.rad(RNG:NextNumber(-180,180)),
+        math.rad(RNG:NextNumber(-180,180)),
+        math.rad(RNG:NextNumber(-180,180))
+    )
+    p.Transparency = 0
+    p.Anchored     = false
+    p.CanCollide   = true
+    p.Parent       = getContainer()
+
+    local bv = Instance.new("BodyVelocity")
+    bv.MaxForce = Vector3.new(2e9, 2e9, 2e9)
+    bv.Velocity = Vector3.new(
+        RNG:NextNumber(-22, 22),
+        RNG:NextNumber(12, 28),
+        RNG:NextNumber(-22, 22)
+    )
+    bv.Parent = p
+    Debris:AddItem(bv, 0.15)
+
+    task.delay(3 + RNG:NextNumber(0, 1), function()
+        pcall(function()
+            TweenService:Create(p, TweenInfo.new(0.4), { Transparency = 1 }):Play()
+            task.wait(0.4)
+            releasePart(p)
+        end)
+    end)
 end
 
--- ============================================================
--- v362: fling-then-fade a debris part
--- ============================================================
-local function flingAndFade(part)
-    TweenService:Create(part, TweenInfo.new(
-        RNG:NextNumber(0.7, 1), Enum.EasingStyle.Quad, Enum.EasingDirection.Out
-    ), { Size = Vector3.new() }):Play()
+-- ── Main crater function ──────────────────────────────────────────────────
+local function groundCrater(params)
+    params = params or {}
+    local cf       = params.cframe  or CFrame.new(0, 0, 0)
+    local ground   = params.ground
+    local normal   = params.normal  or Vector3.yAxis
+    local sizeMult = params.size    or params.sizemult or 1
+    local numSlabs = math.floor(params.amount or 16)
+    local numRings = params.rings   or 1
+    local doDebris = params.debris  ~= false
+    local doSounds = params.sounds  ~= false
+    local keepTime = params.keep    or 6
 
-    part.Anchored   = false
-    part.CanCollide = false
-    part.CanTouch   = false
-
-    local bv = part:FindFirstChildOfClass("BodyVelocity")
-    if bv then Debris:AddItem(bv, 0) end
-
-    local newBV = Instance.new("BodyVelocity")
-    newBV.MaxForce = Vector3.new(400000, 400000, 400000)
-    newBV.Velocity = Vector3.new(
-        RNG:NextNumber(-10, 10),
-        RNG:NextNumber(10, 17.5) * 2,
-        randomNum(-10, 10)
-    ) * 1.5
-    newBV.Parent = part
-    Debris:AddItem(newBV, 0.15)
-end
-
--- ============================================================
--- v301: part recycler
--- ============================================================
-local function recyclePart()
-    if tick() - sweepTimer > 300 then
-        sweepTimer = tick()
-        for _, p in pairs(workspace.Thrown:GetChildren()) do
-            if p:IsA("Part")
-                and p:GetAttribute("Spawn")
-                and not table.find(partPool, p)
-                and not p:GetAttribute("DeletionImmunity")
-                and tick() - p:GetAttribute("Spawn") > 60
-            then
-                p:Destroy()
-            end
-        end
-        return
+    -- Derive material/color from ground if available, else defaults
+    local mat   = Enum.Material.SmoothPlastic
+    local color = Color3.fromRGB(105, 102, 92)
+    if ground and ground:IsA("BasePart") then
+        pcall(function()
+            mat   = ground.Material
+            color = ground.Color
+        end)
     end
 
-    -- trim pool over 100
-    if #partPool > 100 then
-        for _ = 101, #partPool do
-            local old = rawget(partPool, 101)
-            table.remove(partPool, 101)
-            if old then old:Destroy() end
-        end
-    end
+    -- Neon looks terrible as debris; fall back to Concrete
+    if mat == Enum.Material.Neon then mat = Enum.Material.Concrete end
 
-    local p = rawget(partPool, 1)
-    if p and not p.Parent then
-        table.remove(partPool, 1)
-        p = nil
-    end
-    if p and p.Parent then
-        table.remove(partPool, 1)
-        if p.Name == "starterdeb" then p.Name = "aa" end
-        p.CollisionGroup = "Default"
-        p:SetAttribute("Spawn", tick())
-        return p
-    end
-end
+    -- Base ring CFrame aligned to surface normal
+    local up      = cf.UpVector
+    local rotToCf = cfFromTo(up, normal)
+    local ringCF  = CFrame.new(cf.Position) * rotToCf
+                  * CFrame.Angles(0, math.rad(RNG:NextNumber(0, 360)), 0)
 
--- ============================================================
--- v717: raycast helper  (also wired to shared.ray)
--- ============================================================
-local function rayHelper(opts)
-    local params = RaycastParams.new()
-    params.FilterDescendantsInstances = opts.Whitelist or opts.Ignore or rayExclude
-    params.FilterType = opts.Whitelist
-        and Enum.RaycastFilterType.Include
-        or  Enum.RaycastFilterType.Exclude
-
-    if opts.Blockcast then
-        local r = workspace:Blockcast(opts.orig, opts.Blockcast, opts.dir, params)
-        if r then return r.Instance, r.Position, r.Material, r.Normal end
-    else
-        local r = workspace:Raycast(opts.orig, opts.dir, params)
-        if r then return r.Instance, r.Position, r.Material, r.Normal end
-    end
-end
-shared.ray = rayHelper
-
--- ============================================================
--- shared.resizeparticle
--- ============================================================
-shared.resizeparticle = function(emitter, mult, prop)
-    local key = prop or "Size"
-    if key == "Speed" then
-        emitter.Speed = NumberRange.new(emitter.Speed.Min * mult, emitter.Speed.Max * mult)
-        return
-    end
-    local kps = {}
-    for _, kp in pairs(emitter[key].Keypoints) do
-        table.insert(kps, NumberSequenceKeypoint.new(kp.Time, kp.Value * mult, kp.Envelope))
-    end
-    emitter[key] = NumberSequence.new(kps)
-end
-
--- ============================================================
--- v471: GROUND CRATER  (main function — exported as groundCrater)
--- ============================================================
---[[
-    Parameters table (v363):
-      .cframe       CFrame   — impact origin
-      .ground       BasePart — surface that was hit
-      .normal       Vector3  — surface normal
-      .Seed         number   — optional RNG seed for determinism
-      .sizemult     number   — overall scale multiplier (default 1)
-      .amount       number   — number of ring slab pieces (default 16)
-      .add          table    — flags: .less, .keep, .sounds
-      .nodebris     bool     — skip flying debris chunks
-      .notiles      bool     — skip stadium tile break
-      .nosound      bool     — skip crater impact SFX
-      .dispersefast number   — auto-hide slabs after N seconds
-      .customtween  TweenInfo
-      .new          {minR, maxR} — custom ring radius range
-      .Double       number   — spawn a second offset ring
-      .angle / .anglecfr     — optional angle-gate for slab visibility
-      .dontcollide  Player   — if LocalPlayer, set CollisionGroup nocol
-]]
-local function groundCrater(v363)
-    if not v363.add then v363.add = {} end
-
-    local sizeMult = v363.sizemult or 1
-    local addFlags = v363.add
-
-    -- off-screen fast-disperse early-out
-    if v363.dispersefast and not shared.OnScreen(v363.cframe.Position) then
-        return
-    end
-
-    local rng = Random.new(v363.Seed or tick())
-    local function rnd(lo, hi) return randomNum(lo, hi, nil, rng) end
-
-    if v363.amount then
-        v363.amount = math.floor(v363.amount)
-    end
-
-    local lessDiv = addFlags.less and 2.5 or 1
-    local stadiumBreakResult = nil
-
-    -- stadium tile break
-    if v363.ground.Name == "Stadium"
-        and not v363.ground:GetAttribute("FakeStadium")
-        and not v363.notiles
-    then
-        -- stub: wire to your v12 / effect dispatcher if needed
-        -- stadiumBreakResult = effectDispatcher({ Effect = "Break Model", Stadium = v363.ground })
-    end
-
-    -- ---- Flying loose debris chunks ----
-    local numLarge = rng:NextNumber(3, 5)
-    if LocalPlayer:GetAttribute("S_FastMode") then numLarge = numLarge / 2 end
-    if v363.nodebris then numLarge = 0 end
-
-    -- water / terrain → use sand stand-in
-    local isTerrain = false
-    local isWaterOrTerrain = false
-    if v363.ground.Material == Enum.Material.Water or v363.ground == workspace.Terrain then
-        local sandProxy = {
-            Material       = Enum.Material.Sand,
-            Color          = Color3.fromRGB(227, 206, 157),
-            Transparency   = 0,
-            Anchored       = false,
-            GetAttribute   = function(_) end,
-        }
-        v363.ground    = sandProxy
-        isTerrain      = true
-        isWaterOrTerrain = true
-    end
-
-    -- large tumbling chunks
-    for _ = 1, numLarge do
-        if not addFlags.less and not isWaterOrTerrain then
-            local sz  = rng:NextNumber(1, 3)
-            local p   = recyclePart() or Instance.new("Part")
-            p.CollisionGroup = "nocol"
-            p.CFrame  = v363.cframe * CFrame.Angles(
-                math.rad(rnd(-360, 360)),
-                math.rad(rnd(-360, 360)),
-                math.rad(rnd(-360, 360))
-            )
-            p.Size        = Vector3.new(sz, sz, sz)
-            p.Color       = v363.ground.Color
-            p.CanCollide  = true
-            p.Anchored    = false
-            p.Material    = v363.ground.Material
-            p.Transparency= v363.ground.Transparency
-            p.Parent      = workspace.Thrown
-            if p.Material == Enum.Material.Neon then
-                p.Material = Enum.Material.Concrete
-            end
-
-            local bv = Instance.new("BodyVelocity")
-            bv.MaxForce = Vector3.new(2e9, 2e9, 2e9)
-            bv.Velocity = Vector3.new(rnd(-25, 25), rnd(5, 25), rnd(-25, 25)) * 2
-            bv.Parent   = p
-            Debris:AddItem(bv, 0.15)
-
-            local fadeDelay = isWaterOrTerrain and 0 or (3 + rng:NextNumber(0, 1))
-            delay(fadeDelay, function()
-                TweenService:Create(p, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-                    Transparency = 1,
-                    Size = isWaterOrTerrain and Vector3.new() or p.Size / 1.5
-                }):Play()
-                delay(0.3, function()
-                    p.Anchored    = true
-                    p.AssemblyLinearVelocity  = Vector3.new()
-                    p.AssemblyAngularVelocity = Vector3.new()
-                    p.Velocity    = Vector3.new()
-                    p.CanCollide  = false
-                    p.CFrame      = CFrame.new(1e8, 1e8, 1e8)
-                    table.insert(partPool, p)
-                end)
-            end)
-        else
-            break
+    -- Flying debris
+    if doDebris then
+        for _ = 1, RNG:NextInteger(4, 8) do
+            pcall(spawnDebrisChunk, cf, mat, color, RNG:NextNumber(0.5, 2.5) * sizeMult)
         end
     end
 
-    -- small debris pebbles
-    local numSmall = rng:NextNumber(4, 7) / lessDiv
-    if LocalPlayer:GetAttribute("S_FastMode") then numSmall = numSmall / 2 end
-    if v363.nodebris then numSmall = 0 end
+    -- Rings of upthrust slabs
+    local firstSlab = true
+    for ring = 1, numRings do
+        local baseRadius = (5 + (ring - 1) * 4) * sizeMult
+        local ringAngleOffset = ring > 1 and math.rad(RNG:NextNumber(-20, 20)) or 0
+        local thisCF = ringCF * CFrame.Angles(0, ringAngleOffset, 0)
 
-    for _ = 1, numSmall do
-        if not isWaterOrTerrain then
-            local sz = rng:NextNumber(0.6, 0.8)
-            local p  = recyclePart() or Instance.new("Part")
-            p.CFrame      = v363.cframe
-            local rot     = cfFromTo(p.CFrame.UpVector, v363.normal, Vector3.new(0,1,0))
-            p.CFrame      = p.CFrame * (rot * CFrame.Angles(math.pi / 2, 0, 0))
-            p.CollisionGroup = "nocol"
-            p.Size        = Vector3.new(sz, sz, sz)
-            p.Color       = v363.ground.Color
-            p.CanCollide  = true
-            p.Name        = "SmallDebris"
-            p.Anchored    = false
-            p.Material    = v363.ground.Material
-            p.Transparency= v363.ground.Transparency
-            p.Parent      = workspace.Thrown
-            if p.Material == Enum.Material.Neon then
-                p.Material = Enum.Material.Concrete
-            end
+        for i = 1, numSlabs do
+            pcall(function()
+                local angle = (2 * math.pi / numSlabs) * i
+                local sin, cos = math.sin(angle), math.cos(angle)
+                local radius = baseRadius + RNG:NextNumber(-0.5, 0.5) * sizeMult
 
-            local bv = Instance.new("BodyVelocity")
-            bv.MaxForce = Vector3.new(2e9, 2e9, 2e9)
-            bv.Velocity = Vector3.new(rnd(-25, 25), rnd(5, 25), rnd(-25, 25)) * 2
-            bv.Parent   = p
-            Debris:AddItem(bv, 0.15)
+                -- Spawn position
+                local spawnCF = thisCF * CFrame.new(radius * sin, 0, radius * cos)
+                              * CFrame.fromEulerAnglesXYZ(0, angle, 0)
 
-            local bav = Instance.new("BodyAngularVelocity")
-            bav.Parent = p
-            Debris:AddItem(bav, 0.5)
+                local slab = acquirePart()
+                slab.Material    = mat
+                slab.Color       = color
+                slab.Transparency = 1
 
-            local fd = isWaterOrTerrain and 0 or (3 + rng:NextNumber(0, 1))
-            delay(fd, function()
-                TweenService:Create(p, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-                    Transparency = 1,
-                    Size = isWaterOrTerrain and Vector3.new() or p.Size / 1.5
-                }):Play()
-                delay(0.3, function()
-                    bav:Destroy()
-                    p.Anchored    = true
-                    p.AssemblyLinearVelocity  = Vector3.new()
-                    p.AssemblyAngularVelocity = Vector3.new()
-                    p.Velocity    = Vector3.new()
-                    p.CanCollide  = false
-                    p.CFrame      = CFrame.new(1e8, 1e8, 1e8)
-                    table.insert(partPool, p)
-                end)
-            end)
-        else
-            break
-        end
-    end
+                -- Random slab dimensions
+                local w = RNG:NextNumber(1.5, 4)   * sizeMult
+                local h = RNG:NextNumber(1.5, 2.5) * sizeMult
+                local d = RNG:NextNumber(1.5, 5)   * sizeMult
+                slab.Size = Vector3.new(w, h, d)
 
-    -- ---- Ring of upthrust slabs ----
-    local ringSlabs = {}
-    local rMin = 5
-    local rMax = 7
-    if v363.new then rMin = v363.new[1]; rMax = v363.new[2] end
-    local avgR = (rMin + rMax) / 2
+                -- Start slightly underground
+                local startCF = spawnCF * CFrame.new(0, -(h/2 + d/3)/3, 0)
+                              * CFrame.Angles(math.rad(-RNG:NextNumber(5, 40)), 0, 0)
+                slab.CFrame  = startCF
+                slab.Anchored = true
+                slab.Parent  = getContainer()
 
-    local numSlabs = v363.amount or 16
-    if LocalPlayer:GetAttribute("S_FastMode") then numSlabs = numSlabs / 2 end
+                -- Tween upward into place
+                local targetCF = spawnCF * CFrame.Angles(math.rad(-RNG:NextNumber(5, 35)), 0, 0)
+                TweenService:Create(slab,
+                    TweenInfo.new(RNG:NextNumber(0.18, 0.30), Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+                    { CFrame = targetCF, Transparency = 0 }
+                ):Play()
 
-    -- base ring CFrame aligned to surface normal
-    local ringCF = CFrame.new(v363.cframe.p)
-    ringCF = ringCF * cfFromTo(ringCF.UpVector, v363.normal, Vector3.new(0,1,0))
-    ringCF = ringCF * CFrame.Angles(0, math.rad(rnd(-360, 360)), 0)
-
-    local ringCF2 = ringCF * CFrame.Angles(0, math.rad(rnd(-16, 16)), 0)
-    local isFirstSlab = true
-
-    if rMin ~= 5 and rMax ~= 7 then
-        v363.Double = 2
-    end
-
-    -- sound asset lists (used when addFlags.sounds is true)
-    local SND_CRACK  = { "rbxassetid://3848076724", "rbxassetid://3848078820" }
-    local SND_RUMBLE = {
-        "rbxassetid://4307208601","rbxassetid://4307207425","rbxassetid://4307207693",
-        "rbxassetid://4307205188","rbxassetid://3778609188","rbxassetid://3778608737",
-        "rbxassetid://3744401196","rbxassetid://4307204962"
-    }
-    local SND_IMPACT = { "rbxassetid://4307204696", "rbxassetid://4307204452" }
-
-    for slabIdx = 1, numSlabs do
-        for ring = 1, v363.Double or 1 do
-            local baseCF = (ring == 1) and ringCF or ringCF2
-            if ring > 1 then avgR = avgR + 1 end
-
-            local angle = (360 / numSlabs + 360 / numSlabs * slabIdx) / 57.29577951308232
-            local sinA, cosA = math.sin(angle), math.cos(angle)
-            local spawnCF = baseCF * CFrame.new(avgR * sinA, 0, avgR * cosA)
-
-            -- small random jitter
-            local jitter = rnd(-0.2, 0.2)
-            spawnCF = spawnCF + spawnCF.lookVector * jitter
-
-            local slab = recyclePart() or Instance.new("Part")
-            if v363.dontcollide == LocalPlayer then
-                slab.CollisionGroup = "nocol"
-            end
-            slab.Anchored   = true
-            slab.CanCollide = false
-            slab.CanTouch   = true
-            slab.Material   = v363.ground.Material
-            slab.Color      = v363.ground.Color
-
-            -- orient slab facing ring
-            slab.CFrame = spawnCF * CFrame.fromEulerAnglesXYZ(0, angle, 0)
-            local origCF = slab.CFrame
-
-            -- random tilt
-            slab.CFrame = origCF * CFrame.Angles(math.rad(-rnd(6, 42)), 0, 0)
-
-            -- size
-            local slabW = rnd(2, 5) * (ring > 1 and 1.8 or v363.Double and 1.35 or 1)
-            local slabH = rnd(1.9, 2.4)
-            local slabD = rnd(2, 6)
-            slab.Size = Vector3.new(slabW, slabH, slabD) * sizeMult
-
-            -- drop slightly underground before tweening up
-            slab.CFrame = slab.CFrame * CFrame.new(0, -(slab.Size.Y/3 + slab.Size.Z/3)/3, 0)
-            slab.Transparency = 1
-            slab.Parent = workspace.Thrown
-
-            -- store original for later ref
-            local preTiltCF = origCF
-
-            -- check for overlapping parts to match color
-            local touching    = getTouching(slab) or {}
-            local matchPart   = nil
-            local onGround    = nil
-            local isStadium   = nil
-            for _, tp in pairs(touching) do
-                if not tp:IsDescendantOf(workspace.Live)
-                    and tp.Name ~= "invis"
-                    and tp.Parent ~= workspace.Thrown
-                then
-                    if tp.Material ~= v363.ground.Material then matchPart = tp end
-                    table.insert(touching, tp)
-                end
-                if tp == v363.ground then onGround = v363.ground end
-                if tp.Name == "Stadium" then isStadium = true end
-            end
-
-            -- apply small random position noise
-            local noiseCF = CFrame.new(0, -3, -1.5) * CFrame.Angles(
-                math.rad(rnd(-11, 11)),
-                math.rad(rnd(-11, 11)),
-                math.rad(rnd(-11, 11))
-            )
-            slab.CFrame = slab.CFrame * noiseCF
-            slab.Transparency = 0
-            table.insert(ringSlabs, slab)
-
-            -- visibility / color logic
-            local blocked = true
-            if #touching ~= 0 then
-                blocked = v363.ground:GetAttribute("Breakable") or not v363.ground.Anchored
-            end
-
-            local angleGated = false
-            if v363.angle then
-                local slabPos = preTiltCF.Position
-                local angleBaseCF = v363.anglecfr
-                local toSlab = (Vector3.new(slabPos.X, angleBaseCF.p.Y, slabPos.Z) - angleBaseCF.p).Unit
-                angleGated = math.deg(math.acos(angleBaseCF.LookVector:Dot(toSlab))) <= v363.angle
-            end
-
-            if blocked or angleGated then
-                if not isTerrain then
-                    slab.Transparency = 1
-                end
-            else
-                -- try to match surface colour
-                if matchPart
-                    and (not onGround or onGround.Name ~= "Stadium")
-                    and (not isStadium or v363.ground.Name ~= "Stadium")
-                then
-                    if v363.ground.Material == Enum.Material.Grass and onGround then
-                        local dirtPart = workspace:FindFirstChild("Preload") and workspace.Preload:FindFirstChild("Dirt")
-                        if dirtPart then matchPart = dirtPart end
-                    end
-                    slab.Color    = matchPart.Color
-                    slab.Material = matchPart.Material
-                end
-                slab.Transparency = v363.ground.Transparency
-            end
-
-            if slab.Transparency >= 1 then
-                slab.CanCollide = false
-                slab.CanTouch   = false
-                slab.CanQuery   = false
-            else
-                slab.CanCollide = true
-            end
-
-            -- zero out any residual velocity
-            if slab.Velocity.Magnitude > 0 then
-                slab.AssemblyLinearVelocity  = Vector3.new()
-                slab.AssemblyAngularVelocity = Vector3.new()
-                slab.Velocity = Vector3.new()
-            end
-
-            -- water/terrain: immediately fling
-            if isWaterOrTerrain or isTerrain then
-                slab.CFrame = preTiltCF
-                flingAndFade(slab)
-            end
-
-            -- one-time sound + disperse setup per ring
-            if isFirstSlab then
-                isFirstSlab = false
-
-                -- dispersefast + water → adaptive wait & impact SFX
-                if isWaterOrTerrain then
-                    local stCount = 1
-                    if stadiumBreakResult then stCount = 2 end
-                    local radius  = (rMin + rMax) / 12
-                    local waitT   = 0.015 + (radius < 0.8 and (0.8 - radius) * 0.02 or 0)
-                    task.delay(waitT, function()
-                        local canPlay = true
-                        for i, rd in pairs(shared.recentdebris) do
-                            if tick() - rd[2] > 0.5 then
-                                shared.recentdebris[i] = nil
-                            elseif (rd[1].Position - rd[1].Position).Magnitude <= 5 then
-                                canPlay = false; break
-                            end
-                        end
-                        if canPlay then
-                            if radius >= 0.8 then
-                                table.insert(shared.recentdebris, { baseCF, tick() })
-                                soundFactory({
-                                    SoundId = ({
-                                        "rbxassetid://18922680029","rbxassetid://18922679331",
-                                        "rbxassetid://18922678743","rbxassetid://18922678349"
-                                    })[math.random(1,4)],
-                                    Volume = 1.35 / stCount,
-                                    CFrame  = baseCF
-                                }):Play()
-                            end
-                        end
+                -- Impact sounds on first slab of first ring
+                if firstSlab and doSounds then
+                    firstSlab = false
+                    task.delay(0.05, function()
+                        pcall(playImpactSounds, slab)
                     end)
-
-                elseif addFlags.sounds and not v363.nosound then
-                    -- per-slab SFX when add.sounds flag is set
-                    local stCount = stadiumBreakResult and 2 or 1
-                    local s1 = soundFactory({})
-                    s1.SoundId = SND_IMPACT[RNG:NextInteger(1, #SND_IMPACT)]
-                    s1.Volume  = 3.85 / stCount
-                    s1.Parent  = slab
-                    s1:Play()
-
-                    local s2 = soundFactory({})
-                    s2.SoundId = SND_RUMBLE[RNG:NextInteger(1, #SND_RUMBLE)]
-                    s2.Volume  = 4.3 / stCount
-                    s2.Parent  = slab
-                    s2:Play()
-
-                    local s3 = soundFactory({})
-                    s3.SoundId = SND_CRACK[RNG:NextInteger(1, #SND_CRACK)]
-                    s3.Volume  = 4.12 / stCount
-                    s3.Parent  = slab
-                    s3:Play()
                 end
-            end
 
-            slab:SetAttribute("OGCframe", preTiltCF)
-
-            -- tween slab into place
-            if not isWaterOrTerrain then
-                TweenService:Create(slab, TweenInfo.new(
-                    rng:NextNumber(0.2, 0.3), Enum.EasingStyle.Quad, Enum.EasingDirection.Out
-                ), { CFrame = preTiltCF }):Play()
-            end
-
-            -- cleanup / sink animation
-            if isWaterOrTerrain or isTerrain then
-                task.delay(1, function()
-                    slab:SetAttribute("OGCframe", nil)
-                    slab.Anchored = true
-                    slab.AssemblyLinearVelocity  = Vector3.new()
-                    slab.AssemblyAngularVelocity = Vector3.new()
-                    slab.Velocity = Vector3.new()
-                    slab.CFrame   = CFrame.new(1e8, 1e8, 1e8)
-                    table.insert(partPool, slab)
+                -- Sink and recycle after keepTime
+                task.delay(keepTime, function()
+                    pcall(function()
+                        local sinkCF = slab.CFrame * CFrame.new(0, -6 * sizeMult, 0)
+                        TweenService:Create(slab,
+                            TweenInfo.new(1.8, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+                            { CFrame = sinkCF, Transparency = 1, Size = slab.Size / 1.5 }
+                        ):Play()
+                        task.wait(1.85)
+                        releasePart(slab)
+                    end)
                 end)
-            else
-                local keepTime = addFlags.keep
-                if not keepTime then
-                    keepTime = rng:NextNumber(5, 7)
-                end
-                local sinkTween = v363.customtween or TweenInfo.new(2, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
-                if v363.dispersefast then keepTime = v363.dispersefast end
-
-                delay(keepTime, function()
-                    if addFlags.keep then
-                        TweenService:Create(slab, TweenInfo.new(2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-                            CFrame = preTiltCF, Size = slab.Size
-                        }):Play()
-                        wait(2)
-                    end
-                    TweenService:Create(slab, sinkTween, {
-                        CFrame = slab.CFrame * CFrame.new(0, -7, 0),
-                        Size   = slab.Size / 1.5
-                    }):Play()
-                    wait(2)
-                    slab:SetAttribute("OGCframe", nil)
-                    slab.Anchored = true
-                    slab.AssemblyLinearVelocity  = Vector3.new()
-                    slab.AssemblyAngularVelocity = Vector3.new()
-                    slab.Velocity = Vector3.new()
-                    slab.CFrame   = CFrame.new(1e8, 1e8, 1e8)
-                    table.insert(partPool, slab)
-                end)
-            end
+            end)
         end
     end
-
-    return ringSlabs
 end
 
--- ============================================================
--- PUBLIC API  —  getgenv().GroundCrater
--- ============================================================
--- Guard: skip re-registration if the script is executed more than once.
-if getgenv().GroundCrater then
-    return getgenv().GroundCrater
-end
-
+-- ── Public API ────────────────────────────────────────────────────────────
 getgenv().GroundCrater = {
-    --- Version string so callers can check compatibility.
-    version = "1.0.0",
+    version = "2.0.0",
 
-    --- Fire the ground crater VFX.
-    --- @param params table  See header comment for full field list.
+    --- Fire crater at an arbitrary position.
+    --- params.cframe, params.ground, params.normal required.
     fire = function(params)
-        assert(type(params) == "table",  "GroundCrater.fire: expected a params table")
-        assert(params.cframe,            "GroundCrater.fire: params.cframe is required")
-        assert(params.ground,            "GroundCrater.fire: params.ground is required")
-        assert(params.normal,            "GroundCrater.fire: params.normal is required")
-        return groundCrater(params)
+        assert(type(params) == "table", "GroundCrater.fire: expected a table")
+        groundCrater(params)
     end,
 
-    --- Thin wrapper around the internal rayHelper so callers don't need to
-    --- keep a reference to it.
-    --- @param opts table  Same options as the internal rayHelper.
-    --- @return instance, position, material, normal
-    ray = function(opts)
-        assert(type(opts) == "table", "GroundCrater.ray: expected an opts table")
-        return rayHelper(opts)
+    --- Fire crater directly under the LocalPlayer's feet.
+    --- All params optional (size, amount, rings, debris, sounds, keep).
+    fireAtMe = function(params)
+        params = params or {}
+        local player = Players.LocalPlayer
+        local char   = player and player.Character
+        local root   = char and char:FindFirstChild("HumanoidRootPart")
+        if not root then
+            warn("GroundCrater.fireAtMe: character not loaded")
+            return
+        end
+
+        -- Exclude the character from the raycast
+        local ignore = { char }
+
+        local orig = root.Position + Vector3.new(0, 3, 0)
+        local hit, hitPos, hitNormal = raycast(orig, Vector3.new(0, -60, 0), ignore)
+
+        if not hit then
+            -- No ground found — fire at feet anyway with default normal
+            hitPos    = root.Position
+            hitNormal = Vector3.yAxis
+        end
+
+        params.cframe = CFrame.new(hitPos)
+        params.ground = hit
+        params.normal = hitNormal or Vector3.yAxis
+        groundCrater(params)
+    end,
+
+    --- Thin raycast wrapper.
+    --- Returns: hit, hitPosition, hitNormal
+    ray = function(orig, dir, ignore)
+        return raycast(orig, dir, ignore)
     end,
 }
 
