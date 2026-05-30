@@ -2685,6 +2685,12 @@ function RunSequence()
 	anim.AnimationId = "rbxassetid://79527508933159"
 	AnimTrack = Animator:LoadAnimation(anim)
 	AnimTrack:Play()
+local sound = GetGitSound(
+    "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/TMVoiceLine.mp3",
+    "TMVoiceLine",
+    2
+)
+sound:Play()
 	PlaySound("rbxassetid://12447077180", 1, 10, 150)
 	PlaySound("rbxassetid://12331756832", 1, 10, 150)
 	PlaySound("rbxassetid://12983297694", 1, 10, 150)
