@@ -5961,6 +5961,11 @@ end)
            "HAGAH"
            )
             sound:Play()
+            local sound = GetGitSound(
+           "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/RapidKiBlasts.mp3?raw=true",
+           "RapidFire"
+           )
+            sound:Play()
 			task.delay(0.13, function()
 				EmitDash3()
 				EmitCrescentAura()
