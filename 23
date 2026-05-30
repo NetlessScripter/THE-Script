@@ -28,16 +28,20 @@ function PlaySound(id, volume, minDist, maxDist)
 	return sound
 end
 
-local function GetGitSound(GithubSnd, SoundName)
+local function GetGitSound(GithubSnd, SoundName, Volume)
     local url = GithubSnd
-    if not isfile(SoundName .. ".mp3") then
-        writefile(SoundName .. ".mp3", game:HttpGet(url))
+    local fileName = SoundName .. ".mp3"
+
+    if not isfile(fileName) then
+        writefile(fileName, game:HttpGet(url))
     end
+
     local sound = Instance.new("Sound")
-    sound.SoundId = (getcustomasset or getsynasset)(SoundName .. ".mp3")
-    sound.Volume = 1  
-    sound.Name = "HAGAH"  
+    sound.SoundId = (getcustomasset or getsynasset)(fileName)
+    sound.Volume = Volume or 1
+    sound.Name = "HAGAH"
     sound.Parent = workspace
+
     return sound
 end
 
@@ -6007,19 +6011,20 @@ wait(0.2)
 end)
             if not attack2Cancelled then
             local sound = GetGitSound(
-           "https://github.com/NetlessScripter/GOKU/blob/5b3ac08281bbd2939f5dc8e9219b7f51a7604662/copy_BD21A594-0B70-45EA-8757-39EEB8949364.mp3?raw=true",
-           "HAGAH"
-           )
-            sound:Play()
-           
-            task.spawn(function()
-            wait(0.2)
-            local sound = GetGitSound(
-           "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/RapidKiBlasts.mp3?raw=true",
-           "RapidFire"
-           )
-           end)
-            sound:Play()
+    "https://github.com/NetlessScripter/GOKU/blob/5b3ac08281bbd2939f5dc8e9219b7f51a7604662/copy_BD21A594-0B70-45EA-8757-39EEB8949364.mp3?raw=true",
+    "HAGAH"
+)
+sound:Play()
+
+task.spawn(function()
+    wait(0.2)
+    local sound = GetGitSound(
+        "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/RapidKiBlasts.mp3?raw=true",
+        "RapidFire",
+        2
+    )
+    sound:Play()
+end)
             end
 			task.delay(0.13, function()
 				if attack2Cancelled then return end
