@@ -4215,6 +4215,12 @@ efx(ps:WaitForChild("Low"))
 efx(ps:WaitForChild("Center_Tilted"))
 efx(ps:WaitForChild("Ground"))
 
+local sound = GetGitSound(
+    "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/TPBehind.mp3",
+    "Look Behind You",
+    2
+)
+sound:Play()
 local sfx = Instance.new("Sound")
 sfx.SoundId = "rbxassetid://3339374157"
 sfx.Volume = 1
