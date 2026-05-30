@@ -70,19 +70,19 @@
 ================================================================================
 ]]
 
-local Players = game:GetService("Players")
-local LocalPlayer = Players.LocalPlayer
-local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-local Humanoid = Character:WaitForChild("Humanoid")
-local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
-local Animator = Humanoid:WaitForChild("Animator")
-local RightArm = Character:WaitForChild("Right Arm")
-local TRIGGER_ANIM_IDS = {
+Players = game:GetService("Players")
+LocalPlayer = Players.LocalPlayer
+Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+Humanoid = Character:WaitForChild("Humanoid")
+HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
+Animator = Humanoid:WaitForChild("Animator")
+RightArm = Character:WaitForChild("Right Arm")
+TRIGGER_ANIM_IDS = {
 	ATTACK1 = "10471336737",
 	ATTACK2 = "10466974800",
 }
-local function PlaySound(id, volume, minDist, maxDist)
-	local sound = Instance.new("Sound")
+function PlaySound(id, volume, minDist, maxDist)
+	sound = Instance.new("Sound")
 	sound.SoundId = id
 	sound.Volume = volume
 	sound.RollOffMinDistance = minDist
@@ -92,25 +92,25 @@ local function PlaySound(id, volume, minDist, maxDist)
 	game:GetService("Debris"):AddItem(sound, 10)
 	return sound
 end
-local _gc_CollectionService = game:GetService("CollectionService")
-local _gc_TweenService      = game:GetService("TweenService")
-local _gc_LocalPlayer       = game.Players.LocalPlayer
-local _gc_LegacyReplication = game.ReplicatedStorage.Resources.LegacyReplication
-local _gc_partPool          = {}
-local _gc_sweepTick         = tick()
-local _gc_rayExclude        = { workspace.Live, workspace.Thrown }
+_gc_CollectionService = game:GetService("CollectionService")
+_gc_TweenService      = game:GetService("TweenService")
+_gc_LocalPlayer       = game.Players.LocalPlayer
+_gc_LegacyReplication = game.ReplicatedStorage.Resources.LegacyReplication
+_gc_partPool          = {}
+_gc_sweepTick         = tick()
+_gc_rayExclude        = { workspace.Live, workspace.Thrown }
 for _, v in pairs(_gc_CollectionService:GetTagged("InvisibleWalls")) do table.insert(_gc_rayExclude, v) end
 _gc_CollectionService:GetInstanceAddedSignal("InvisibleWalls"):Connect(function(v) table.insert(_gc_rayExclude, v) end)
 shared.recentdebris  = shared.recentdebris  or {}
 shared.addshake      = shared.addshake      or function() end
 shared.OnScreen      = shared.OnScreen      or function(pos)
-    local _, on = workspace:FindFirstChildOfClass("Camera"):WorldToScreenPoint(pos)
+    _, on = workspace:FindFirstChildOfClass("Camera"):WorldToScreenPoint(pos)
     return on
 end
-local _gc_soundFactory = function() return { Play = function() end, Resume = function() end } end
-local _gc_rng = Random.new()
-local function _gc_rand(v97, v98, v99, v100) 
-    local v101 = v100 or _gc_rng;
+_gc_soundFactory = function() return { Play = function() end, Resume = function() end } end
+_gc_rng = Random.new()
+function _gc_rand(v97, v98, v99, v100) 
+    v101 = v100 or _gc_rng;
     if not v98 and v97 then
         v98 = v97;
         v97 = 1;
@@ -125,26 +125,26 @@ local function _gc_rand(v97, v98, v99, v100)
         return v101:NextInteger(v97, v98);
     end;
 end;
-local function v327(v322, v323, v324) 
-    local v325 = v322:Dot(v323);
-    local v326 = v322:Cross(v323);
+function v327(v322, v323, v324) 
+    v325 = v322:Dot(v323);
+    v326 = v322:Cross(v323);
     if v325 < -0.99999 then
         return CFrame.fromAxisAngle(v324, 3.141592653589793);
     else
         return CFrame.new(0, 0, 0, v326.x, v326.y, v326.z, 1 + v325);
     end;
 end;
-local function v338(v332) 
+function v338(v332) 
     if not v332 then
         return;
     elseif v332.ClassName == "Model" then
         return;
     else
-        local v333 = v332.Touched:Connect(function() 
+        v333 = v332.Touched:Connect(function() 
         end);
-        local l_v332_TouchingParts_0 = v332:GetTouchingParts();
+        l_v332_TouchingParts_0 = v332:GetTouchingParts();
         v333:Disconnect();
-        local v335 = {};
+        v335 = {};
         for _, v337 in pairs(l_v332_TouchingParts_0) do
             if v337.Name ~= "InvisibleBorder" and v337.Name ~= "InfBall" then
                 table.insert(v335, v337);
@@ -153,13 +153,13 @@ local function v338(v332)
         return v335;
     end;
 end;
-local function v362(v351) 
-    local l_v10_0 = _gc_TweenService;
-    local l_v351_0 = v351;
-    local l_new_0 = TweenInfo.new;
-    local v355 = 0.7;
-    local v356 = 1;
-    local l_v95_1 = _gc_rng;
+function v362(v351) 
+    l_v10_0 = _gc_TweenService;
+    l_v351_0 = v351;
+    l_new_0 = TweenInfo.new;
+    v355 = 0.7;
+    v356 = 1;
+    l_v95_1 = _gc_rng;
     if not v356 and v355 then
         v356 = v355;
         v355 = 1;
@@ -178,7 +178,7 @@ local function v362(v351)
     if l_v10_0 then
         game:GetService("Debris"):AddItem(l_v10_0, 0);
     end;
-    local l_BodyVelocity_0 = Instance.new("BodyVelocity");
+    l_BodyVelocity_0 = Instance.new("BodyVelocity");
     l_BodyVelocity_0.MaxForce = Vector3.new(400000, 400000, 400000, 0);
     v355 = -10;
     v356 = 10;
@@ -191,10 +191,10 @@ local function v362(v351)
         v355 = 0;
         v356 = 1;
     end;
-    local v359 = l_v95_1:NextNumber(v355, v356);
+    v359 = l_v95_1:NextNumber(v355, v356);
     l_v95_1 = 10;
-    local v360 = 17.5;
-    local l_v95_2 = _gc_rng;
+    v360 = 17.5;
+    l_v95_2 = _gc_rng;
     if not v360 and l_v95_1 then
         v360 = l_v95_1;
         l_v95_1 = 1;
@@ -207,10 +207,10 @@ local function v362(v351)
     l_BodyVelocity_0.Parent = v351;
     game:GetService("Debris"):AddItem(l_BodyVelocity_0, 0.15);
 end;
-local function _gc_recyclePart() 
+function _gc_recyclePart() 
     if tick() - _gc_sweepTick > 300 then
         _gc_sweepTick = tick();
-        local v295 = 0;
+        v295 = 0;
         for _, v297 in pairs(workspace.Thrown:GetChildren()) do
             if v297:IsA("Part") and v297:GetAttribute("Spawn") and not table.find(_gc_partPool, v297) and not v297:GetAttribute("DeletionImmunity") and tick() - v297:GetAttribute("Spawn") > 60 then
                 v297:Destroy();
@@ -219,10 +219,10 @@ local function _gc_recyclePart()
         end;
         return;
     else
-        local v298 = rawget(_gc_partPool, 1);
+        v298 = rawget(_gc_partPool, 1);
         if #_gc_partPool > 100 then
             for _ = 101, #_gc_partPool do
-                local v300 = rawget(_gc_partPool, 101);
+                v300 = rawget(_gc_partPool, 101);
                 table.remove(_gc_partPool, 101);
                 if v300 then
                     v300:Destroy();
@@ -245,8 +245,8 @@ local function _gc_recyclePart()
         end;
     end;
 end;
-local _gc_resizeParticle = function(v837, v838, v839) 
-    local v840 = v839 or "Size";
+_gc_resizeParticle = function(v837, v838, v839) 
+    v840 = v839 or "Size";
     if v840 == "Speed" then
         v837.Speed = NumberRange.new(v837.Speed.Min * v838, v837.Speed.Max * v838);
         return;
@@ -254,7 +254,7 @@ local _gc_resizeParticle = function(v837, v838, v839)
         for _, v842 in pairs({
             v837
         }) do
-            local v843 = {};
+            v843 = {};
             for _, v845 in pairs(v842[v840].Keypoints) do
                 table.insert(v843, NumberSequenceKeypoint.new(v845.Time, v845.Value * v838, v845.Envelope));
             end;
@@ -264,10 +264,10 @@ local _gc_resizeParticle = function(v837, v838, v839)
     end;
 end;
 shared.resizeparticle = _gc_resizeParticle
-local function _gc_raycast(v711) 
-    local l_orig_0 = v711.orig;
-    local l_dir_0 = v711.dir;
-    local v714 = RaycastParams.new();
+function _gc_raycast(v711) 
+    l_orig_0 = v711.orig;
+    l_dir_0 = v711.dir;
+    v714 = RaycastParams.new();
     v714.FilterDescendantsInstances = v711.Whitelist or v711.Ignore or _gc_rayExclude;
     if v711.Whitelist then
         v714.FilterType = Enum.RaycastFilterType.Include;
@@ -275,14 +275,14 @@ local function _gc_raycast(v711)
         v714.FilterType = Enum.RaycastFilterType.Exclude;
     end;
     if v711.Blockcast then
-        local v715 = workspace:Blockcast(l_orig_0, v711.Blockcast, l_dir_0, v714);
+        v715 = workspace:Blockcast(l_orig_0, v711.Blockcast, l_dir_0, v714);
         if v715 then
             return v715.Instance, v715.Position, v715.Material, v715.Normal;
         else
             return;
         end;
     else
-        local v716 = workspace:Raycast(l_orig_0, l_dir_0, v714);
+        v716 = workspace:Raycast(l_orig_0, l_dir_0, v714);
         if v716 then
             return v716.Instance, v716.Position, v716.Material, v716.Normal;
         else
@@ -290,34 +290,34 @@ local function _gc_raycast(v711)
         end;
     end;
 end;
-local function _gc_craterDebris(v363) 
+function _gc_craterDebris(v363) 
     if not v363.add then
         v363.add = {};
     end;
-    local v364 = v363.sizemult or 1;
-    local l_add_0 = v363.add;
+    v364 = v363.sizemult or 1;
+    l_add_0 = v363.add;
     if v363.dispersefast and not shared.OnScreen(v363.cframe.Position) then
         return;
     else
-        local v366 = Random.new(v363.Seed or tick());
-        local l_v102_0 = _gc_rand;
-        local function v370(v368, v369) 
+        v366 = Random.new(v363.Seed or tick());
+        l_v102_0 = _gc_rand;
+        function v370(v368, v369) 
             return l_v102_0(v368, v369, nil, v366);
         end;
         if v363.amount then
             v363.amount = math.floor(v363.amount);
         end;
-        local v371 = l_add_0.less and 2.5 or 1;
-        local v372 = nil;
+        v371 = l_add_0.less and 2.5 or 1;
+        v372 = nil;
         if v363.ground.Name == "Stadium" and not v363.ground:GetAttribute("FakeStadium") and not v363.notiles then
             v372 = _gc_v12({
                 Effect = "Break Model", 
                 Stadium = v363.ground
             });
         end;
-        local v373 = 3;
-        local v374 = 5;
-        local v375 = v366 or _gc_rng;
+        v373 = 3;
+        v374 = 5;
+        v375 = v366 or _gc_rng;
         if not v374 and v373 then
             v374 = v373;
             v373 = 1;
@@ -326,7 +326,7 @@ local function _gc_craterDebris(v363)
             v373 = 0;
             v374 = 1;
         end;
-        local v376 = v375:NextNumber(v373, v374);
+        v376 = v375:NextNumber(v373, v374);
         if _gc_LocalPlayer:GetAttribute("S_FastMode") then
             v376 = v376 / 2;
         end;
@@ -349,9 +349,9 @@ local function _gc_craterDebris(v363)
         end;
         for _ = 1, v376 do
             if not l_add_0.less and not v374 then
-                local v379 = 1;
-                local v380 = 3;
-                local v381 = v366 or _gc_rng;
+                v379 = 1;
+                v380 = 3;
+                v381 = v366 or _gc_rng;
                 if not v380 and v379 then
                     v380 = v379;
                     v379 = 1;
@@ -360,14 +360,14 @@ local function _gc_craterDebris(v363)
                     v379 = 0;
                     v380 = 1;
                 end;
-                local v382 = v381:NextNumber(v379, v380);
+                v382 = v381:NextNumber(v379, v380);
                 v379 = _gc_recyclePart() or Instance.new("Part");
                 v379.CollisionGroup = "nocol";
                 v381 = v363.cframe;
-                local l_Angles_0 = CFrame.Angles;
-                local v384 = -360;
-                local v385 = 360;
-                local v386 = v366 or _gc_rng;
+                l_Angles_0 = CFrame.Angles;
+                v384 = -360;
+                v385 = 360;
+                v386 = v366 or _gc_rng;
                 if not v385 and v384 then
                     v385 = v384;
                     v384 = 1;
@@ -376,10 +376,10 @@ local function _gc_craterDebris(v363)
                     v384 = 0;
                     v385 = 1;
                 end;
-                local v387 = math.rad((v386:NextNumber(v384, v385)));
+                v387 = math.rad((v386:NextNumber(v384, v385)));
                 v385 = -360;
                 v386 = 360;
-                local v388 = v366 or _gc_rng;
+                v388 = v366 or _gc_rng;
                 if not v386 and v385 then
                     v386 = v385;
                     v385 = 1;
@@ -388,10 +388,10 @@ local function _gc_craterDebris(v363)
                     v385 = 0;
                     v386 = 1;
                 end;
-                local v389 = math.rad((v388:NextNumber(v385, v386)));
+                v389 = math.rad((v388:NextNumber(v385, v386)));
                 v386 = -360;
                 v388 = 360;
-                local v390 = v366 or _gc_rng;
+                v390 = v366 or _gc_rng;
                 if not v388 and v386 then
                     v388 = v386;
                     v386 = 1;
@@ -464,7 +464,7 @@ local function _gc_craterDebris(v363)
                     }):Play();
                     delay(0.3, function() 
                         v379.Anchored = true;
-                        local l_v379_0 = v379;
+                        l_v379_0 = v379;
                         l_v379_0.AssemblyLinearVelocity = Vector3.new(0, 0, 0, 0);
                         l_v379_0.AssemblyAngularVelocity = Vector3.new(0, 0, 0, 0);
                         l_v379_0.Velocity = Vector3.new(0, 0, 0, 0);
@@ -477,9 +477,9 @@ local function _gc_craterDebris(v363)
                 break;
             end;
         end;
-        local v392 = 4;
-        local v393 = 7;
-        local v394 = v366 or _gc_rng;
+        v392 = 4;
+        v393 = 7;
+        v394 = v366 or _gc_rng;
         if not v393 and v392 then
             v393 = v392;
             v392 = 1;
@@ -497,9 +497,9 @@ local function _gc_craterDebris(v363)
         end;
         for _ = 1, v375 do
             if not v374 then
-                local v396 = 0.6;
-                local v397 = 0.8;
-                local v398 = v366 or _gc_rng;
+                v396 = 0.6;
+                v397 = 0.8;
+                v398 = v366 or _gc_rng;
                 if not v397 and v396 then
                     v397 = v396;
                     v396 = 1;
@@ -527,9 +527,9 @@ local function _gc_craterDebris(v363)
                 end;
                 v398 = Instance.new("BodyVelocity");
                 v398.MaxForce = Vector3.new(2000000000, 2000000000, 2000000000, 0);
-                local v399 = -25;
-                local v400 = 25;
-                local v401 = v366 or _gc_rng;
+                v399 = -25;
+                v400 = 25;
+                v401 = v366 or _gc_rng;
                 if not v400 and v399 then
                     v400 = v399;
                     v399 = 1;
@@ -538,10 +538,10 @@ local function _gc_craterDebris(v363)
                     v399 = 0;
                     v400 = 1;
                 end;
-                local v402 = v401:NextNumber(v399, v400);
+                v402 = v401:NextNumber(v399, v400);
                 v400 = 5;
                 v401 = 25;
-                local v403 = v366 or _gc_rng;
+                v403 = v366 or _gc_rng;
                 if not v401 and v400 then
                     v401 = v400;
                     v400 = 1;
@@ -553,17 +553,17 @@ local function _gc_craterDebris(v363)
                 v398.Velocity = Vector3.new(v402, v403:NextNumber(v400, v401), v370(-25, 25)) * 2;
                 v398.Parent = v396;
                 game:GetService("Debris"):AddItem(v398, 0.15);
-                local l_BodyAngularVelocity_0 = Instance.new("BodyAngularVelocity");
+                l_BodyAngularVelocity_0 = Instance.new("BodyAngularVelocity");
                 l_BodyAngularVelocity_0.Parent = v396;
                 game:GetService("Debris"):AddItem(l_BodyAngularVelocity_0, 0.5);
-                local l_delay_0 = delay;
+                l_delay_0 = delay;
                 if v374 then
                     v402 = 0;
                 else
                     v399 = 3;
                     v401 = 0;
                     v403 = 1;
-                    local v406 = v366 or _gc_rng;
+                    v406 = v366 or _gc_rng;
                     if not v403 and v401 then
                         v403 = v401;
                         v401 = 1;
@@ -582,7 +582,7 @@ local function _gc_craterDebris(v363)
                     delay(0.3, function() 
                         l_BodyAngularVelocity_0:Destroy();
                         v396.Anchored = true;
-                        local l_v396_0 = v396;
+                        l_v396_0 = v396;
                         l_v396_0.AssemblyLinearVelocity = Vector3.new(0, 0, 0, 0);
                         l_v396_0.AssemblyAngularVelocity = Vector3.new(0, 0, 0, 0);
                         l_v396_0.Velocity = Vector3.new(0, 0, 0, 0);
@@ -595,7 +595,7 @@ local function _gc_craterDebris(v363)
                 break;
             end;
         end;
-        local v408 = {};
+        v408 = {};
         v392 = 5;
         v393 = 7;
         if v363.new then
@@ -603,17 +603,17 @@ local function _gc_craterDebris(v363)
             v393 = v363.new[2];
         end;
         v394 = CFrame.new(v363.cframe.p);
-        local v409 = (v392 + v393) / 2;
-        local v410 = v363.amount or 16;
+        v409 = (v392 + v393) / 2;
+        v410 = v363.amount or 16;
         if _gc_LocalPlayer:GetAttribute("S_FastMode") then
             v410 = v410 / 2;
         end;
         v394 = v394 * _gc_v327(v394.UpVector, v363.normal, (Vector3.new(0, 1, 0, 0)));
-        local l_Angles_1 = CFrame.Angles;
-        local v412 = 0;
-        local v413 = -360;
-        local v414 = 360;
-        local v415 = v366 or _gc_rng;
+        l_Angles_1 = CFrame.Angles;
+        v412 = 0;
+        v413 = -360;
+        v414 = 360;
+        v415 = v366 or _gc_rng;
         if not v414 and v413 then
             v414 = v413;
             v413 = 1;
@@ -624,10 +624,10 @@ local function _gc_craterDebris(v363)
         end;
         v394 = v394 * l_Angles_1(v412, math.rad((v415:NextNumber(v413, v414))), 0);
         v412 = CFrame.Angles;
-        local v416 = 0;
+        v416 = 0;
         v414 = -16;
         v415 = 16;
-        local v417 = v366 or _gc_rng;
+        v417 = v366 or _gc_rng;
         if not v415 and v414 then
             v415 = v414;
             v414 = 1;
@@ -643,24 +643,24 @@ local function _gc_craterDebris(v363)
         end;
         for v418 = 1, v410 do
             for v419 = 1, v363.Double or 1 do
-                local l_v394_0 = v394;
+                l_v394_0 = v394;
                 if v419 > 1 then
                     l_v394_0 = l_Angles_1;
                     v409 = v409 + 1;
                 end;
-                local v421 = math.sin((360 / v410 + 360 / v410 * v418) / 57.29577951308232);
-                local v422 = math.cos((360 / v410 + 360 / v410 * v418) / 57.29577951308232);
-                local v423 = l_v394_0 * CFrame.new(v409 * v421, 0, v409 * v422);
-                local v424 = 0.2;
+                v421 = math.sin((360 / v410 + 360 / v410 * v418) / 57.29577951308232);
+                v422 = math.cos((360 / v410 + 360 / v410 * v418) / 57.29577951308232);
+                v423 = l_v394_0 * CFrame.new(v409 * v421, 0, v409 * v422);
+                v424 = 0.2;
                 if v363.Double then
                     v424 = 0.35;
                 end;
-                local l_lookVector_0 = v423.lookVector;
-                local v426 = -v424;
-                local l_v424_0 = v424;
-                local l_v426_0 = v426;
-                local l_l_v424_0_0 = l_v424_0;
-                local v430 = v366 or _gc_rng;
+                l_lookVector_0 = v423.lookVector;
+                v426 = -v424;
+                l_v424_0 = v424;
+                l_v426_0 = v426;
+                l_l_v424_0_0 = l_v424_0;
+                v430 = v366 or _gc_rng;
                 if not l_l_v424_0_0 and l_v426_0 then
                     l_l_v424_0_0 = l_v426_0;
                     l_v426_0 = 1;
@@ -670,7 +670,7 @@ local function _gc_craterDebris(v363)
                     l_l_v424_0_0 = 1;
                 end;
                 v423 = v423 + l_lookVector_0 * v430:NextNumber(l_v426_0, l_l_v424_0_0);
-                local v431 = _gc_recyclePart() or Instance.new("Part");
+                v431 = _gc_recyclePart() or Instance.new("Part");
                 if v363.dontcollide == _gc_LocalPlayer then
                     v431.CollisionGroup = "nocol";
                 end;
@@ -681,10 +681,10 @@ local function _gc_craterDebris(v363)
                 v431.Color = v363.ground.Color;
                 v431.CFrame = v423 * CFrame.fromEulerAnglesXYZ(0, (360 / v410 + 360 / v410 * v418) / 57.29577951308232, 0);
                 l_lookVector_0 = v431.CFrame;
-                local l_Angles_2 = CFrame.Angles;
+                l_Angles_2 = CFrame.Angles;
                 l_l_v424_0_0 = 6;
                 v430 = 42;
-                local v433 = v366 or _gc_rng;
+                v433 = v366 or _gc_rng;
                 if not v430 and l_l_v424_0_0 then
                     v430 = l_l_v424_0_0;
                     l_l_v424_0_0 = 1;
@@ -742,11 +742,11 @@ local function _gc_craterDebris(v363)
                     end;
                 end;
                 v430 = v431.CFrame;
-                local v436 = CFrame.new(0, -3, -1.5);
-                local l_Angles_3 = CFrame.Angles;
-                local v438 = -11;
-                local v439 = 11;
-                local v440 = v366 or _gc_rng;
+                v436 = CFrame.new(0, -3, -1.5);
+                l_Angles_3 = CFrame.Angles;
+                v438 = -11;
+                v439 = 11;
+                v440 = v366 or _gc_rng;
                 if not v439 and v438 then
                     v439 = v438;
                     v438 = 1;
@@ -755,10 +755,10 @@ local function _gc_craterDebris(v363)
                     v438 = 0;
                     v439 = 1;
                 end;
-                local v441 = math.rad((v440:NextNumber(v438, v439)));
+                v441 = math.rad((v440:NextNumber(v438, v439)));
                 v439 = -11;
                 v440 = 11;
-                local v442 = v366 or _gc_rng;
+                v442 = v366 or _gc_rng;
                 if not v440 and v439 then
                     v440 = v439;
                     v439 = 1;
@@ -767,10 +767,10 @@ local function _gc_craterDebris(v363)
                     v439 = 0;
                     v440 = 1;
                 end;
-                local v443 = math.rad((v442:NextNumber(v439, v440)));
+                v443 = math.rad((v442:NextNumber(v439, v440)));
                 v440 = -11;
                 v442 = 11;
-                local v444 = v366 or _gc_rng;
+                v444 = v366 or _gc_rng;
                 if not v442 and v440 then
                     v442 = v440;
                     v440 = 1;
@@ -824,7 +824,7 @@ local function _gc_craterDebris(v363)
                     _gc_v362(v431);
                 end;
                 do
-                    local l_l_v394_0_0 = l_v394_0;
+                    l_l_v394_0_0 = l_v394_0;
                     if v412 then
                         v412 = false;
                         v436 = {
@@ -854,7 +854,7 @@ local function _gc_craterDebris(v363)
                                 shared.recentdebris = {};
                             end;
                             v438 = function(v446) 
-                                local v447 = 0.015;
+                                v447 = 0.015;
                                 if v446 < 0.8 then
                                     v447 = 0.015 + (0.8 - v446) * 0.02;
                                 end;
@@ -866,14 +866,14 @@ local function _gc_craterDebris(v363)
                             if v439 < 0.8 then
                                 v444 = 0.015 + (0.8 - v439) * 0.02;
                             end;
-                            local l_v439_0 = v439 ;
+                            l_v439_0 = v439 ;
                             do
-                                local l_v443_0 = v443;
+                                l_v443_0 = v443;
                                 v440(v444, function() 
-                                    local v450 = true;
+                                    v450 = true;
                                     for v451, v452 in pairs(shared.recentdebris) do
-                                        local v453 = v452[1];
-                                        local _ = v452[2];
+                                        v453 = v452[1];
+                                        _ = v452[2];
                                         if tick() - v452[2] > 0.5 then
                                             shared.recentdebris[v451] = nil;
                                         elseif (v453.Position - v453.Position).magnitude <= 5 then
@@ -882,7 +882,7 @@ local function _gc_craterDebris(v363)
                                         end;
                                     end;
                                     if v450 then
-                                        local v455 = l_v439_0 >= 0.8;
+                                        v455 = l_v439_0 >= 0.8;
                                         if v455 then
                                             table.insert(shared.recentdebris, {
                                                 l_l_v394_0_0, 
@@ -900,8 +900,8 @@ local function _gc_craterDebris(v363)
                                             }):Play();
                                         end;
                                         if v373 then
-                                            local v456 = (v392 + v393) / 12;
-                                            local v457 = {
+                                            v456 = (v392 + v393) / 12;
+                                            v457 = {
                                                 "rbxassetid://18922743710", 
                                                 "rbxassetid://18922743936", 
                                                 "rbxassetid://18922744361"
@@ -916,18 +916,18 @@ local function _gc_craterDebris(v363)
                                                     "rbxassetid://70534139031144"
                                                 };
                                             end;
-                                            local v458 = 0;
+                                            v458 = 0;
                                             if not v455 then
                                                 v458 = v458 + 1;
                                             end;
-                                            local l_v313_0 = _gc_soundFactory;
-                                            local v460 = {
+                                            l_v313_0 = _gc_soundFactory;
+                                            v460 = {
                                                 SoundId = v457[math.random(#v457)], 
                                                 Volume = 1.75 / l_v443_0 + math.max(v456 - 1, 0) + v458
                                             };
-                                            local v461 = 0.9;
-                                            local v462 = 1.1;
-                                            local v463 = v366 or _gc_rng;
+                                            v461 = 0.9;
+                                            v462 = 1.1;
+                                            v463 = v366 or _gc_rng;
                                             if not v462 and v461 then
                                                 v462 = v461;
                                                 v461 = 1;
@@ -961,8 +961,8 @@ local function _gc_craterDebris(v363)
                             v438 = _gc_soundFactory;
                             v439 = {};
                             v444 = #v441;
-                            local v466 = nil;
-                            local l_v95_3 = _gc_rng;
+                            v466 = nil;
+                            l_v95_3 = _gc_rng;
                             if not v466 and v444 then
                                 v466 = v444;
                                 v444 = 1;
@@ -1035,7 +1035,7 @@ local function _gc_craterDebris(v363)
                         task.delay(1, function() 
                             v431:SetAttribute("OGCframe", nil);
                             v431.Anchored = true;
-                            local l_v431_0 = v431;
+                            l_v431_0 = v431;
                             l_v431_0.AssemblyLinearVelocity = Vector3.new(0, 0, 0, 0);
                             l_v431_0.AssemblyAngularVelocity = Vector3.new(0, 0, 0, 0);
                             l_v431_0.Velocity = Vector3.new(0, 0, 0, 0);
@@ -1066,7 +1066,7 @@ local function _gc_craterDebris(v363)
                             l_Angles_3 = v363.customtween;
                         end;
                         do
-                            local l_l_Angles_3_0 = l_Angles_3;
+                            l_l_Angles_3_0 = l_Angles_3;
                             delay(v436, function() 
                                 if l_add_0.keep then
                                     _gc_TweenService:Create(v431, TweenInfo.new(2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
@@ -1082,7 +1082,7 @@ local function _gc_craterDebris(v363)
                                 wait(2);
                                 v431:SetAttribute("OGCframe", nil);
                                 v431.Anchored = true;
-                                local l_v431_1 = v431;
+                                l_v431_1 = v431;
                                 l_v431_1.AssemblyLinearVelocity = Vector3.new(0, 0, 0, 0);
                                 l_v431_1.AssemblyAngularVelocity = Vector3.new(0, 0, 0, 0);
                                 l_v431_1.Velocity = Vector3.new(0, 0, 0, 0);
@@ -1097,11 +1097,11 @@ local function _gc_craterDebris(v363)
         return v408;
     end;
 end;
-local _gc_v327 = v327
-local _gc_v338 = v338
-local _gc_v362 = v362
-local _gc_v12  = function() end  
-local function GroundCrater(params)
+_gc_v327 = v327
+_gc_v338 = v338
+_gc_v362 = v362
+_gc_v12  = function() end  
+function GroundCrater(params)
 	if typeof(params.start) == "Instance" then
 		if params.start:IsA("Attachment") then
 			params.start = params.start.WorldPosition;
@@ -1109,13 +1109,13 @@ local function GroundCrater(params)
 			params.start = params.start.Position;
 		end;
 	end;
-	local _gc_seed = Random.new(params.Seed);
-	local l__gc_rand_0 = _gc_rand ;
-	local l__gc_seed_0 = _gc_seed ;
-	local function _gc_seededRand(v23485, v23486) 
+	_gc_seed = Random.new(params.Seed);
+	l__gc_rand_0 = _gc_rand ;
+	l__gc_seed_0 = _gc_seed ;
+	function _gc_seededRand(v23485, v23486) 
 		return l__gc_rand_0(v23485, v23486, nil, l__gc_seed_0);
 	end;
-	local _gc_hitPart, _gc_hitPos, _, _gc_hitNormal = _gc_raycast({
+	_gc_hitPart, _gc_hitPos, _, _gc_hitNormal = _gc_raycast({
 		orig = params.start, 
 		dir = params["end"]
 	});
@@ -1124,21 +1124,21 @@ local function GroundCrater(params)
 		params.Sound:Play();
 	end;
 	if _gc_hitPart then
-		local _gc_rotCF = _gc_v327(CFrame.new(_gc_hitPos).UpVector, _gc_hitNormal, (Vector3.new(0, 1, 0, 0)));
-		local _gc_attachment = Instance.new("Attachment");
+		_gc_rotCF = _gc_v327(CFrame.new(_gc_hitPos).UpVector, _gc_hitNormal, (Vector3.new(0, 1, 0, 0)));
+		_gc_attachment = Instance.new("Attachment");
 		_gc_attachment.Parent = _gc_hitPart;
 		if not _gc_hitPart.Anchored or params.smoked then
 			_gc_attachment.Parent = workspace.Terrain;
 		end;
 		_gc_attachment.WorldCFrame = CFrame.new(_gc_hitPos) * _gc_rotCF;
 		if not params.nosmoke then
-			local _gc_smokeCount = 8;
+			_gc_smokeCount = 8;
 			if _gc_LocalPlayer:GetAttribute("S_FastMode") then
 				_gc_smokeCount = _gc_smokeCount / 2;
 			end;
-			local _gc_smokePE = -0.001;
-			local _gc_upSmokeCount = 0.001;
-			local _gc_upSmokePE = _gc_seed or _gc_rng;
+			_gc_smokePE = -0.001;
+			_gc_upSmokeCount = 0.001;
+			_gc_upSmokePE = _gc_seed or _gc_rng;
 			if not _gc_upSmokeCount and _gc_smokePE then
 				_gc_upSmokeCount = _gc_smokePE;
 				_gc_smokePE = 1;
@@ -1147,7 +1147,7 @@ local function GroundCrater(params)
 				_gc_smokePE = 0;
 				_gc_upSmokeCount = 1;
 			end;
-			local _gc_zOff = _gc_upSmokePE:NextNumber(_gc_smokePE, _gc_upSmokeCount);
+			_gc_zOff = _gc_upSmokePE:NextNumber(_gc_smokePE, _gc_upSmokeCount);
 			_gc_smokePE = game.ReplicatedStorage.Resources.Smoke:Clone();
 			_gc_smokePE.Parent = _gc_attachment;
 			_gc_smokePE.ZOffset = _gc_smokePE.ZOffset + _gc_zOff;
@@ -1199,7 +1199,7 @@ local function GroundCrater(params)
 			end;
 		end;
 		game:GetService("Debris"):AddItem(_gc_attachment, 9);
-		local _gc_isSand = false;
+		_gc_isSand = false;
 		if _gc_hitPart.Material == Enum.Material.Sand or _gc_hitPart.Material == Enum.Material.Snow then
 			_gc_isSand = true;
 		end;
@@ -1231,12 +1231,12 @@ local function GroundCrater(params)
 		return;
 	end;
 end
-local function EmitCrescentAura()
-	local Character = game.Players.LocalPlayer.Character
-	local AURA_COLOR = Color3.new(1, 0.964706, 0.313726)
-	local v3193 = {}
+function EmitCrescentAura()
+	Character = game.Players.LocalPlayer.Character
+	AURA_COLOR = Color3.new(1, 0.964706, 0.313726)
+	v3193 = {}
 	for _, v3214 in pairs(game.ReplicatedStorage.Emotes.AuraReal:GetChildren()) do
-		local v3215 = v3214:Clone()
+		v3215 = v3214:Clone()
 		v3215:SetAttribute("LimAura", true)
 		task.delay(203, function()
 			if v3215 then v3215:Destroy() end
@@ -1247,7 +1247,7 @@ local function EmitCrescentAura()
 		elseif v3215:IsA("PointLight") then
 			v3215.Parent = Character.PrimaryPart
 		else
-			local w = Instance.new("Weld")
+			w = Instance.new("Weld")
 			w.Part0 = Character.PrimaryPart
 			w.Part1 = v3215
 			w.Parent = v3215
@@ -1275,23 +1275,23 @@ local function EmitCrescentAura()
 		end
 	end
 end
-local function EmitMostEffects()
-	local anchor = Instance.new("Attachment")
+function EmitMostEffects()
+	anchor = Instance.new("Attachment")
 	anchor.Name = "MostEffects"
 	anchor.Position = Vector3.new(0, 0, -5)
 	anchor.Parent = HumanoidRootPart
 	-- Fast Propulsion sub-attachment
-	local fpAttach1 = Instance.new("Attachment")
+	fpAttach1 = Instance.new("Attachment")
 	fpAttach1.Name = "FP_Attachment1"
 	fpAttach1.Parent = anchor
-	local fpAttach2 = Instance.new("Attachment")
+	fpAttach2 = Instance.new("Attachment")
 	fpAttach2.Name = "FP_Attachment2"
 	fpAttach2.Parent = anchor
-	local fpAttach3 = Instance.new("Attachment")
+	fpAttach3 = Instance.new("Attachment")
 	fpAttach3.Name = "FP_Attachment3"
 	fpAttach3.Parent = anchor
 	-- Emitter: "Thing"
-	local me1 = Instance.new("ParticleEmitter")
+	me1 = Instance.new("ParticleEmitter")
 	me1.Name = "Thing"
 	me1.Texture = "rbxassetid://17496393760"
 	me1.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)), ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1))})
@@ -1326,7 +1326,7 @@ local function EmitMostEffects()
 	me1:SetAttribute("EmitCount", 1.35)
 	me1.Parent = fpAttach1
 	-- Emitter: "ParticleEmitter" (4)
-	local me2 = Instance.new("ParticleEmitter")
+	me2 = Instance.new("ParticleEmitter")
 	me2.Name = "ParticleEmitter"
 	me2.Texture = "rbxassetid://17409991165"
 	me2.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)), ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1))})
@@ -1360,7 +1360,7 @@ local function EmitMostEffects()
 	me2:SetAttribute("EmitCount", 6)
 	me2.Parent = fpAttach1
 	-- Emitter: "ParticleEmitter" (5)
-	local me3 = Instance.new("ParticleEmitter")
+	me3 = Instance.new("ParticleEmitter")
 	me3.Name = "ParticleEmitter"
 	me3.Texture = "rbxassetid://17410127065"
 	me3.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)), ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1))})
@@ -1394,7 +1394,7 @@ local function EmitMostEffects()
 	me3:SetAttribute("EmitCount", 4.05)
 	me3.Parent = fpAttach1
 	-- Emitter: "2" (fpAttach2)
-	local me4 = Instance.new("ParticleEmitter")
+	me4 = Instance.new("ParticleEmitter")
 	me4.Name = "2"
 	me4.Texture = "rbxassetid://17296163477"
 	me4.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.631373, 0.631373, 0.631373)), ColorSequenceKeypoint.new(1, Color3.new(0.631373, 0.631373, 0.631373))})
@@ -1428,7 +1428,7 @@ local function EmitMostEffects()
 	me4:SetAttribute("EmitCount", 6.75)
 	me4.Parent = fpAttach2
 	-- Emitter: "10" (fpAttach2 - Grid4x4)
-	local me5 = Instance.new("ParticleEmitter")
+	me5 = Instance.new("ParticleEmitter")
 	me5.Name = "10"
 	me5.Texture = "rbxassetid://16867354344"
 	me5.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.588235, 0.588235, 0.588235)), ColorSequenceKeypoint.new(1, Color3.new(0.588235, 0.588235, 0.588235))})
@@ -1462,7 +1462,7 @@ local function EmitMostEffects()
 	me5:SetAttribute("EmitCount", 6.75)
 	me5.Parent = fpAttach2
 	-- Emitter: "10" (fpAttach2 - RotateY)
-	local me6 = Instance.new("ParticleEmitter")
+	me6 = Instance.new("ParticleEmitter")
 	me6.Name = "10"
 	me6.Texture = "rbxassetid://16867389591"
 	me6.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.588235, 0.588235, 0.588235)), ColorSequenceKeypoint.new(1, Color3.new(0.588235, 0.588235, 0.588235))})
@@ -1497,7 +1497,7 @@ local function EmitMostEffects()
 	me6:SetAttribute("EmitCount", 6.75)
 	me6.Parent = fpAttach2
 	-- Emitter: "2" (fpAttach3)
-	local me7 = Instance.new("ParticleEmitter")
+	me7 = Instance.new("ParticleEmitter")
 	me7.Name = "2"
 	me7.Texture = "rbxassetid://17296163477"
 	me7.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.631373, 0.631373, 0.631373)), ColorSequenceKeypoint.new(1, Color3.new(0.631373, 0.631373, 0.631373))})
@@ -1531,7 +1531,7 @@ local function EmitMostEffects()
 	me7:SetAttribute("EmitCount", 6.75)
 	me7.Parent = fpAttach3
 	-- Emitter: "10" (fpAttach3 - Grid4x4)
-	local me8 = Instance.new("ParticleEmitter")
+	me8 = Instance.new("ParticleEmitter")
 	me8.Name = "10"
 	me8.Texture = "rbxassetid://16867354344"
 	me8.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.588235, 0.588235, 0.588235)), ColorSequenceKeypoint.new(1, Color3.new(0.588235, 0.588235, 0.588235))})
@@ -1565,7 +1565,7 @@ local function EmitMostEffects()
 	me8:SetAttribute("EmitCount", 6.75)
 	me8.Parent = fpAttach3
 	-- Emitter: "10" (fpAttach3 - RotateY)
-	local me9 = Instance.new("ParticleEmitter")
+	me9 = Instance.new("ParticleEmitter")
 	me9.Name = "10"
 	me9.Texture = "rbxassetid://16867389591"
 	me9.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.588235, 0.588235, 0.588235)), ColorSequenceKeypoint.new(1, Color3.new(0.588235, 0.588235, 0.588235))})
@@ -1600,7 +1600,7 @@ local function EmitMostEffects()
 	me9:SetAttribute("EmitCount", 6.75)
 	me9.Parent = fpAttach3
 	-- Emitter: "Shards" (black)
-	local me10 = Instance.new("ParticleEmitter")
+	me10 = Instance.new("ParticleEmitter")
 	me10.Name = "Shards"
 	me10.Texture = "rbxassetid://17420819512"
 	me10.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0, 0, 0)), ColorSequenceKeypoint.new(1, Color3.new(0, 0, 0))})
@@ -1634,7 +1634,7 @@ local function EmitMostEffects()
 	me10:SetAttribute("EmitCount", 6.75)
 	me10.Parent = anchor
 	-- Emitter: "Shards" (white)
-	local me11 = Instance.new("ParticleEmitter")
+	me11 = Instance.new("ParticleEmitter")
 	me11.Name = "Shards"
 	me11.Texture = "rbxassetid://17420819512"
 	me11.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)), ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1))})
@@ -1668,11 +1668,11 @@ local function EmitMostEffects()
 	me11:SetAttribute("EmitCount", 6.75)
 	me11.Parent = anchor
 	-- Blurred Impact Shockwave emitters
-	local bisAttach = Instance.new("Attachment")
+	bisAttach = Instance.new("Attachment")
 	bisAttach.Name = "BlurredImpactShockwave"
 	bisAttach.Parent = anchor
 	-- Emitter: "circle"
-	local me12 = Instance.new("ParticleEmitter")
+	me12 = Instance.new("ParticleEmitter")
 	me12.Name = "circle"
 	me12.Texture = "rbxassetid://9572518235"
 	me12.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)), ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1))})
@@ -1706,7 +1706,7 @@ local function EmitMostEffects()
 	me12:SetAttribute("EmitCount", 5)
 	me12.Parent = bisAttach
 	-- Emitter: "impact"
-	local me13 = Instance.new("ParticleEmitter")
+	me13 = Instance.new("ParticleEmitter")
 	me13.Name = "impact"
 	me13.Texture = "rbxassetid://9572542664"
 	me13.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)), ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1))})
@@ -1740,7 +1740,7 @@ local function EmitMostEffects()
 	me13:SetAttribute("EmitCount", 5)
 	me13.Parent = bisAttach
 	-- Emitter: "rotating"
-	local me14 = Instance.new("ParticleEmitter")
+	me14 = Instance.new("ParticleEmitter")
 	me14.Name = "rotating"
 	me14.Texture = "rbxassetid://9572238730"
 	me14.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)), ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1))})
@@ -1774,7 +1774,7 @@ local function EmitMostEffects()
 	me14:SetAttribute("EmitCount", 5)
 	me14.Parent = bisAttach
 	-- Emitter: "smoke"
-	local me15 = Instance.new("ParticleEmitter")
+	me15 = Instance.new("ParticleEmitter")
 	me15.Name = "smoke"
 	me15.Texture = "rbxassetid://9544354287"
 	me15.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)), ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1))})
@@ -1808,7 +1808,7 @@ local function EmitMostEffects()
 	me15:SetAttribute("EmitCount", 5)
 	me15.Parent = bisAttach
 	-- Emitter: "wave"
-	local me16 = Instance.new("ParticleEmitter")
+	me16 = Instance.new("ParticleEmitter")
 	me16.Name = "wave"
 	me16.Texture = "rbxassetid://9556807995"
 	me16.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)), ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1))})
@@ -1842,11 +1842,11 @@ local function EmitMostEffects()
 	me16:SetAttribute("EmitCount", 5)
 	me16.Parent = bisAttach
 	-- Dash2 1 emitters
-	local dash2Attach = Instance.new("Attachment")
+	dash2Attach = Instance.new("Attachment")
 	dash2Attach.Name = "Dash2_1"
 	dash2Attach.Parent = anchor
 	-- Emitter: "Lightning2"
-	local me17 = Instance.new("ParticleEmitter")
+	me17 = Instance.new("ParticleEmitter")
 	me17.Name = "Lightning2"
 	me17.Texture = "rbxassetid://17115272756"
 	me17.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.27451, 0.843137, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.27451, 0.843137, 1))})
@@ -1880,7 +1880,7 @@ local function EmitMostEffects()
 	me17:SetAttribute("EmitCount", 4)
 	me17.Parent = dash2Attach
 	-- Emitter: "Lightning1"
-	local me18 = Instance.new("ParticleEmitter")
+	me18 = Instance.new("ParticleEmitter")
 	me18.Name = "Lightning1"
 	me18.Texture = "rbxassetid://13661768477"
 	me18.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.27451, 0.843137, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.27451, 0.843137, 1))})
@@ -1914,7 +1914,7 @@ local function EmitMostEffects()
 	me18:SetAttribute("EmitCount", 4)
 	me18.Parent = dash2Attach
 	-- Emitter: "Main4"
-	local me19 = Instance.new("ParticleEmitter")
+	me19 = Instance.new("ParticleEmitter")
 	me19.Name = "Main4"
 	me19.Texture = "rbxassetid://16348145490"
 	me19.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.27451, 0.843137, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.27451, 0.843137, 1))})
@@ -1948,7 +1948,7 @@ local function EmitMostEffects()
 	me19:SetAttribute("EmitCount", 1)
 	me19.Parent = dash2Attach
 	-- Emitter: "Main3"
-	local me20 = Instance.new("ParticleEmitter")
+	me20 = Instance.new("ParticleEmitter")
 	me20.Name = "Main3"
 	me20.Texture = "rbxassetid://12097850159"
 	me20.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.27451, 0.843137, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.27451, 0.843137, 1))})
@@ -1982,7 +1982,7 @@ local function EmitMostEffects()
 	me20:SetAttribute("EmitCount", 1)
 	me20.Parent = dash2Attach
 	-- Emitter: "Main2"
-	local me21 = Instance.new("ParticleEmitter")
+	me21 = Instance.new("ParticleEmitter")
 	me21.Name = "Main2"
 	me21.Texture = "rbxassetid://12097850159"
 	me21.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.27451, 0.843137, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.27451, 0.843137, 1))})
@@ -2016,7 +2016,7 @@ local function EmitMostEffects()
 	me21:SetAttribute("EmitCount", 2)
 	me21.Parent = dash2Attach
 	-- Emitter: "Main1"
-	local me22 = Instance.new("ParticleEmitter")
+	me22 = Instance.new("ParticleEmitter")
 	me22.Name = "Main1"
 	me22.Texture = "rbxassetid://13143918039"
 	me22.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.27451, 0.843137, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.27451, 0.843137, 1))})
@@ -2050,7 +2050,7 @@ local function EmitMostEffects()
 	me22:SetAttribute("EmitCount", 1)
 	me22.Parent = dash2Attach
 	-- Emitter: "Wave3"
-	local me23 = Instance.new("ParticleEmitter")
+	me23 = Instance.new("ParticleEmitter")
 	me23.Name = "Wave3"
 	me23.Texture = "rbxassetid://16960401567"
 	me23.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)), ColorSequenceKeypoint.new(1, Color3.new(0, 0, 0))})
@@ -2084,7 +2084,7 @@ local function EmitMostEffects()
 	me23:SetAttribute("EmitCount", 4)
 	me23.Parent = dash2Attach
 	-- Emitter: "Wave2"
-	local me24 = Instance.new("ParticleEmitter")
+	me24 = Instance.new("ParticleEmitter")
 	me24.Name = "Wave2"
 	me24.Texture = "rbxassetid://123132013842454"
 	me24.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.858705, 0.858705, 0.858705)), ColorSequenceKeypoint.new(1, Color3.new(0, 0, 0))})
@@ -2118,7 +2118,7 @@ local function EmitMostEffects()
 	me24:SetAttribute("EmitCount", 7)
 	me24.Parent = dash2Attach
 	-- Emitter: "Wave1"
-	local me25 = Instance.new("ParticleEmitter")
+	me25 = Instance.new("ParticleEmitter")
 	me25.Name = "Wave1"
 	me25.Texture = "rbxassetid://82638656997187"
 	me25.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)), ColorSequenceKeypoint.new(1, Color3.new(0, 0, 0))})
@@ -2152,7 +2152,7 @@ local function EmitMostEffects()
 	me25:SetAttribute("EmitCount", 2)
 	me25.Parent = dash2Attach
 	-- Emitter: "DashWave"
-	local me26 = Instance.new("ParticleEmitter")
+	me26 = Instance.new("ParticleEmitter")
 	me26.Name = "DashWave"
 	me26.Texture = "rbxassetid://79483910221275"
 	me26.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)), ColorSequenceKeypoint.new(1, Color3.new(0, 0, 0))})
@@ -2193,11 +2193,11 @@ local function EmitMostEffects()
 	end
 	game:GetService("Debris"):AddItem(anchor, 2)
 end
-local function EmitDash3()
-	local anchor = Instance.new("Attachment")
+function EmitDash3()
+	anchor = Instance.new("Attachment")
 	anchor.Name = "Dash3 1"
 	anchor.Parent = HumanoidRootPart
-	local emitter2 = Instance.new("ParticleEmitter")
+	emitter2 = Instance.new("ParticleEmitter")
 	emitter2.Name = "Lightning"
 	emitter2.Texture = "rbxassetid://16636528686"
 	emitter2.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.203922, 0.509804, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.203922, 0.509804, 1))})
@@ -2232,7 +2232,7 @@ local function EmitDash3()
 	emitter2:SetAttribute("EmitDelay", 0)
 	emitter2:SetAttribute("EmitCount", 2)
 	emitter2.Parent = anchor
-	local emitter3 = Instance.new("ParticleEmitter")
+	emitter3 = Instance.new("ParticleEmitter")
 	emitter3.Name = "Smoke"
 	emitter3.Texture = "rbxassetid://92055400533696"
 	emitter3.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.203922, 0.509804, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.203922, 0.509804, 1))})
@@ -2267,7 +2267,7 @@ local function EmitDash3()
 	emitter3:SetAttribute("EmitDelay", 0)
 	emitter3:SetAttribute("EmitCount", 11)
 	emitter3.Parent = anchor
-	local emitter4 = Instance.new("ParticleEmitter")
+	emitter4 = Instance.new("ParticleEmitter")
 	emitter4.Name = "Glare2"
 	emitter4.Texture = "rbxassetid://80016649838534"
 	emitter4.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.203922, 0.509804, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.203922, 0.509804, 1))})
@@ -2302,7 +2302,7 @@ local function EmitDash3()
 	emitter4:SetAttribute("EmitDelay", 0)
 	emitter4:SetAttribute("EmitCount", 2)
 	emitter4.Parent = anchor
-	local emitter5 = Instance.new("ParticleEmitter")
+	emitter5 = Instance.new("ParticleEmitter")
 	emitter5.Name = "Flash3"
 	emitter5.Texture = "rbxassetid://9978167983"
 	emitter5.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.203922, 0.509804, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.203922, 0.509804, 1))})
@@ -2336,7 +2336,7 @@ local function EmitDash3()
 	emitter5.LockedToPart = true
 	emitter5:SetAttribute("EmitCount", 2)
 	emitter5.Parent = anchor
-	local emitter6 = Instance.new("ParticleEmitter")
+	emitter6 = Instance.new("ParticleEmitter")
 	emitter6.Name = "Flash2"
 	emitter6.Texture = "rbxassetid://14035694679"
 	emitter6.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.203922, 0.509804, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.203922, 0.509804, 1))})
@@ -2371,7 +2371,7 @@ local function EmitDash3()
 	emitter6:SetAttribute("EmitDelay", 0)
 	emitter6:SetAttribute("EmitCount", 2)
 	emitter6.Parent = anchor
-	local emitter7 = Instance.new("ParticleEmitter")
+	emitter7 = Instance.new("ParticleEmitter")
 	emitter7.Name = "Flash1"
 	emitter7.Texture = "rbxassetid://12688770926"
 	emitter7.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.203922, 0.509804, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.203922, 0.509804, 1))})
@@ -2407,7 +2407,7 @@ local function EmitDash3()
 	emitter7:SetAttribute("EmitCount", 1)
 	emitter7:SetAttribute("EmitDuration", 0)
 	emitter7.Parent = anchor
-	local emitter8 = Instance.new("ParticleEmitter")
+	emitter8 = Instance.new("ParticleEmitter")
 	emitter8.Name = "Glare1"
 	emitter8.Texture = "rbxassetid://14035694679"
 	emitter8.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.203922, 0.509804, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.203922, 0.509804, 1))})
@@ -2442,7 +2442,7 @@ local function EmitDash3()
 	emitter8:SetAttribute("EmitDelay", 0)
 	emitter8:SetAttribute("EmitCount", 2)
 	emitter8.Parent = anchor
-	local emitter9 = Instance.new("ParticleEmitter")
+	emitter9 = Instance.new("ParticleEmitter")
 	emitter9.Name = "Glow2V"
 	emitter9.Texture = "rbxassetid://10587001886"
 	emitter9.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.203922, 0.509804, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.203922, 0.509804, 1))})
@@ -2478,7 +2478,7 @@ local function EmitDash3()
 	emitter9:SetAttribute("EmitCount", 1)
 	emitter9:SetAttribute("EmitDuration", 0)
 	emitter9.Parent = anchor
-	local emitter10 = Instance.new("ParticleEmitter")
+	emitter10 = Instance.new("ParticleEmitter")
 	emitter10.Name = "Glow1V"
 	emitter10.Texture = "rbxassetid://10587001886"
 	emitter10.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.203922, 0.509804, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.203922, 0.509804, 1))})
@@ -2512,7 +2512,7 @@ local function EmitDash3()
 	emitter10.LockedToPart = true
 	emitter10:SetAttribute("EmitCount", 2)
 	emitter10.Parent = anchor
-	local emitter11 = Instance.new("ParticleEmitter")
+	emitter11 = Instance.new("ParticleEmitter")
 	emitter11.Name = "Glow2"
 	emitter11.Texture = "rbxassetid://10587001886"
 	emitter11.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.203922, 0.509804, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.203922, 0.509804, 1))})
@@ -2548,7 +2548,7 @@ local function EmitDash3()
 	emitter11:SetAttribute("EmitCount", 1)
 	emitter11:SetAttribute("EmitDuration", 0)
 	emitter11.Parent = anchor
-	local emitter12 = Instance.new("ParticleEmitter")
+	emitter12 = Instance.new("ParticleEmitter")
 	emitter12.Name = "Glow1"
 	emitter12.Texture = "rbxassetid://10587001886"
 	emitter12.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.203922, 0.509804, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.203922, 0.509804, 1))})
@@ -2582,7 +2582,7 @@ local function EmitDash3()
 	emitter12.LockedToPart = true
 	emitter12:SetAttribute("EmitCount", 2)
 	emitter12.Parent = anchor
-	local emitter13 = Instance.new("ParticleEmitter")
+	emitter13 = Instance.new("ParticleEmitter")
 	emitter13.Name = "Flash3TPF"
 	emitter13.Texture = "rbxassetid://9712167340"
 	emitter13.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.203922, 0.509804, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.203922, 0.509804, 1))})
@@ -2617,7 +2617,7 @@ local function EmitDash3()
 	emitter13:SetAttribute("EmitDelay", 0)
 	emitter13:SetAttribute("EmitCount", 1)
 	emitter13.Parent = anchor
-	local emitter14 = Instance.new("ParticleEmitter")
+	emitter14 = Instance.new("ParticleEmitter")
 	emitter14.Name = "Flash2TPF"
 	emitter14.Texture = "rbxassetid://13143918039"
 	emitter14.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.203922, 0.509804, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.203922, 0.509804, 1))})
@@ -2652,7 +2652,7 @@ local function EmitDash3()
 	emitter14:SetAttribute("EmitDelay", 0)
 	emitter14:SetAttribute("EmitCount", 1)
 	emitter14.Parent = anchor
-	local emitter15 = Instance.new("ParticleEmitter")
+	emitter15 = Instance.new("ParticleEmitter")
 	emitter15.Name = "Flash1TPF"
 	emitter15.Texture = "rbxassetid://9712167340"
 	emitter15.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.203922, 0.509804, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.203922, 0.509804, 1))})
@@ -2694,11 +2694,10 @@ local function EmitDash3()
 	end
 	game:GetService("Debris"):AddItem(anchor, 2)
 end
-local function RunSequence()
-	local startHealth = Humanoid.Health
-	local delayThread = nil
-	local allContainers = {}
-	local healthConn
+function RunSequence()
+	startHealth = Humanoid.Health
+	delayThread = nil
+	allContainers = {}
 	healthConn = Humanoid.HealthChanged:Connect(function(newHealth)
 		if newHealth < startHealth then
 			healthConn:Disconnect()
@@ -2708,7 +2707,7 @@ local function RunSequence()
 			end
 		end
 	end)
-	local vfxAnchor = Instance.new("Part")
+	vfxAnchor = Instance.new("Part")
 	vfxAnchor.Size = Vector3.new(0.1, 0.1, 0.1)
 	vfxAnchor.Anchored = true
 	vfxAnchor.CanCollide = false
@@ -2719,18 +2718,18 @@ local function RunSequence()
 	vfxAnchor.CFrame = HumanoidRootPart.CFrame * CFrame.new(0, 0, -5)
 	vfxAnchor.Parent = workspace
 	table.insert(allContainers, vfxAnchor)
-	local anim = Instance.new("Animation")
+	anim = Instance.new("Animation")
 	anim.AnimationId = "rbxassetid://79527508933159"
-	local AnimTrack = Animator:LoadAnimation(anim)
+	AnimTrack = Animator:LoadAnimation(anim)
 	AnimTrack:Play()
 	PlaySound("rbxassetid://12447077180", 1, 10, 150)
 	PlaySound("rbxassetid://12331756832", 1, 10, 150)
 	PlaySound("rbxassetid://12983297694", 1, 10, 150)
 	PlaySound("rbxassetid://4458760046",  1, 10, 150)
-	local containerBeamCharge = Instance.new("Attachment")
+	containerBeamCharge = Instance.new("Attachment")
 	containerBeamCharge.Name = "Beam Charge 4 1"
 		-- Emitter: "Charge"
-	local emitter2 = Instance.new("ParticleEmitter")
+	emitter2 = Instance.new("ParticleEmitter")
 	emitter2.Name = "Charge"
 	emitter2.Texture = "rbxassetid://1084976679"
 	emitter2.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.403922, 0.760784, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.403922, 0.760784, 1))})
@@ -2767,7 +2766,7 @@ local function RunSequence()
 	emitter2:SetAttribute("DoDisableOnImpact", false)
 	emitter2.Parent = containerBeamCharge
 		-- Emitter: "Haze"
-	local emitter3 = Instance.new("ParticleEmitter")
+	emitter3 = Instance.new("ParticleEmitter")
 	emitter3.Name = "Haze"
 	emitter3.Texture = "rbxassetid://272050333"
 	emitter3.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.352941, 0.631373, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.352941, 0.631373, 1))})
@@ -2804,7 +2803,7 @@ local function RunSequence()
 	emitter3:SetAttribute("DoDisableOnImpact", false)
 	emitter3.Parent = containerBeamCharge
 		-- Emitter: "Rays1"
-	local emitter4 = Instance.new("ParticleEmitter")
+	emitter4 = Instance.new("ParticleEmitter")
 	emitter4.Name = "Rays1"
 	emitter4.Texture = "rbxassetid://15816318077"
 	emitter4.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.254902, 0.627451, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.254902, 0.627451, 1))})
@@ -2839,7 +2838,7 @@ local function RunSequence()
 	emitter4:SetAttribute("DoDisableOnImpact", false)
 	emitter4.Parent = containerBeamCharge
 		-- Emitter: "Light"
-	local emitter5 = Instance.new("ParticleEmitter")
+	emitter5 = Instance.new("ParticleEmitter")
 	emitter5.Name = "Light"
 	emitter5.Texture = "rbxassetid://1084999891"
 	emitter5.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.411765, 0.733333, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.411765, 0.733333, 1))})
@@ -2876,7 +2875,7 @@ local function RunSequence()
 	emitter5:SetAttribute("DoDisableOnImpact", false)
 	emitter5.Parent = containerBeamCharge
 		-- Emitter: "Dots"
-	local emitter6 = Instance.new("ParticleEmitter")
+	emitter6 = Instance.new("ParticleEmitter")
 	emitter6.Name = "Dots"
 	emitter6.Texture = "rbxassetid://8511527728"
 	emitter6.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.235294, 0.462745, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.235294, 0.462745, 1))})
@@ -2913,7 +2912,7 @@ local function RunSequence()
 	emitter6:SetAttribute("DoDisableOnImpact", false)
 	emitter6.Parent = containerBeamCharge
 		-- Emitter: "Waves1"
-	local emitter7 = Instance.new("ParticleEmitter")
+	emitter7 = Instance.new("ParticleEmitter")
 	emitter7.Name = "Waves1"
 	emitter7.Texture = "rbxassetid://14005221169"
 	emitter7.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)), ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1))})
@@ -2950,7 +2949,7 @@ local function RunSequence()
 	emitter7:SetAttribute("DoDisableOnImpact", false)
 	emitter7.Parent = containerBeamCharge
 		-- Emitter: "Core2"
-	local emitter8 = Instance.new("ParticleEmitter")
+	emitter8 = Instance.new("ParticleEmitter")
 	emitter8.Name = "Core2"
 	emitter8.Texture = "http://www.roblox.com/asset/?id=5304157808"
 	emitter8.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.396078, 0.686275, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.396078, 0.686275, 1))})
@@ -2987,7 +2986,7 @@ local function RunSequence()
 	emitter8:SetAttribute("DoDisableOnImpact", false)
 	emitter8.Parent = containerBeamCharge
 		-- Emitter: "Core1"
-	local emitter9 = Instance.new("ParticleEmitter")
+	emitter9 = Instance.new("ParticleEmitter")
 	emitter9.Name = "Core1"
 	emitter9.Texture = "http://www.roblox.com/asset/?id=5304157808"
 	emitter9.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.294118, 0.6, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.294118, 0.6, 1))})
@@ -3024,7 +3023,7 @@ local function RunSequence()
 	emitter9:SetAttribute("DoDisableOnImpact", false)
 	emitter9.Parent = containerBeamCharge
 		-- Emitter: "CorePull"
-	local emitter10 = Instance.new("ParticleEmitter")
+	emitter10 = Instance.new("ParticleEmitter")
 	emitter10.Name = "CorePull"
 	emitter10.Texture = "http://www.roblox.com/asset/?id=15817440279"
 	emitter10.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.254902, 0.615686, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.0392157, 0.262745, 1))})
@@ -3059,7 +3058,7 @@ local function RunSequence()
 	emitter10:SetAttribute("DoDisableOnImpact", false)
 	emitter10.Parent = containerBeamCharge
 		-- Emitter: "Wind1"
-	local emitter11 = Instance.new("ParticleEmitter")
+	emitter11 = Instance.new("ParticleEmitter")
 	emitter11.Name = "Wind1"
 	emitter11.Texture = "http://www.roblox.com/asset/?id=15863808127"
 	emitter11.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.313726, 0.678431, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.313726, 0.678431, 1))})
@@ -3099,10 +3098,10 @@ local function RunSequence()
 	containerBeamCharge.CFrame = CFrame.new(0, -1.35, 0)
 	containerBeamCharge.Parent = RightArm
 	table.insert(allContainers, containerBeamCharge)
-	local containerHit = Instance.new("Attachment")
+	containerHit = Instance.new("Attachment")
 	containerHit.Name = "Hit"
 		-- Emitter: "Hit Transparent"
-	local emitter2 = Instance.new("ParticleEmitter")
+	emitter2 = Instance.new("ParticleEmitter")
 	emitter2.Name = "Hit Transparent"
 	emitter2.Texture = "rbxassetid://10365552478"
 	emitter2.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)), ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1))})
@@ -3138,7 +3137,7 @@ local function RunSequence()
 	emitter2:SetAttribute("EmitCount", 1)
 	emitter2.Parent = containerHit
 		-- Emitter: "Hit Transparent_1"
-	local emitter3 = Instance.new("ParticleEmitter")
+	emitter3 = Instance.new("ParticleEmitter")
 	emitter3.Name = "Hit Transparent_1"
 	emitter3.Texture = "https://assetgame.roblox.com/asset/?id=11037067793&assetName=DetailedCrescent1"
 	emitter3.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0, 0.533333, 1)), ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1))})
@@ -3174,7 +3173,7 @@ local function RunSequence()
 	emitter3:SetAttribute("EmitCount", 2)
 	emitter3.Parent = containerHit
 		-- Emitter: "Hit Transparent_2"
-	local emitter4 = Instance.new("ParticleEmitter")
+	emitter4 = Instance.new("ParticleEmitter")
 	emitter4.Name = "Hit Transparent_2"
 	emitter4.Texture = "rbxassetid://10365548630"
 	emitter4.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0, 0.482353, 1)), ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1))})
@@ -3210,7 +3209,7 @@ local function RunSequence()
 	emitter4:SetAttribute("EmitCount", 1)
 	emitter4.Parent = containerHit
 		-- Emitter: "Hit Transparent_3"
-	local emitter5 = Instance.new("ParticleEmitter")
+	emitter5 = Instance.new("ParticleEmitter")
 	emitter5.Name = "Hit Transparent_3"
 	emitter5.Texture = "rbxassetid://8214516794"
 	emitter5.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0, 0.533333, 1)), ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1))})
@@ -3246,7 +3245,7 @@ local function RunSequence()
 	emitter5:SetAttribute("EmitCount", 1)
 	emitter5.Parent = containerHit
 		-- Emitter: "Hit Transparent_4"
-	local emitter6 = Instance.new("ParticleEmitter")
+	emitter6 = Instance.new("ParticleEmitter")
 	emitter6.Name = "Hit Transparent_4"
 	emitter6.Texture = "rbxassetid://7216847656"
 	emitter6.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)), ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1))})
@@ -3282,7 +3281,7 @@ local function RunSequence()
 	emitter6:SetAttribute("EmitCount", 3)
 	emitter6.Parent = containerHit
 		-- Emitter: "Hit Opaque"
-	local emitter7 = Instance.new("ParticleEmitter")
+	emitter7 = Instance.new("ParticleEmitter")
 	emitter7.Name = "Hit Opaque"
 	emitter7.Texture = "https://assetgame.roblox.com/asset/?id=11037496454&assetName=Projectile12"
 	emitter7.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0, 0.6, 1)), ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1))})
@@ -3318,7 +3317,7 @@ local function RunSequence()
 	emitter7:SetAttribute("EmitCount", 5)
 	emitter7.Parent = containerHit
 		-- Emitter: "Hit Opaque_1"
-	local emitter8 = Instance.new("ParticleEmitter")
+	emitter8 = Instance.new("ParticleEmitter")
 	emitter8.Name = "Hit Opaque_1"
 	emitter8.Texture = "https://assetgame.roblox.com/asset/?id=11037496454&assetName=Projectile12"
 	emitter8.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0, 0.835294, 1)), ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1))})
@@ -3354,7 +3353,7 @@ local function RunSequence()
 	emitter8:SetAttribute("EmitCount", 6)
 	emitter8.Parent = containerHit
 		-- Emitter: "Hit Opaque_2"
-	local emitter9 = Instance.new("ParticleEmitter")
+	emitter9 = Instance.new("ParticleEmitter")
 	emitter9.Name = "Hit Opaque_2"
 	emitter9.Texture = "https://assetgame.roblox.com/asset/?id=11037066843&assetName=Png-59"
 	emitter9.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0, 0.533333, 1)), ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1))})
@@ -3391,10 +3390,10 @@ local function RunSequence()
 	emitter9.Parent = containerHit
 		containerHit.Parent = vfxAnchor
 	table.insert(allContainers, containerHit)
-	local containerCrescent = Instance.new("Attachment")
+	containerCrescent = Instance.new("Attachment")
 	containerCrescent.Name = "Crescent Ripple With Dust"
 		-- Emitter: "Smoke"
-	local emitter2 = Instance.new("ParticleEmitter")
+	emitter2 = Instance.new("ParticleEmitter")
 	emitter2.Name = "Smoke"
 	emitter2.Texture = "rbxassetid://7216851605"
 	emitter2.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.505882, 0.47451, 0.403922)), ColorSequenceKeypoint.new(1, Color3.new(0.505882, 0.47451, 0.403922))})
@@ -3428,7 +3427,7 @@ local function RunSequence()
 	emitter2.LockedToPart = true
 	emitter2.Parent = containerCrescent
 		-- Emitter: "Wind"
-	local emitter3 = Instance.new("ParticleEmitter")
+	emitter3 = Instance.new("ParticleEmitter")
 	emitter3.Name = "Wind"
 	emitter3.Texture = "rbxassetid://11883930439"
 	emitter3.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)), ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1))})
@@ -3463,7 +3462,7 @@ local function RunSequence()
 	emitter3:SetAttribute("EmitCount", 1)
 	emitter3.Parent = containerCrescent
 		-- Emitter: "Wind"
-	local emitter4 = Instance.new("ParticleEmitter")
+	emitter4 = Instance.new("ParticleEmitter")
 	emitter4.Name = "Wind"
 	emitter4.Texture = "rbxassetid://12318427204"
 	emitter4.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)), ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1))})
@@ -3500,10 +3499,10 @@ local function RunSequence()
 	emitter4.Parent = containerCrescent
 		containerCrescent.Parent = vfxAnchor
 	table.insert(allContainers, containerCrescent)
-	local containerFlowing = Instance.new("Attachment")
+	containerFlowing = Instance.new("Attachment")
 	containerFlowing.Name = "Flowing Water Heavy Hit"
 		-- Emitter: "2"
-	local emitter2 = Instance.new("ParticleEmitter")
+	emitter2 = Instance.new("ParticleEmitter")
 	emitter2.Name = "2"
 	emitter2.Texture = "rbxassetid://10365553480"
 	emitter2.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)), ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1))})
@@ -3538,7 +3537,7 @@ local function RunSequence()
 	emitter2:SetAttribute("EmitCount", 1)
 	emitter2.Parent = containerFlowing
 		-- Emitter: "5"
-	local emitter3 = Instance.new("ParticleEmitter")
+	emitter3 = Instance.new("ParticleEmitter")
 	emitter3.Name = "5"
 	emitter3.Texture = "https://assetgame.roblox.com/asset/?id=11037493954&assetName=Projectile17"
 	emitter3.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.878431, 1, 0.890196)), ColorSequenceKeypoint.new(1, Color3.new(0.878431, 1, 0.890196))})
@@ -3573,7 +3572,7 @@ local function RunSequence()
 	emitter3:SetAttribute("EmitCount", 4)
 	emitter3.Parent = containerFlowing
 		-- Emitter: "2-2"
-	local emitter4 = Instance.new("ParticleEmitter")
+	emitter4 = Instance.new("ParticleEmitter")
 	emitter4.Name = "2-2"
 	emitter4.Texture = "rbxassetid://10365548630"
 	emitter4.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)), ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1))})
@@ -3608,7 +3607,7 @@ local function RunSequence()
 	emitter4:SetAttribute("EmitCount", 1)
 	emitter4.Parent = containerFlowing
 		-- Emitter: "4"
-	local emitter5 = Instance.new("ParticleEmitter")
+	emitter5 = Instance.new("ParticleEmitter")
 	emitter5.Name = "4"
 	emitter5.Texture = "https://assetgame.roblox.com/asset/?id=11037503255&assetName=Projectile3"
 	emitter5.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.878431, 1, 0.890196)), ColorSequenceKeypoint.new(1, Color3.new(0.878431, 1, 0.890196))})
@@ -3643,7 +3642,7 @@ local function RunSequence()
 	emitter5:SetAttribute("EmitCount", 2)
 	emitter5.Parent = containerFlowing
 		-- Emitter: "3"
-	local emitter6 = Instance.new("ParticleEmitter")
+	emitter6 = Instance.new("ParticleEmitter")
 	emitter6.Name = "3"
 	emitter6.Texture = "rbxassetid://7216855489"
 	emitter6.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0, 0.317647, 1)), ColorSequenceKeypoint.new(1, Color3.new(0, 0.317647, 1))})
@@ -3678,7 +3677,7 @@ local function RunSequence()
 	emitter6:SetAttribute("EmitCount", 20)
 	emitter6.Parent = containerFlowing
 		-- Emitter: "3-2"
-	local emitter7 = Instance.new("ParticleEmitter")
+	emitter7 = Instance.new("ParticleEmitter")
 	emitter7.Name = "3-2"
 	emitter7.Texture = "rbxassetid://7216852679"
 	emitter7.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)), ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1))})
@@ -3714,10 +3713,10 @@ local function RunSequence()
 	emitter7.Parent = containerFlowing
 		containerFlowing.Parent = vfxAnchor
 	table.insert(allContainers, containerFlowing)
-	local containerGlaring = Instance.new("Attachment")
+	containerGlaring = Instance.new("Attachment")
 	containerGlaring.Name = "Glaring Impact"
 		-- Emitter: "Glaring Impact Opaque"
-	local emitter2 = Instance.new("ParticleEmitter")
+	emitter2 = Instance.new("ParticleEmitter")
 	emitter2.Name = "Glaring Impact Opaque"
 	emitter2.Texture = "rbxassetid://13147837504"
 	emitter2.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.243137, 0.243137, 0.243137)), ColorSequenceKeypoint.new(1, Color3.new(0.243137, 0.243137, 0.243137))})
@@ -3753,7 +3752,7 @@ local function RunSequence()
 	emitter2:SetAttribute("EmitCount", 3)
 	emitter2.Parent = containerGlaring
 		-- Emitter: "Glaring Impact Opaque_1"
-	local emitter3 = Instance.new("ParticleEmitter")
+	emitter3 = Instance.new("ParticleEmitter")
 	emitter3.Name = "Glaring Impact Opaque_1"
 	emitter3.Texture = "rbxassetid://13147837504"
 	emitter3.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.243137, 0.243137, 0.243137)), ColorSequenceKeypoint.new(1, Color3.new(0.243137, 0.243137, 0.243137))})
@@ -3789,7 +3788,7 @@ local function RunSequence()
 	emitter3:SetAttribute("EmitCount", 3)
 	emitter3.Parent = containerGlaring
 		-- Emitter: "Glaring Impact Transparent"
-	local emitter4 = Instance.new("ParticleEmitter")
+	emitter4 = Instance.new("ParticleEmitter")
 	emitter4.Name = "Glaring Impact Transparent"
 	emitter4.Texture = "rbxassetid://15042525689"
 	emitter4.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.243137, 0.243137, 0.243137)), ColorSequenceKeypoint.new(1, Color3.new(0.243137, 0.243137, 0.243137))})
@@ -3825,7 +3824,7 @@ local function RunSequence()
 	emitter4:SetAttribute("EmitCount", 3)
 	emitter4.Parent = containerGlaring
 		-- Emitter: "Glaring Impact Transparent_1"
-	local emitter5 = Instance.new("ParticleEmitter")
+	emitter5 = Instance.new("ParticleEmitter")
 	emitter5.Name = "Glaring Impact Transparent_1"
 	emitter5.Texture = "rbxassetid://13147837504"
 	emitter5.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.243137, 0.243137, 0.243137)), ColorSequenceKeypoint.new(1, Color3.new(0.243137, 0.243137, 0.243137))})
@@ -3861,7 +3860,7 @@ local function RunSequence()
 	emitter5:SetAttribute("EmitCount", 3)
 	emitter5.Parent = containerGlaring
 		-- Emitter: "Glaring Impact Opaque_2"
-	local emitter6 = Instance.new("ParticleEmitter")
+	emitter6 = Instance.new("ParticleEmitter")
 	emitter6.Name = "Glaring Impact Opaque_2"
 	emitter6.Texture = "rbxassetid://6967099425"
 	emitter6.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.243137, 0.243137, 0.243137)), ColorSequenceKeypoint.new(1, Color3.new(0.243137, 0.243137, 0.243137))})
@@ -3897,7 +3896,7 @@ local function RunSequence()
 	emitter6:SetAttribute("EmitCount", 3)
 	emitter6.Parent = containerGlaring
 		-- Emitter: "Glaring Impact Opaque_3"
-	local emitter7 = Instance.new("ParticleEmitter")
+	emitter7 = Instance.new("ParticleEmitter")
 	emitter7.Name = "Glaring Impact Opaque_3"
 	emitter7.Texture = "rbxassetid://6967099425"
 	emitter7.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.243137, 0.243137, 0.243137)), ColorSequenceKeypoint.new(1, Color3.new(0.243137, 0.243137, 0.243137))})
@@ -3933,7 +3932,7 @@ local function RunSequence()
 	emitter7:SetAttribute("EmitCount", 3)
 	emitter7.Parent = containerGlaring
 		-- Emitter: "Glaring Impact Opaque_4"
-	local emitter8 = Instance.new("ParticleEmitter")
+	emitter8 = Instance.new("ParticleEmitter")
 	emitter8.Name = "Glaring Impact Opaque_4"
 	emitter8.Texture = "rbxassetid://13417032203"
 	emitter8.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.243137, 0.243137, 0.243137)), ColorSequenceKeypoint.new(1, Color3.new(0.243137, 0.243137, 0.243137))})
@@ -3969,7 +3968,7 @@ local function RunSequence()
 	emitter8:SetAttribute("EmitCount", 3)
 	emitter8.Parent = containerGlaring
 		-- Emitter: "Glaring Impact Opaque_5"
-	local emitter9 = Instance.new("ParticleEmitter")
+	emitter9 = Instance.new("ParticleEmitter")
 	emitter9.Name = "Glaring Impact Opaque_5"
 	emitter9.Texture = "rbxassetid://1075864321"
 	emitter9.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.243137, 0.243137, 0.243137)), ColorSequenceKeypoint.new(1, Color3.new(0.243137, 0.243137, 0.243137))})
@@ -4005,7 +4004,7 @@ local function RunSequence()
 	emitter9:SetAttribute("EmitCount", 3)
 	emitter9.Parent = containerGlaring
 		-- Emitter: "Glaring Impact Opaque_6"
-	local emitter10 = Instance.new("ParticleEmitter")
+	emitter10 = Instance.new("ParticleEmitter")
 	emitter10.Name = "Glaring Impact Opaque_6"
 	emitter10.Texture = "rbxassetid://10439119562"
 	emitter10.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.243137, 0.243137, 0.243137)), ColorSequenceKeypoint.new(1, Color3.new(0.243137, 0.243137, 0.243137))})
@@ -4041,7 +4040,7 @@ local function RunSequence()
 	emitter10:SetAttribute("EmitCount", 3)
 	emitter10.Parent = containerGlaring
 		-- Emitter: "Glaring Impact Opaque_7"
-	local emitter11 = Instance.new("ParticleEmitter")
+	emitter11 = Instance.new("ParticleEmitter")
 	emitter11.Name = "Glaring Impact Opaque_7"
 	emitter11.Texture = "rbxassetid://10439119562"
 	emitter11.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.243137, 0.243137, 0.243137)), ColorSequenceKeypoint.new(1, Color3.new(0.243137, 0.243137, 0.243137))})
@@ -4077,7 +4076,7 @@ local function RunSequence()
 	emitter11:SetAttribute("EmitCount", 3)
 	emitter11.Parent = containerGlaring
 		-- Emitter: "Glaring Impact Opaque_8"
-	local emitter12 = Instance.new("ParticleEmitter")
+	emitter12 = Instance.new("ParticleEmitter")
 	emitter12.Name = "Glaring Impact Opaque_8"
 	emitter12.Texture = "rbxassetid://8811061868"
 	emitter12.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.243137, 0.243137, 0.243137)), ColorSequenceKeypoint.new(1, Color3.new(0.243137, 0.243137, 0.243137))})
@@ -4117,11 +4116,11 @@ local function RunSequence()
 	delayThread = task.delay(0.37, function()
 		healthConn:Disconnect()
 		containerBeamCharge:Destroy()
-		local flashGui = Instance.new("ScreenGui")
+		flashGui = Instance.new("ScreenGui")
 		flashGui.Name = "AttackFlash"
 		flashGui.IgnoreGuiInset = true
 		flashGui.ResetOnSpawn = false
-		local flashFrame = Instance.new("Frame")
+		flashFrame = Instance.new("Frame")
 		flashFrame.Size = UDim2.fromScale(1, 1)
 		flashFrame.BackgroundColor3 = Color3.new(1, 1, 1)
 		flashFrame.BorderSizePixel = 0
@@ -4148,10 +4147,10 @@ local function RunSequence()
 		end
 		task.spawn(function()
 			pcall(function()
-				local ReplicatedStorage = game:GetService("ReplicatedStorage")
-				local Replication = ReplicatedStorage.Replication
+				ReplicatedStorage = game:GetService("ReplicatedStorage")
+				Replication = ReplicatedStorage.Replication
 				for _, conn in ipairs(getconnections(Replication.OnClientEvent)) do
-					local fn = conn.Function
+					fn = conn.Function
 					if fn then
 						task.spawn(fn, {
 							Intensity = 8,
@@ -4172,23 +4171,22 @@ local function RunSequence()
 				})
 			end)
 		end)
-		local hitbox = Instance.new("Part")
+		hitbox = Instance.new("Part")
 		hitbox.Size = Vector3.new(20, 20, 20)
 		hitbox.Anchored = true
 		hitbox.CanCollide = false
 		hitbox.Transparency = 1
 		hitbox.CFrame = HumanoidRootPart.CFrame
 		hitbox.Parent = workspace
-		local hit = false
-		local touchConn
+		hit = false
 		touchConn = hitbox.Touched:Connect(function(otherPart)
 			if hit then return end
-			local otherChar = otherPart.Parent
+			otherChar = otherPart.Parent
 			if otherChar == Character then return end
-			local otherHRP = otherChar:FindFirstChild("HumanoidRootPart")
+			otherHRP = otherChar:FindFirstChild("HumanoidRootPart")
 			if not otherHRP then return end
-			local isPlayer = Players:GetPlayerFromCharacter(otherChar) ~= nil
-			local isDummy = otherChar == workspace.Live["Weakest Dummy"]
+			isPlayer = Players:GetPlayerFromCharacter(otherChar) ~= nil
+			isDummy = otherChar == workspace.Live["Weakest Dummy"]
 			if not isPlayer and not isDummy then return end
 			hit = true
 			touchConn:Disconnect()
@@ -4204,9 +4202,9 @@ local function RunSequence()
 		end)
 	end)
 end
-local RunService = game:GetService("RunService")
-local sequenceRunning = false
-local attack2Running = false
+RunService = game:GetService("RunService")
+sequenceRunning = false
+attack2Running = false
 
 RunService.Heartbeat:Connect(function()
 	for _, track in ipairs(Animator:GetPlayingAnimationTracks()) do
@@ -4223,9 +4221,9 @@ RunService.Heartbeat:Connect(function()
 		if not attack2Running and string.find(track.Animation.AnimationId, TRIGGER_ANIM_IDS.ATTACK2) then
 			attack2Running = true
 			track:Stop(0)
-			local attack2Anim = Instance.new("Animation")
+			attack2Anim = Instance.new("Animation")
 			attack2Anim.AnimationId = "rbxassetid://71181015443030"
-			local attack2Track = Animator:LoadAnimation(attack2Anim)
+			attack2Track = Animator:LoadAnimation(attack2Anim)
 			attack2Track:Play()
 			attack2Track.TimePosition = 4.59
 			task.delay(2, function()
@@ -4233,11 +4231,11 @@ RunService.Heartbeat:Connect(function()
 			end)
 
 			-- Yellow Charge: startup VFX for Attack 2 (0.3s duration)
-			local containerYellowCharge = Instance.new("Attachment")
+			containerYellowCharge = Instance.new("Attachment")
 			containerYellowCharge.Name = "Beam Charge 2 1"
 
 			-- Emitter: "Wind1"
-			local ycEmitter1 = Instance.new("ParticleEmitter")
+			ycEmitter1 = Instance.new("ParticleEmitter")
 			ycEmitter1.Name = "Wind1"
 			ycEmitter1.Texture = "rbxassetid://18457400581"
 			ycEmitter1.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 0.854902, 0.133333)), ColorSequenceKeypoint.new(1, Color3.new(1, 0.854902, 0.133333))})
@@ -4275,7 +4273,7 @@ RunService.Heartbeat:Connect(function()
 			ycEmitter1.Parent = containerYellowCharge
 
 			-- Emitter: "Wind1"
-			local ycEmitter2 = Instance.new("ParticleEmitter")
+			ycEmitter2 = Instance.new("ParticleEmitter")
 			ycEmitter2.Name = "Wind1"
 			ycEmitter2.Texture = "rbxassetid://13353205950"
 			ycEmitter2.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 0.854902, 0.133333)), ColorSequenceKeypoint.new(1, Color3.new(1, 0.854902, 0.133333))})
@@ -4313,7 +4311,7 @@ RunService.Heartbeat:Connect(function()
 			ycEmitter2.Parent = containerYellowCharge
 
 			-- Emitter: "Charge"
-			local ycEmitter3 = Instance.new("ParticleEmitter")
+			ycEmitter3 = Instance.new("ParticleEmitter")
 			ycEmitter3.Name = "Charge"
 			ycEmitter3.Texture = "rbxassetid://1084976679"
 			ycEmitter3.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 0.796078, 0.184314)), ColorSequenceKeypoint.new(1, Color3.new(1, 0.796078, 0.184314))})
@@ -4351,7 +4349,7 @@ RunService.Heartbeat:Connect(function()
 			ycEmitter3.Parent = containerYellowCharge
 
 			-- Emitter: "Haze"
-			local ycEmitter4 = Instance.new("ParticleEmitter")
+			ycEmitter4 = Instance.new("ParticleEmitter")
 			ycEmitter4.Name = "Haze"
 			ycEmitter4.Texture = "rbxassetid://272050333"
 			ycEmitter4.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 0.909804, 0.215686)), ColorSequenceKeypoint.new(1, Color3.new(1, 0.909804, 0.215686))})
@@ -4389,7 +4387,7 @@ RunService.Heartbeat:Connect(function()
 			ycEmitter4.Parent = containerYellowCharge
 
 			-- Emitter: "Rays1"
-			local ycEmitter5 = Instance.new("ParticleEmitter")
+			ycEmitter5 = Instance.new("ParticleEmitter")
 			ycEmitter5.Name = "Rays1"
 			ycEmitter5.Texture = "rbxassetid://15816318077"
 			ycEmitter5.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 0.827451, 0.145098)), ColorSequenceKeypoint.new(1, Color3.new(1, 0.827451, 0.145098))})
@@ -4425,7 +4423,7 @@ RunService.Heartbeat:Connect(function()
 			ycEmitter5.Parent = containerYellowCharge
 
 			-- Emitter: "Light"
-			local ycEmitter6 = Instance.new("ParticleEmitter")
+			ycEmitter6 = Instance.new("ParticleEmitter")
 			ycEmitter6.Name = "Light"
 			ycEmitter6.Texture = "rbxassetid://1084999891"
 			ycEmitter6.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 1, 0.180392)), ColorSequenceKeypoint.new(1, Color3.new(1, 1, 0.180392))})
@@ -4463,7 +4461,7 @@ RunService.Heartbeat:Connect(function()
 			ycEmitter6.Parent = containerYellowCharge
 
 			-- Emitter: "Dots"
-			local ycEmitter7 = Instance.new("ParticleEmitter")
+			ycEmitter7 = Instance.new("ParticleEmitter")
 			ycEmitter7.Name = "Dots"
 			ycEmitter7.Texture = "rbxassetid://8511527728"
 			ycEmitter7.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 0.721569, 0.160784)), ColorSequenceKeypoint.new(1, Color3.new(1, 0.721569, 0.160784))})
@@ -4501,7 +4499,7 @@ RunService.Heartbeat:Connect(function()
 			ycEmitter7.Parent = containerYellowCharge
 
 			-- Emitter: "Waves1"
-			local ycEmitter8 = Instance.new("ParticleEmitter")
+			ycEmitter8 = Instance.new("ParticleEmitter")
 			ycEmitter8.Name = "Waves1"
 			ycEmitter8.Texture = "rbxassetid://14005221169"
 			ycEmitter8.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 0.709804, 0.12549)), ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1))})
@@ -4539,7 +4537,7 @@ RunService.Heartbeat:Connect(function()
 			ycEmitter8.Parent = containerYellowCharge
 
 			-- Emitter: "Core2"
-			local ycEmitter9 = Instance.new("ParticleEmitter")
+			ycEmitter9 = Instance.new("ParticleEmitter")
 			ycEmitter9.Name = "Core2"
 			ycEmitter9.Texture = "http://www.roblox.com/asset/?id=5304157808"
 			ycEmitter9.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 0.870588, 0.137255)), ColorSequenceKeypoint.new(1, Color3.new(1, 0.870588, 0.137255))})
@@ -4577,7 +4575,7 @@ RunService.Heartbeat:Connect(function()
 			ycEmitter9.Parent = containerYellowCharge
 
 			-- Emitter: "Core1"
-			local ycEmitter10 = Instance.new("ParticleEmitter")
+			ycEmitter10 = Instance.new("ParticleEmitter")
 			ycEmitter10.Name = "Core1"
 			ycEmitter10.Texture = "http://www.roblox.com/asset/?id=5304157808"
 			ycEmitter10.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 0.831373, 0.435294)), ColorSequenceKeypoint.new(1, Color3.new(1, 0.831373, 0.435294))})
@@ -4615,7 +4613,7 @@ RunService.Heartbeat:Connect(function()
 			ycEmitter10.Parent = containerYellowCharge
 
 			-- Emitter: "CorePull"
-			local ycEmitter11 = Instance.new("ParticleEmitter")
+			ycEmitter11 = Instance.new("ParticleEmitter")
 			ycEmitter11.Name = "CorePull"
 			ycEmitter11.Texture = "http://www.roblox.com/asset/?id=15817440279"
 			ycEmitter11.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 0.827451, 0.133333)), ColorSequenceKeypoint.new(1, Color3.new(1, 0.827451, 0.133333))})
@@ -4651,7 +4649,7 @@ RunService.Heartbeat:Connect(function()
 			ycEmitter11.Parent = containerYellowCharge
 
 			-- Emitter: "Wind1"
-			local ycEmitter12 = Instance.new("ParticleEmitter")
+			ycEmitter12 = Instance.new("ParticleEmitter")
 			ycEmitter12.Name = "Wind1"
 			ycEmitter12.Texture = "rbxassetid://13603608421"
 			ycEmitter12.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 0.854902, 0.133333)), ColorSequenceKeypoint.new(1, Color3.new(1, 0.854902, 0.133333))})
@@ -4708,38 +4706,37 @@ RunService.Heartbeat:Connect(function()
 			PlaySound("rbxassetid://12481912200", 1, 10, 150)
 			PlaySound("rbxassetid://12981921930", 1, 10, 150)
 task.spawn(function()
-task.spawn(function()
 wait(0.2)
-        local Players = game:GetService("Players")
-        local RunService = game:GetService("RunService")
+        Players = game:GetService("Players")
+        RunService = game:GetService("RunService")
 
         if not RunService:IsClient() then return end
 
-        local player = Players.LocalPlayer
-        local character = player.Character or player.CharacterAdded:Wait()
-        local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+        player = Players.LocalPlayer
+        character = player.Character or player.CharacterAdded:Wait()
+        humanoidRootPart = character:WaitForChild("HumanoidRootPart")
 
-        local effectPart = Instance.new("Part")
-        effectPart.Anchored = true
-        effectPart.CanCollide = false
-        effectPart.Transparency = 1
-        effectPart.Parent = workspace
+        effectPart1 = Instance.new("Part")
+        effectPart1.Anchored = true
+        effectPart1.CanCollide = false
+        effectPart1.Transparency = 1
+        effectPart1.Parent = workspace
 
-        local forward = humanoidRootPart.CFrame.LookVector
-        local effectCFrame = CFrame.new(
-            humanoidRootPart.Position + (forward * 5),
-            humanoidRootPart.Position + (forward * 5) + forward
+        forward1 = humanoidRootPart.CFrame.LookVector
+        effectCFrame1 = CFrame.new(
+            humanoidRootPart.Position + (forward1 * 5),
+            humanoidRootPart.Position + (forward1 * 5) + forward1
         )
-        effectPart.CFrame = effectCFrame
+        effectPart1.CFrame = effectCFrame1
 
-        local function createFolderPath(parent, path)
+        function createFolderPath1(parent, path)
             if not path or path == "" then return parent end
 
-            local current = parent
+            current = parent
             for _, name in ipairs(string.split(path, ".")) do
-                local existing = current:FindFirstChild(name)
+                existing = current:FindFirstChild(name)
                 if not existing then
-                    local new = Instance.new("Folder")
+                    new = Instance.new("Folder")
                     new.Name = name
                     new.Parent = current
                     current = new
@@ -4750,11 +4747,11 @@ wait(0.2)
             return current
         end
 
-        local particles = {}
+        particles1 = {}
 
             do
-                local particle = Instance.new("ParticleEmitter")
-                local parent = effectPart
+                particle = Instance.new("ParticleEmitter")
+                parent = effectPart1
                         particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
                 particle.FlipbookFramerate = NumberRange.new(4.831530, 4.831530)
                 particle.LightInfluence = 0
@@ -4790,12 +4787,12 @@ wait(0.2)
                 particle.LightEmission = 0
 
                 particle.Parent = parent
-                table.insert(particles, particle)
+                table.insert(particles1, particle)
             end
 
             do
-                local particle = Instance.new("ParticleEmitter")
-                local parent = effectPart
+                particle = Instance.new("ParticleEmitter")
+                parent = effectPart1
                         particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
                 particle.FlipbookFramerate = NumberRange.new(4.679583, 4.679583)
                 particle.LightInfluence = 0
@@ -4831,12 +4828,12 @@ wait(0.2)
                 particle.LightEmission = -1
 
                 particle.Parent = parent
-                table.insert(particles, particle)
+                table.insert(particles1, particle)
             end
 
             do
-                local particle = Instance.new("ParticleEmitter")
-                local parent = effectPart
+                particle = Instance.new("ParticleEmitter")
+                parent = effectPart1
                         particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
                 particle.FlipbookFramerate = NumberRange.new(1.610510, 1.610510)
                 particle.LightInfluence = 0
@@ -4872,12 +4869,12 @@ wait(0.2)
                 particle.LightEmission = -2
 
                 particle.Parent = parent
-                table.insert(particles, particle)
+                table.insert(particles1, particle)
             end
 
             do
-                local particle = Instance.new("ParticleEmitter")
-                local parent = effectPart
+                particle = Instance.new("ParticleEmitter")
+                parent = effectPart1
                         particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
                 particle.FlipbookFramerate = NumberRange.new(1.610510, 1.610510)
                 particle.LightInfluence = 0
@@ -4913,12 +4910,12 @@ wait(0.2)
                 particle.LightEmission = 1
 
                 particle.Parent = parent
-                table.insert(particles, particle)
+                table.insert(particles1, particle)
             end
 
             do
-                local particle = Instance.new("ParticleEmitter")
-                local parent = effectPart
+                particle = Instance.new("ParticleEmitter")
+                parent = effectPart1
                         particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
                 particle.FlipbookFramerate = NumberRange.new(2.105813, 2.105813)
                 particle.LightInfluence = 0
@@ -4954,12 +4951,12 @@ wait(0.2)
                 particle.LightEmission = 0
 
                 particle.Parent = parent
-                table.insert(particles, particle)
+                table.insert(particles1, particle)
             end
 
             do
-                local particle = Instance.new("ParticleEmitter")
-                local parent = effectPart
+                particle = Instance.new("ParticleEmitter")
+                parent = effectPart1
                         particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
                 particle.FlipbookFramerate = NumberRange.new(1.761093, 1.761093)
                 particle.LightInfluence = 0
@@ -4995,12 +4992,12 @@ wait(0.2)
                 particle.LightEmission = 0
 
                 particle.Parent = parent
-                table.insert(particles, particle)
+                table.insert(particles1, particle)
             end
 
             do
-                local particle = Instance.new("ParticleEmitter")
-                local parent = effectPart
+                particle = Instance.new("ParticleEmitter")
+                parent = effectPart1
                         particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
                 particle.FlipbookFramerate = NumberRange.new(17.610928, 17.610928)
                 particle.LightInfluence = 0
@@ -5036,12 +5033,12 @@ wait(0.2)
                 particle.LightEmission = -5
 
                 particle.Parent = parent
-                table.insert(particles, particle)
+                table.insert(particles1, particle)
             end
 
             do
-                local particle = Instance.new("ParticleEmitter")
-                local parent = effectPart
+                particle = Instance.new("ParticleEmitter")
+                parent = effectPart1
                         particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
                 particle.FlipbookFramerate = NumberRange.new(5.943688, 5.943688)
                 particle.LightInfluence = 0
@@ -5077,12 +5074,12 @@ wait(0.2)
                 particle.LightEmission = -3
 
                 particle.Parent = parent
-                table.insert(particles, particle)
+                table.insert(particles1, particle)
             end
 
             do
-                local particle = Instance.new("ParticleEmitter")
-                local parent = effectPart
+                particle = Instance.new("ParticleEmitter")
+                parent = effectPart1
                         particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
                 particle.FlipbookFramerate = NumberRange.new(4.090952, 4.090952)
                 particle.LightInfluence = 0
@@ -5118,12 +5115,12 @@ wait(0.2)
                 particle.LightEmission = -5
 
                 particle.Parent = parent
-                table.insert(particles, particle)
+                table.insert(particles1, particle)
             end
 
             do
-                local particle = Instance.new("ParticleEmitter")
-                local parent = effectPart
+                particle = Instance.new("ParticleEmitter")
+                parent = effectPart1
                         particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
                 particle.FlipbookFramerate = NumberRange.new(2.415765, 2.415765)
                 particle.LightInfluence = 0
@@ -5159,14 +5156,14 @@ wait(0.2)
                 particle.LightEmission = -5
 
                 particle.Parent = parent
-                table.insert(particles, particle)
+                table.insert(particles1, particle)
             end
 
             do
-                local particle = Instance.new("ParticleEmitter")
-                local parent = effectPart
+                particle = Instance.new("ParticleEmitter")
+                parent = effectPart1
 
-                parent = createFolderPath(effectPart, "Attachment")
+                parent = createFolderPath1(effectPart1, "Attachment")
                             particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
                 particle.FlipbookFramerate = NumberRange.new(3.641973, 3.641973)
                 particle.LightInfluence = 1
@@ -5202,14 +5199,14 @@ wait(0.2)
                 particle.LightEmission = 0
 
                 particle.Parent = parent
-                table.insert(particles, particle)
+                table.insert(particles1, particle)
             end
 
             do
-                local particle = Instance.new("ParticleEmitter")
-                local parent = effectPart
+                particle = Instance.new("ParticleEmitter")
+                parent = effectPart1
 
-                parent = createFolderPath(effectPart, "Attachment.Attachment")
+                parent = createFolderPath1(effectPart1, "Attachment.Attachment")
                             particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
                 particle.FlipbookFramerate = NumberRange.new(4.496263, 4.496263)
                 particle.LightInfluence = 1
@@ -5245,12 +5242,12 @@ wait(0.2)
                 particle.LightEmission = 0
 
                 particle.Parent = parent
-                table.insert(particles, particle)
+                table.insert(particles1, particle)
             end
 
             do
-                local particle = Instance.new("ParticleEmitter")
-                local parent = effectPart
+                particle = Instance.new("ParticleEmitter")
+                parent = effectPart1
                         particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Surface
                 particle.FlipbookFramerate = NumberRange.new(8.348885, 8.348885)
                 particle.LightInfluence = 0
@@ -5286,14 +5283,14 @@ wait(0.2)
                 particle.LightEmission = -15
 
                 particle.Parent = parent
-                table.insert(particles, particle)
+                table.insert(particles1, particle)
             end
 
             do
-                local particle = Instance.new("ParticleEmitter")
-                local parent = effectPart
+                particle = Instance.new("ParticleEmitter")
+                parent = effectPart1
 
-                parent = createFolderPath(effectPart, "Attachment")
+                parent = createFolderPath1(effectPart1, "Attachment")
                             particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
                 particle.FlipbookFramerate = NumberRange.new(1.056656, 1.056656)
                 particle.LightInfluence = 0
@@ -5329,12 +5326,12 @@ wait(0.2)
                 particle.LightEmission = 0
 
                 particle.Parent = parent
-                table.insert(particles, particle)
+                table.insert(particles1, particle)
             end
 
             do
-                local particle = Instance.new("ParticleEmitter")
-                local parent = effectPart
+                particle = Instance.new("ParticleEmitter")
+                parent = effectPart1
                         particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
                 particle.FlipbookFramerate = NumberRange.new(0.855891, 0.855891)
                 particle.LightInfluence = 0
@@ -5370,14 +5367,14 @@ wait(0.2)
                 particle.LightEmission = 0
 
                 particle.Parent = parent
-                table.insert(particles, particle)
+                table.insert(particles1, particle)
             end
 
             do
-                local particle = Instance.new("ParticleEmitter")
-                local parent = effectPart
+                particle = Instance.new("ParticleEmitter")
+                parent = effectPart1
 
-                parent = createFolderPath(effectPart, "Attachment")
+                parent = createFolderPath1(effectPart1, "Attachment")
                             particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
                 particle.FlipbookFramerate = NumberRange.new(1.056656, 1.056656)
                 particle.LightInfluence = 0
@@ -5413,12 +5410,12 @@ wait(0.2)
                 particle.LightEmission = -2
 
                 particle.Parent = parent
-                table.insert(particles, particle)
+                table.insert(particles1, particle)
             end
 
             do
-                local particle = Instance.new("ParticleEmitter")
-                local parent = effectPart
+                particle = Instance.new("ParticleEmitter")
+                parent = effectPart1
                         particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
                 particle.FlipbookFramerate = NumberRange.new(3.962459, 3.962459)
                 particle.LightInfluence = 0
@@ -5454,12 +5451,12 @@ wait(0.2)
                 particle.LightEmission = -1
 
                 particle.Parent = parent
-                table.insert(particles, particle)
+                table.insert(particles1, particle)
             end
 
             do
-                local particle = Instance.new("ParticleEmitter")
-                local parent = effectPart
+                particle = Instance.new("ParticleEmitter")
+                parent = effectPart1
                         particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
                 particle.FlipbookFramerate = NumberRange.new(161.800385, 161.800385)
                 particle.LightInfluence = 0
@@ -5495,12 +5492,12 @@ wait(0.2)
                 particle.LightEmission = 1
 
                 particle.Parent = parent
-                table.insert(particles, particle)
+                table.insert(particles1, particle)
             end
 
             do
-                local particle = Instance.new("ParticleEmitter")
-                local parent = effectPart
+                particle = Instance.new("ParticleEmitter")
+                parent = effectPart1
                         particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
                 particle.FlipbookFramerate = NumberRange.new(2.415765, 2.415765)
                 particle.LightInfluence = 0
@@ -5536,60 +5533,60 @@ wait(0.2)
                 particle.LightEmission = -2
 
                 particle.Parent = parent
-                table.insert(particles, particle)
+                table.insert(particles1, particle)
             end
 
-        for _, particle in ipairs(particles) do
+        for _, particle in ipairs(particles1) do
             particle.Enabled = true
         end
 
-        local maxLifetime = 0
-        for _, particle in ipairs(particles) do
-            maxLifetime = math.max(maxLifetime, particle.Lifetime.Max)
+        maxLifetime1 = 0
+        for _, particle in ipairs(particles1) do
+            maxLifetime1 = math.max(maxLifetime1, particle.Lifetime.Max)
         end
 
-        task.wait(maxLifetime * 0.5)
+        task.wait(maxLifetime1 * 0.5)
 
-        for _, particle in ipairs(particles) do
+        for _, particle in ipairs(particles1) do
             particle.Enabled = false
         end
 
         task.wait(1.8)
-        effectPart:Destroy()
+        effectPart1:Destroy()
 end)
 
 task.spawn(function()
 wait(0.2)
-        local Players = game:GetService("Players")
-        local RunService = game:GetService("RunService")
+        Players = game:GetService("Players")
+        RunService = game:GetService("RunService")
 
         if not RunService:IsClient() then return end
 
-        local player = Players.LocalPlayer
-        local character = player.Character or player.CharacterAdded:Wait()
-        local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+        player = Players.LocalPlayer
+        character = player.Character or player.CharacterAdded:Wait()
+        humanoidRootPart = character:WaitForChild("HumanoidRootPart")
 
-        local effectPart = Instance.new("Part")
-        effectPart.Anchored = true
-        effectPart.CanCollide = false
-        effectPart.Transparency = 1
-        effectPart.Parent = workspace
+        effectPart2 = Instance.new("Part")
+        effectPart2.Anchored = true
+        effectPart2.CanCollide = false
+        effectPart2.Transparency = 1
+        effectPart2.Parent = workspace
 
-        local forward = humanoidRootPart.CFrame.LookVector
-        local effectCFrame = CFrame.new(
-            humanoidRootPart.Position + (forward * 5),
-            humanoidRootPart.Position + (forward * 5) + forward
+        forward2 = humanoidRootPart.CFrame.LookVector
+        effectCFrame2 = CFrame.new(
+            humanoidRootPart.Position + (forward2 * 5),
+            humanoidRootPart.Position + (forward2 * 5) + forward2
         )
-        effectPart.CFrame = effectCFrame
+        effectPart2.CFrame = effectCFrame2
 
-        local function createFolderPath(parent, path)
+        function createFolderPath2(parent, path)
             if not path or path == "" then return parent end
 
-            local current = parent
+            current = parent
             for _, name in ipairs(string.split(path, ".")) do
-                local existing = current:FindFirstChild(name)
+                existing = current:FindFirstChild(name)
                 if not existing then
-                    local new = Instance.new("Folder")
+                    new = Instance.new("Folder")
                     new.Name = name
                     new.Parent = current
                     current = new
@@ -5600,11 +5597,11 @@ wait(0.2)
             return current
         end
 
-        local particles = {}
+        particles2 = {}
 
             do
-                local particle = Instance.new("ParticleEmitter")
-                local parent = effectPart
+                particle = Instance.new("ParticleEmitter")
+                parent = effectPart2
                         particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
                 particle.FlipbookFramerate = NumberRange.new(0.391202, 0.391202)
                 particle.LightInfluence = 1
@@ -5640,60 +5637,60 @@ wait(0.2)
                 particle.LightEmission = 0
 
                 particle.Parent = parent
-                table.insert(particles, particle)
+                table.insert(particles2, particle)
             end
 
-        for _, particle in ipairs(particles) do
+        for _, particle in ipairs(particles2) do
             particle.Enabled = true
         end
 
-        local maxLifetime = 0
-        for _, particle in ipairs(particles) do
-            maxLifetime = math.max(maxLifetime, particle.Lifetime.Max)
+        maxLifetime2 = 0
+        for _, particle in ipairs(particles2) do
+            maxLifetime2 = math.max(maxLifetime2, particle.Lifetime.Max)
         end
 
-        task.wait(maxLifetime * 0.5)
+        task.wait(maxLifetime2 * 0.5)
 
-        for _, particle in ipairs(particles) do
+        for _, particle in ipairs(particles2) do
             particle.Enabled = false
         end
 
         task.wait(1)
-        effectPart:Destroy()
+        effectPart2:Destroy()
 end)
 
 task.spawn(function()
 wait(0.2)
-        local Players = game:GetService("Players")
-        local RunService = game:GetService("RunService")
+        Players = game:GetService("Players")
+        RunService = game:GetService("RunService")
 
         if not RunService:IsClient() then return end
 
-        local player = Players.LocalPlayer
-        local character = player.Character or player.CharacterAdded:Wait()
-        local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+        player = Players.LocalPlayer
+        character = player.Character or player.CharacterAdded:Wait()
+        humanoidRootPart = character:WaitForChild("HumanoidRootPart")
 
-        local effectPart = Instance.new("Part")
-        effectPart.Anchored = true
-        effectPart.CanCollide = false
-        effectPart.Transparency = 1
-        effectPart.Parent = workspace
+        effectPart3 = Instance.new("Part")
+        effectPart3.Anchored = true
+        effectPart3.CanCollide = false
+        effectPart3.Transparency = 1
+        effectPart3.Parent = workspace
 
-        local forward = humanoidRootPart.CFrame.LookVector
-        local effectCFrame = CFrame.new(
-            humanoidRootPart.Position + (forward * 5),
-            humanoidRootPart.Position + (forward * 5) + forward
+        forward3 = humanoidRootPart.CFrame.LookVector
+        effectCFrame3 = CFrame.new(
+            humanoidRootPart.Position + (forward3 * 5),
+            humanoidRootPart.Position + (forward3 * 5) + forward3
         )
-        effectPart.CFrame = effectCFrame
+        effectPart3.CFrame = effectCFrame3
 
-        local function createFolderPath(parent, path)
+        function createFolderPath3(parent, path)
             if not path or path == "" then return parent end
 
-            local current = parent
+            current = parent
             for _, name in ipairs(string.split(path, ".")) do
-                local existing = current:FindFirstChild(name)
+                existing = current:FindFirstChild(name)
                 if not existing then
-                    local new = Instance.new("Folder")
+                    new = Instance.new("Folder")
                     new.Name = name
                     new.Parent = current
                     current = new
@@ -5704,11 +5701,11 @@ wait(0.2)
             return current
         end
 
-        local particles = {}
+        particles3 = {}
 
             do
-                local particle = Instance.new("ParticleEmitter")
-                local parent = effectPart
+                particle = Instance.new("ParticleEmitter")
+                parent = effectPart3
                         particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
                 particle.FlipbookFramerate = NumberRange.new(2.415765, 2.415765)
                 particle.LightInfluence = 0
@@ -5744,12 +5741,12 @@ wait(0.2)
                 particle.LightEmission = -5
 
                 particle.Parent = parent
-                table.insert(particles, particle)
+                table.insert(particles3, particle)
             end
 
             do
-                local particle = Instance.new("ParticleEmitter")
-                local parent = effectPart
+                particle = Instance.new("ParticleEmitter")
+                parent = effectPart3
                         particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
                 particle.FlipbookFramerate = NumberRange.new(11.999235, 11.999235)
                 particle.LightInfluence = 0
@@ -5785,12 +5782,12 @@ wait(0.2)
                 particle.LightEmission = -2
 
                 particle.Parent = parent
-                table.insert(particles, particle)
+                table.insert(particles3, particle)
             end
 
             do
-                local particle = Instance.new("ParticleEmitter")
-                local parent = effectPart
+                particle = Instance.new("ParticleEmitter")
+                parent = effectPart3
                         particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
                 particle.FlipbookFramerate = NumberRange.new(1.610510, 1.610510)
                 particle.LightInfluence = 0
@@ -5826,12 +5823,12 @@ wait(0.2)
                 particle.LightEmission = 1
 
                 particle.Parent = parent
-                table.insert(particles, particle)
+                table.insert(particles3, particle)
             end
 
             do
-                local particle = Instance.new("ParticleEmitter")
-                local parent = effectPart
+                particle = Instance.new("ParticleEmitter")
+                parent = effectPart3
                         particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
                 particle.FlipbookFramerate = NumberRange.new(2.554505, 2.554505)
                 particle.LightInfluence = 0
@@ -5867,12 +5864,12 @@ wait(0.2)
                 particle.LightEmission = 0
 
                 particle.Parent = parent
-                table.insert(particles, particle)
+                table.insert(particles3, particle)
             end
 
             do
-                local particle = Instance.new("ParticleEmitter")
-                local parent = effectPart
+                particle = Instance.new("ParticleEmitter")
+                parent = effectPart3
                         particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
                 particle.FlipbookFramerate = NumberRange.new(0.855891, 0.855891)
                 particle.LightInfluence = 0
@@ -5908,26 +5905,26 @@ wait(0.2)
                 particle.LightEmission = 0
 
                 particle.Parent = parent
-                table.insert(particles, particle)
+                table.insert(particles3, particle)
             end
 
-        for _, particle in ipairs(particles) do
+        for _, particle in ipairs(particles3) do
             particle.Enabled = true
         end
 
-        local maxLifetime = 0
-        for _, particle in ipairs(particles) do
-            maxLifetime = math.max(maxLifetime, particle.Lifetime.Max)
+        maxLifetime3 = 0
+        for _, particle in ipairs(particles3) do
+            maxLifetime3 = math.max(maxLifetime3, particle.Lifetime.Max)
         end
 
-        task.wait(maxLifetime * 1.8)
+        task.wait(maxLifetime3 * 1.8)
 
-        for _, particle in ipairs(particles) do
+        for _, particle in ipairs(particles3) do
             particle.Enabled = false
         end
 
         task.wait(1.8)
-        effectPart:Destroy()
+        effectPart3:Destroy()
 end)
 			-- Delayed sounds (0.13s)
 			task.delay(0.13, function()
@@ -5943,11 +5940,11 @@ end)
 				PlaySound("rbxassetid://13886037338", 1, 10, 150)
 
 				-- Screen flash
-				local flashGui = Instance.new("ScreenGui")
+				flashGui = Instance.new("ScreenGui")
 				flashGui.Name = "Attack2Flash"
 				flashGui.IgnoreGuiInset = true
 				flashGui.ResetOnSpawn = false
-				local flashFrame = Instance.new("Frame")
+				flashFrame = Instance.new("Frame")
 				flashFrame.Size = UDim2.fromScale(1, 1)
 				flashFrame.BackgroundColor3 = Color3.new(1, 1, 1)
 				flashFrame.BorderSizePixel = 0
@@ -5959,10 +5956,10 @@ end)
 				-- Camshake
 				task.spawn(function()
 					pcall(function()
-						local ReplicatedStorage = game:GetService("ReplicatedStorage")
-						local Replication = ReplicatedStorage.Replication
+						ReplicatedStorage = game:GetService("ReplicatedStorage")
+						Replication = ReplicatedStorage.Replication
 						for _, conn in ipairs(getconnections(Replication.OnClientEvent)) do
-							local fn = conn.Function
+							fn = conn.Function
 							if fn then
 								task.spawn(fn, {
 									Intensity = 5,
@@ -5984,30 +5981,30 @@ end)
 -- FlyScript (LocalScript) — StarterPlayerScripts or StarterCharacterScripts
 -- Jump to fly. Feel the turn. Feel the air. MWAH 🤌
 
-local Players          = game:GetService("Players")
-local RunService       = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
-local TweenService     = game:GetService("TweenService")
-local ContentProvider  = game:GetService("ContentProvider")
+Players          = game:GetService("Players")
+RunService       = game:GetService("RunService")
+UserInputService = game:GetService("UserInputService")
+TweenService     = game:GetService("TweenService")
+ContentProvider  = game:GetService("ContentProvider")
 
 -- ──────────────────────────────────────────────
 -- CONFIG
 -- ──────────────────────────────────────────────
-local FLY_SPEED    = 110
-local BOOST_MULT   = 2
-local BANK_ANGLE   = 20
-local MAX_FLY_HEIGHT = 350
+FLY_SPEED    = 110
+BOOST_MULT   = 2
+BANK_ANGLE   = 20
+MAX_FLY_HEIGHT = 350
 
-local FOV_NORMAL   = nil
-local FOV_FLYING   = nil
+FOV_NORMAL   = nil
+FOV_FLYING   = nil
 
-local FLY_ANIM_ID  = "rbxassetid://78547941116306"
-local DIVE_ANIM_ID = "rbxassetid://122216590829087"
-local LAND_ANIM_ID = "rbxassetid://125881219961499"
-local IDLE_ANIM_ID = "rbxassetid://17124063826"
-local FALL_ANIM_ID = "rbxassetid://15280575192"
+FLY_ANIM_ID  = "rbxassetid://78547941116306"
+DIVE_ANIM_ID = "rbxassetid://122216590829087"
+LAND_ANIM_ID = "rbxassetid://125881219961499"
+IDLE_ANIM_ID = "rbxassetid://17124063826"
+FALL_ANIM_ID = "rbxassetid://15280575192"
 
-local LAND_SOUNDS = {
+LAND_SOUNDS = {
     "rbxassetid://12331756832",
     "rbxassetid://12509675323",
     "rbxassetid://12509572882",
@@ -6019,86 +6016,86 @@ local LAND_SOUNDS = {
 }
 -- ──────────────────────────────────────────────
 
-local player    = Players.LocalPlayer
-local character = player.Character or player.CharacterAdded:Wait()
-local humanoid  = character:WaitForChild("Humanoid")
-local rootPart  = character:WaitForChild("HumanoidRootPart")
-local camera    = workspace.CurrentCamera
-local animator  = humanoid:FindFirstChildOfClass("Animator") or humanoid:WaitForChild("Animator")
+player    = Players.LocalPlayer
+character = player.Character or player.CharacterAdded:Wait()
+humanoid  = character:WaitForChild("Humanoid")
+rootPart  = character:WaitForChild("HumanoidRootPart")
+camera    = workspace.CurrentCamera
+animator  = humanoid:FindFirstChildOfClass("Animator") or humanoid:WaitForChild("Animator")
 
-local function randomName()
-    local s = ""
+function randomName()
+    s = ""
     for _ = 1, 12 do s = s .. string.char(math.random(97, 122)) end
     return s
 end
-local BV_NAME = randomName()
+BV_NAME = randomName()
 
-local FOV_TWEEN = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-local lastFOVTarget = nil
-local function tweenFOV(target)
+FOV_TWEEN = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+lastFOVTarget = nil
+function tweenFOV(target)
     if target == lastFOVTarget then return end
     lastFOVTarget = target
     TweenService:Create(camera, FOV_TWEEN, { FieldOfView = target }):Play()
 end
 
-local controlModule = require(player:WaitForChild("PlayerScripts")
+controlModule = require(player:WaitForChild("PlayerScripts")
     :WaitForChild("PlayerModule")
     :WaitForChild("ControlModule"))
 
 -- ── State ─────────────────────────────────────
-local flying      = false
-local falling     = false
-local renderConn  = nil
+flying      = false
+falling     = false
+renderConn  = nil
 
-local flySound  = nil
-local fadeTween = nil
-local landSounds = {}
+flySound  = nil
+fadeTween = nil
+landSounds = {}
 
-local flyTrack  = nil
-local diveTrack = nil
-local landTrack = nil
-local idleTrack = nil
-local fallTrack = nil
+flyTrack  = nil
+diveTrack = nil
+landTrack = nil
+idleTrack = nil
+fallTrack = nil
 
-local currentBank = 0
-local prevYaw     = 0
-local wasMoving   = false
-local startFlyY   = 0
+currentBank = 0
+prevYaw     = 0
+wasMoving   = false
+startFlyY   = 0
 
 -- Raycast params built once, reused every frame
-local groundRayParams = RaycastParams.new()
+groundRayParams = RaycastParams.new()
 groundRayParams.FilterType = Enum.RaycastFilterType.Exclude
 
 -- ── Animation loading ─────────────────────────
-local function loadAnim()
+function loadAnim()
     if flyTrack  then pcall(function() flyTrack:Stop()  end) end
     if fallTrack then pcall(function() fallTrack:Stop() end) end
 
-    local anim = Instance.new("Animation")
+    anim = Instance.new("Animation")
     anim.AnimationId = FLY_ANIM_ID
     flyTrack = animator:LoadAnimation(anim)
     flyTrack.Priority = Enum.AnimationPriority.Action4
     flyTrack.Looped   = true
 
-    local diveAnim = Instance.new("Animation")
+    diveAnim = Instance.new("Animation")
     diveAnim.AnimationId = DIVE_ANIM_ID
     diveTrack = animator:LoadAnimation(diveAnim)
     diveTrack.Priority = Enum.AnimationPriority.Action4
     diveTrack.Looped   = true
 
-    local landAnim = Instance.new("Animation")
+    landAnim = Instance.new("Animation")
     landAnim.AnimationId = LAND_ANIM_ID
     landTrack = animator:LoadAnimation(landAnim)
     landTrack.Priority = Enum.AnimationPriority.Action4
     landTrack.Looped   = false
 
-    local idleAnim = Instance.new("Animation")
+    idleAnim = Instance.new("Animation")
     idleAnim.AnimationId = IDLE_ANIM_ID
     idleTrack = animator:LoadAnimation(idleAnim)
     idleTrack.Priority = Enum.AnimationPriority.Action4
     idleTrack.Looped   = true
 
-    local fallAnim = Instance.new("Animation")
+    fallAnim = Instance.new("Animation")
     fallAnim.AnimationId = FALL_ANIM_ID
     fallTrack = animator:LoadAnimation(fallAnim)
     fallTrack.Priority = Enum.AnimationPriority.Action4
@@ -6107,14 +6104,14 @@ end
 loadAnim()
 
 -- ── Pre-load land sounds ───────────────────────
-local function loadLandSounds()
+function loadLandSounds()
     for _, snd in ipairs(landSounds) do
         pcall(function() snd:Destroy() end)
     end
     landSounds = {}
 
     for _, id in ipairs(LAND_SOUNDS) do
-        local snd = Instance.new("Sound")
+        snd = Instance.new("Sound")
         snd.SoundId = id
         snd.Volume  = 1
         snd.Parent  = rootPart
@@ -6129,29 +6126,29 @@ end
 loadLandSounds()
 
 -- ── Physics ───────────────────────────────────
-local function getOrCreate(name, class)
-    local existing = rootPart:FindFirstChild(name)
+function getOrCreate(name, class)
+    existing = rootPart:FindFirstChild(name)
     if existing then return existing end
-    local inst = Instance.new(class)
+    inst = Instance.new(class)
     inst.Name   = name
     inst.Parent = rootPart
     return inst
 end
 
-local function initPhysics()
-    local bv = getOrCreate(BV_NAME, "BodyVelocity")
+function initPhysics()
+    bv = getOrCreate(BV_NAME, "BodyVelocity")
     bv.Velocity = Vector3.zero
     bv.MaxForce = Vector3.zero
     bv.P        = 1e4
 end
 
 -- ── Fly sound ─────────────────────────────────
-local function playFlySound()
+function playFlySound()
     -- Nuke whatever is already playing/fading
     if fadeTween then fadeTween:Cancel(); fadeTween = nil end
     if flySound  then flySound:Destroy();  flySound  = nil end
 
-    local snd = Instance.new("Sound")
+    snd = Instance.new("Sound")
     snd.SoundId = "rbxassetid://17862829666"
     snd.Volume  = 1
     snd.Parent  = rootPart
@@ -6159,9 +6156,9 @@ local function playFlySound()
     flySound = snd
 end
 
-local function stopFlySound()
+function stopFlySound()
     if not flySound then return end
-    local snd = flySound
+    snd = flySound
     if fadeTween then fadeTween:Cancel() end
     fadeTween = TweenService:Create(snd, TweenInfo.new(0.8, Enum.EasingStyle.Linear), { Volume = 0 })
     fadeTween:Play()
@@ -6174,10 +6171,8 @@ end
 
 -- ── Start / Stop ──────────────────────────────
 -- forward declarations so the render loop closure can capture them
-local stopFlying
-local playLandAnim
 
-local function startFlying()
+function startFlying()
     if flying then return end
     flying = true
     lastFOVTarget = nil
@@ -6199,7 +6194,7 @@ local function startFlying()
     )
 
     renderConn = RunService.RenderStepped:Connect(function(dt)
-        local bv = rootPart:FindFirstChild(BV_NAME)
+        bv = rootPart:FindFirstChild(BV_NAME)
         if not bv then
             initPhysics()
             bv = rootPart:FindFirstChild(BV_NAME)
@@ -6209,11 +6204,11 @@ local function startFlying()
         bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
 
         -- ── Input ─────────────────────────────────────────────────────────
-        local dir      = controlModule:GetMoveVector()
-        local moving   = dir.Magnitude > 0.01
-        local isDiving   = moving and camera.CFrame.LookVector.Y < -0.2 and dir.Z < 0
-        local isBackward = dir.Z > 0
-        local speed    = (isDiving and 175 or FLY_SPEED)
+        dir      = controlModule:GetMoveVector()
+        moving   = dir.Magnitude > 0.01
+        isDiving   = moving and camera.CFrame.LookVector.Y < -0.2 and dir.Z < 0
+        isBackward = dir.Z > 0
+        speed    = (isDiving and 175 or FLY_SPEED)
                          * (UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) and BOOST_MULT or 1)
 
         -- ── Sound ─────────────────────────────────────────────────────────
@@ -6226,7 +6221,7 @@ local function startFlying()
 
         -- ── Velocity ──────────────────────────────────────────────────────
         if moving then
-            local vel = Vector3.zero
+            vel = Vector3.zero
             if dir.X ~= 0 then vel = vel + camera.CFrame.RightVector * (dir.X * speed) end
             if dir.Z ~= 0 then vel = vel - camera.CFrame.LookVector  * (dir.Z * speed) end
             bv.Velocity = vel
@@ -6236,8 +6231,8 @@ local function startFlying()
 
         -- ── Ground detection ──────────────────────────────────────────────
         groundRayParams.FilterDescendantsInstances = { character }
-        local hit     = workspace:Raycast(rootPart.Position, Vector3.new(0, -3.5, 0), groundRayParams)
-        local vertVel = rootPart.AssemblyLinearVelocity.Y
+        hit     = workspace:Raycast(rootPart.Position, Vector3.new(0, -3.5, 0), groundRayParams)
+        vertVel = rootPart.AssemblyLinearVelocity.Y
         if hit and math.abs(vertVel) < 4 then
             stopFlying()
             playLandAnim()
@@ -6271,16 +6266,16 @@ local function startFlying()
         tweenFOV(moving and FOV_FLYING or FOV_NORMAL)
 
         -- ── Rotation: flat yaw + side bank ────────────────────────────────
-        local look     = camera.CFrame.LookVector
-        local flatLook = Vector3.new(look.X, 0, look.Z)
+        look     = camera.CFrame.LookVector
+        flatLook = Vector3.new(look.X, 0, look.Z)
 
         if moving and flatLook.Magnitude > 0.001 then
-            local yaw = math.atan2(-flatLook.Z, flatLook.X) - math.rad(90)
+            yaw = math.atan2(-flatLook.Z, flatLook.X) - math.rad(90)
 
-            local yawDelta = yaw - prevYaw
+            yawDelta = yaw - prevYaw
             if yawDelta >  math.pi then yawDelta -= math.pi * 2 end
             if yawDelta < -math.pi then yawDelta += math.pi * 2 end
-            local bankTarget = math.clamp(-yawDelta * (BANK_ANGLE / 0.04), -BANK_ANGLE, BANK_ANGLE)
+            bankTarget = math.clamp(-yawDelta * (BANK_ANGLE / 0.04), -BANK_ANGLE, BANK_ANGLE)
             currentBank = currentBank + (bankTarget - currentBank) * math.clamp(dt * 6, 0, 1)
             prevYaw = yaw
 
@@ -6289,7 +6284,7 @@ local function startFlying()
                 * CFrame.Angles(0, 0, math.rad(currentBank))
         else
             currentBank = currentBank + (0 - currentBank) * math.clamp(dt * 7, 0, 1)
-            local _, yaw, _ = rootPart.CFrame:ToEulerAnglesYXZ()
+            _, yaw, _ = rootPart.CFrame:ToEulerAnglesYXZ()
             rootPart.CFrame = CFrame.new(rootPart.Position)
                 * CFrame.Angles(0, yaw, 0)
                 * CFrame.Angles(0, 0, math.rad(currentBank))
@@ -6308,7 +6303,7 @@ stopFlying = function()
     tweenFOV(FOV_NORMAL)
     lastFOVTarget = nil
 
-    local bv = rootPart:FindFirstChild(BV_NAME)
+    bv = rootPart:FindFirstChild(BV_NAME)
     if bv then bv.MaxForce = Vector3.zero; bv.Velocity = Vector3.zero end
 
     if flyTrack  and flyTrack.IsPlaying  then flyTrack:Stop(0.4)  end
@@ -6328,20 +6323,19 @@ playLandAnim = function()
     falling = false
 
     -- Snap to exact ground position so we don't anchor mid-air
-    local snapParams = RaycastParams.new()
+    snapParams = RaycastParams.new()
     snapParams.FilterType = Enum.RaycastFilterType.Exclude
     snapParams.FilterDescendantsInstances = { character }
-    local snapHit = workspace:Raycast(rootPart.Position, Vector3.new(0, -20, 0), snapParams)
+    snapHit = workspace:Raycast(rootPart.Position, Vector3.new(0, -20, 0), snapParams)
     if snapHit then
-        local targetY = snapHit.Position.Y + humanoid.HipHeight + rootPart.Size.Y / 2
-        local _, yaw, _ = rootPart.CFrame:ToEulerAnglesYXZ()
+        targetY = snapHit.Position.Y + humanoid.HipHeight + rootPart.Size.Y / 2
+        _, yaw, _ = rootPart.CFrame:ToEulerAnglesYXZ()
         rootPart.CFrame = CFrame.new(rootPart.Position.X, targetY, rootPart.Position.Z)
             * CFrame.Angles(0, yaw, 0)
     end
 
     rootPart.Anchored = true
     landTrack:Play(0.1)
-    local conn
     conn = landTrack.Stopped:Connect(function()
         conn:Disconnect()
         rootPart.Anchored = false
@@ -6357,7 +6351,7 @@ end
 humanoid.Jumping:Connect(function(active)
     if active and not flying then
         task.delay(0.12, function()
-            local state = humanoid:GetState()
+            state = humanoid:GetState()
             if state == Enum.HumanoidStateType.Jumping
             or state == Enum.HumanoidStateType.Freefall then
                 startFlying()
@@ -6399,7 +6393,7 @@ player.CharacterAdded:Connect(function(newChar)
     humanoid.Jumping:Connect(function(active)
         if active and not flying then
             task.delay(0.12, function()
-                local state = humanoid:GetState()
+                state = humanoid:GetState()
                 if state == Enum.HumanoidStateType.Jumping
                 or state == Enum.HumanoidStateType.Freefall then
                     startFlying()
@@ -6422,42 +6416,42 @@ player.CharacterAdded:Connect(function(newChar)
 end)
 
 task.spawn(function()
-local TweenService = game:GetService("TweenService")
-local RunService = game:GetService("RunService")
-local Debris = game:GetService("Debris")
-local Players = game:GetService("Players")
+TweenService = game:GetService("TweenService")
+RunService = game:GetService("RunService")
+Debris = game:GetService("Debris")
+Players = game:GetService("Players")
 
-local LocalPlayer = Players.LocalPlayer
-local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+LocalPlayer = Players.LocalPlayer
+Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 if not Character then
     warn("Wind System: Character not found, skipping wind setup")
     return
 end
 
-local CurrentCamera = workspace.CurrentCamera
+CurrentCamera = workspace.CurrentCamera
 
-local Blur = CurrentCamera:FindFirstChild("Blur")
+Blur = CurrentCamera:FindFirstChild("Blur")
 if not Blur then
 	Blur = Instance.new("BlurEffect", CurrentCamera)
 end
 Blur.Size = 0
 
-local RunBlur = CurrentCamera:FindFirstChild("RunBlur")
+RunBlur = CurrentCamera:FindFirstChild("RunBlur")
 if not RunBlur then
 	RunBlur = Instance.new("BlurEffect", CurrentCamera)
 	RunBlur.Name = "RunBlur"
 end
 RunBlur.Size = 0
-local runBlurTween = nil
-local wasMoving = false
+runBlurTween = nil
+wasMoving = false
 
-local isR15 = Character:FindFirstChild("UpperTorso") ~= nil
-local R15 = {"Head","LeftUpperArm","LeftLowerArm","LeftHand","RightUpperArm","RightLowerArm","RightHand","LeftUpperLeg","LeftLowerLeg","LeftFoot","RightUpperLeg","RightLowerLeg","RightFoot"}
-local R6 = {"Head","Left Arm","Right Arm","Left Leg","Right Leg"}
+isR15 = Character:FindFirstChild("UpperTorso") ~= nil
+R15 = {"Head","LeftUpperArm","LeftLowerArm","LeftHand","RightUpperArm","RightLowerArm","RightHand","LeftUpperLeg","LeftLowerLeg","LeftFoot","RightUpperLeg","RightLowerLeg","RightFoot"}
+R6 = {"Head","Left Arm","Right Arm","Left Leg","Right Leg"}
 
-local bodyParts = {}
+bodyParts = {}
 for _, n in ipairs(isR15 and R15 or R6) do
-	local p = Character:FindFirstChild(n)
+	p = Character:FindFirstChild(n)
 	if p and p:IsA("BasePart") then
 		bodyParts[#bodyParts + 1] = p
 	end
@@ -6465,7 +6459,7 @@ end
 
 for _, part in ipairs(bodyParts) do
 	do
-		local e = Instance.new("ParticleEmitter")
+		e = Instance.new("ParticleEmitter")
 		e.Brightness = 7
 		e.Color = ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.new(1,1,1)),ColorSequenceKeypoint.new(1,Color3.new(1,1,1))})
 		e.LightEmission = 0.5
@@ -6503,7 +6497,7 @@ for _, part in ipairs(bodyParts) do
 		e.Parent = part
 	end
 	do
-		local e = Instance.new("ParticleEmitter")
+		e = Instance.new("ParticleEmitter")
 		e.Brightness = 7
 		e.Color = ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.new(1,1,1)),ColorSequenceKeypoint.new(1,Color3.new(1,1,1))})
 		e.LightEmission = 0.5
@@ -6541,7 +6535,7 @@ for _, part in ipairs(bodyParts) do
 		e.Parent = part
 	end
 	do
-		local e = Instance.new("ParticleEmitter")
+		e = Instance.new("ParticleEmitter")
 		e.Brightness = 7
 		e.Color = ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.new(1,1,1)),ColorSequenceKeypoint.new(1,Color3.new(1,1,1))})
 		e.LightEmission = 0.5
@@ -6580,7 +6574,7 @@ for _, part in ipairs(bodyParts) do
 	end
 end
 
-local wndPart = Instance.new("Part")
+wndPart = Instance.new("Part")
 wndPart.Transparency = 1
 wndPart.Anchored = true
 wndPart.CanCollide = false
@@ -6589,11 +6583,11 @@ wndPart.Size = Vector3.new(1,1,1)
 wndPart.Name = "wnd"
 wndPart.Parent = workspace
 
-local wndAttachment = Instance.new("Attachment", wndPart)
+wndAttachment = Instance.new("Attachment", wndPart)
 wndAttachment.Name = "Attachment"
 
-local function makeWind(name, emissionDir, lifetimeMin, lifetimeMax, rate, rotSpeedMin, rotSpeedMax, rotMin, rotMax, speedMin, speedMax, spreadAngle, acceleration, drag, sizeSeq, squashSeq, transparencySeq)
-	local e = Instance.new("ParticleEmitter")
+function makeWind(name, emissionDir, lifetimeMin, lifetimeMax, rate, rotSpeedMin, rotSpeedMax, rotMin, rotMax, speedMin, speedMax, spreadAngle, acceleration, drag, sizeSeq, squashSeq, transparencySeq)
+	e = Instance.new("ParticleEmitter")
 	e.Brightness = 7
 	e.Color = ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.new(1,1,1)),ColorSequenceKeypoint.new(1,Color3.new(1,1,1))})
 	e.LightEmission = 0.5
@@ -6654,20 +6648,20 @@ makeWind(
 	NumberSequence.new({NumberSequenceKeypoint.new(0,1,0),NumberSequenceKeypoint.new(0.20000000298023224,0.81300002336502075,0),NumberSequenceKeypoint.new(1,1,0)})
 )
 
-local Part_upvr = Instance.new("Part", Character)
+Part_upvr = Instance.new("Part", Character)
 Part_upvr.Transparency = 1
 Part_upvr.Anchored = true
 Part_upvr.CanCollide = false
 Part_upvr.Massless = true
 Part_upvr.Size = Vector3.new()
 
-local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
-local Humanoid = Character:WaitForChild("Humanoid")
+HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
+Humanoid = Character:WaitForChild("Humanoid")
 
-local tickW = 0
+tickW = 0
 
 RunService.RenderStepped:Connect(function()
-	local Magnitude = HumanoidRootPart.Velocity.Magnitude
+	Magnitude = HumanoidRootPart.Velocity.Magnitude
 
 	if 0 < Magnitude then
 		Part_upvr.CFrame = CFrame.new(CurrentCamera.CFrame.Position, CurrentCamera.CFrame.Position + HumanoidRootPart.Velocity * 5)
@@ -6680,7 +6674,7 @@ RunService.RenderStepped:Connect(function()
 	Blur.Size = math.clamp(Magnitude / 70, 0, 9)
 
 	-- RunBlur: triggers at max when player starts moving, fades out over 0.3s
-	local isMovingNow = Magnitude > 8
+	isMovingNow = Magnitude > 8
 	if isMovingNow and not wasMoving then
 		if runBlurTween then runBlurTween:Cancel() end
 		RunBlur.Size = 0
@@ -6696,11 +6690,11 @@ RunService.RenderStepped:Connect(function()
 	end
 	wasMoving = isMovingNow
 
-	local wndPos = CurrentCamera.CFrame.Position + CurrentCamera.CFrame.LookVector * 15
+	wndPos = CurrentCamera.CFrame.Position + CurrentCamera.CFrame.LookVector * 15
 	wndPart.CFrame = CFrame.new(wndPos, wndPos + CurrentCamera.CFrame.LookVector)
 
 	if 80 <= Magnitude and tickW % math.max(1, math.floor(50 / Magnitude)) == 0 then
-		local Part = Instance.new("Part")
+		Part = Instance.new("Part")
 		Part.CastShadow = false
 		Part.Color = Color3.new(1,1,1)
 		Part.Material = Enum.Material.ForceField
@@ -6710,13 +6704,13 @@ RunService.RenderStepped:Connect(function()
 		Part.Massless = true
 		Part.Parent = workspace
 
-		local SpecialMesh = Instance.new("SpecialMesh")
+		SpecialMesh = Instance.new("SpecialMesh")
 		SpecialMesh.MeshType = Enum.MeshType.Sphere
 		SpecialMesh.Parent = Part
 
-		local cframe = CFrame.new(math.random(-300,300)/100, math.random(-200,200)/100, -math.floor(Magnitude/50)*2)
+		cframe = CFrame.new(math.random(-300,300)/100, math.random(-200,200)/100, -math.floor(Magnitude/50)*2)
 
-		local Weld = Instance.new("Weld", Part)
+		Weld = Instance.new("Weld", Part)
 		Weld.Part0 = Part_upvr
 		Weld.Part1 = Part
 		Weld.C0 = cframe
@@ -6728,7 +6722,7 @@ RunService.RenderStepped:Connect(function()
 					v.Speed = NumberRange.new(math.clamp(5*Magnitude/40,-100,50), math.clamp(20*Magnitude/40,-100,200))
 					v.Rate = math.clamp(2*Magnitude/4, 0, _G.G_Optimized and 1000 or 2000)
 				elseif v.Name == "Wind3" then
-					local lock = false
+					lock = false
 					if Humanoid.FloorMaterial == Enum.Material.Air then
 						if 250 >= Magnitude then
 							lock = false
