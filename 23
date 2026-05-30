@@ -411,7 +411,7 @@ function _gc_craterDebris(v363)
                         Transparency = 1, 
                         Size = if v374 then Vector3.new(0, 0, 0, 0) else v379.Size / 1.5
                     }):Play();
-                    delay(0.3, function() 
+                    task.delay(0.3, function() 
                         v379.Anchored = true;
                         l_v379_0 = v379;
                         l_v379_0.AssemblyLinearVelocity = Vector3.new(0, 0, 0, 0);
@@ -528,7 +528,7 @@ function _gc_craterDebris(v363)
                         Transparency = 1, 
                         Size = if v374 then Vector3.new(0, 0, 0, 0) else v396.Size / 1.5
                     }):Play();
-                    delay(0.3, function() 
+                    task.delay(0.3, function() 
                         l_BodyAngularVelocity_0:Destroy();
                         v396.Anchored = true;
                         l_v396_0 = v396;
@@ -1016,19 +1016,20 @@ function _gc_craterDebris(v363)
                         end;
                         do
                             l_l_Angles_3_0 = l_Angles_3;
-                            delay(v436, function() 
+                            task.delay(v436, function() 
                                 if l_add_0.keep then
                                     _gc_TweenService:Create(v431, TweenInfo.new(2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
                                         CFrame = l_lookVector_0, 
                                         Size = v431.Size
                                     }):Play();
-                                    wait(2);
+                                    task.wait(2);
                                 end;
+                                local _sinkStart = v431.CFrame;
                                 _gc_TweenService:Create(v431, l_l_Angles_3_0, {
-                                    CFrame = v431.CFrame * CFrame.new(0, -7, 0), 
+                                    CFrame = _sinkStart * CFrame.new(0, -7, 0), 
                                     Size = v431.Size / 1.5
                                 }):Play();
-                                wait(2);
+                                task.wait(2);
                                 v431:SetAttribute("OGCframe", nil);
                                 v431.Anchored = true;
                                 l_v431_1 = v431;
