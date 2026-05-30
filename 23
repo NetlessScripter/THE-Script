@@ -1268,7 +1268,7 @@ function EmitCrescentAura()
 				v3218:SetAttribute("LimitedAura", true)
 				v3218:SetAttribute("InnerRageAura", true)
 				table.insert(v3193, v3218)
-				task.delay(1, function()
+				task.delay(1.45, function()
 					v3218.Enabled = false
 				end)
 			end
