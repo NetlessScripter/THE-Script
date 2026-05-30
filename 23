@@ -5961,10 +5961,14 @@ end)
            "HAGAH"
            )
             sound:Play()
+           
+            task.spawn(function()
+            wait(0.2)
             local sound = GetGitSound(
            "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/RapidKiBlasts.mp3?raw=true",
            "RapidFire"
            )
+           end)
             sound:Play()
 			task.delay(0.13, function()
 				EmitDash3()
