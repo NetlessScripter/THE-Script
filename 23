@@ -1203,7 +1203,10 @@ function EmitCrescentAura()
 		end
 	end
 end
+_mostEffectsActive = false
 function EmitMostEffects()
+	if _mostEffectsActive then return end
+	_mostEffectsActive = true
 	anchor = Instance.new("Attachment")
 	anchor.Name = "MostEffects"
 	anchor.Position = Vector3.new(0, 0, -5)
@@ -2120,6 +2123,7 @@ function EmitMostEffects()
 		end
 	end
 	game:GetService("Debris"):AddItem(anchor, 2)
+	task.delay(2.1, function() _mostEffectsActive = false end)
 end
 function EmitDash3()
 	anchor = Instance.new("Attachment")
@@ -2623,16 +2627,21 @@ function EmitDash3()
 	game:GetService("Debris"):AddItem(anchor, 2)
 end
 function RunSequence()
-	startHealth = Humanoid.Health
-	delayThread = nil
-	allContainers = {}
-	healthConn = Humanoid.HealthChanged:Connect(function(newHealth)
-		if newHealth < startHealth then
-			healthConn:Disconnect()
-			if delayThread then task.cancel(delayThread) end
-			for _, c in ipairs(allContainers) do
+	-- Capture health snapshot for this run
+	local runDone = Instance.new("BindableEvent")
+	local runStartHealth = Humanoid.Health
+	local runDelayThread = nil
+	local runContainers = {}
+	local runCancelled = false
+
+	local healthConn_local = Humanoid.HealthChanged:Connect(function(newHealth)
+		if newHealth < runStartHealth and not runCancelled then
+			runCancelled = true
+			if runDelayThread then task.cancel(runDelayThread) end
+			for _, c in ipairs(runContainers) do
 				if c and c.Parent then c:Destroy() end
 			end
+			runDone:Fire()  -- unblock the Wait() below
 		end
 	end)
 	vfxAnchor = Instance.new("Part")
@@ -2645,7 +2654,7 @@ function RunSequence()
 	vfxAnchor.Transparency = 1
 	vfxAnchor.CFrame = HumanoidRootPart.CFrame * CFrame.new(0, 0, -5)
 	vfxAnchor.Parent = workspace
-	table.insert(allContainers, vfxAnchor)
+	table.insert(runContainers, vfxAnchor)
 	anim = Instance.new("Animation")
 	anim.AnimationId = "rbxassetid://79527508933159"
 	AnimTrack = Animator:LoadAnimation(anim)
@@ -3025,7 +3034,7 @@ function RunSequence()
 	containerBeamCharge.CFrame = CFrame.new(0, -1.35, 0)
 	containerBeamCharge.CFrame = CFrame.new(0, -1.35, 0)
 	containerBeamCharge.Parent = RightArm
-	table.insert(allContainers, containerBeamCharge)
+	table.insert(runContainers, containerBeamCharge)
 	containerHit = Instance.new("Attachment")
 	containerHit.Name = "Hit"
 		
@@ -3317,7 +3326,7 @@ function RunSequence()
 	emitter9:SetAttribute("EmitCount", 2)
 	emitter9.Parent = containerHit
 		containerHit.Parent = vfxAnchor
-	table.insert(allContainers, containerHit)
+	table.insert(runContainers, containerHit)
 	containerCrescent = Instance.new("Attachment")
 	containerCrescent.Name = "Crescent Ripple With Dust"
 		
@@ -3426,7 +3435,7 @@ function RunSequence()
 	emitter4:SetAttribute("EmitCount", 9)
 	emitter4.Parent = containerCrescent
 		containerCrescent.Parent = vfxAnchor
-	table.insert(allContainers, containerCrescent)
+	table.insert(runContainers, containerCrescent)
 	containerFlowing = Instance.new("Attachment")
 	containerFlowing.Name = "Flowing Water Heavy Hit"
 		
@@ -3640,7 +3649,7 @@ function RunSequence()
 	emitter7:SetAttribute("EmitCount", 10)
 	emitter7.Parent = containerFlowing
 		containerFlowing.Parent = vfxAnchor
-	table.insert(allContainers, containerFlowing)
+	table.insert(runContainers, containerFlowing)
 	containerGlaring = Instance.new("Attachment")
 	containerGlaring.Name = "Glaring Impact"
 		
@@ -4040,9 +4049,10 @@ function RunSequence()
 	emitter12:SetAttribute("EmitCount", 2)
 	emitter12.Parent = containerGlaring
 		containerGlaring.Parent = vfxAnchor
-	table.insert(allContainers, containerGlaring)
-	delayThread = task.delay(0.37, function()
-		healthConn:Disconnect()
+	table.insert(runContainers, containerGlaring)
+	runDelayThread = task.delay(0.37, function()
+		healthConn_local:Disconnect()
+		if runCancelled then return end  -- health dropped before delay fired; bail out
 		containerBeamCharge:Destroy()
 		flashGui = Instance.new("ScreenGui")
 		flashGui.Name = "AttackFlash"
@@ -4128,7 +4138,14 @@ function RunSequence()
 			if touchConn then touchConn:Disconnect() end
 			if hitbox and hitbox.Parent then hitbox:Destroy() end
 		end)
+		runDone:Fire()
 	end)
+	-- Block until the delay fires (or is cancelled by damage)
+	if not runCancelled then
+		runDone.Event:Wait()
+	end
+	runDone:Destroy()
+	healthConn_local:Disconnect()
 end
 RunService = game:GetService("RunService")
 sequenceRunning = false
@@ -4140,8 +4157,12 @@ RunService.Heartbeat:Connect(function()
 		if not sequenceRunning and string.find(track.Animation.AnimationId, TRIGGER_ANIM_IDS.ATTACK1) then
 			sequenceRunning = true
 			track:Stop(0)
-			RunSequence()
-			sequenceRunning = false
+			-- RunSequence registers a task.delay internally; don't reset the flag here.
+			-- The flag is cleared inside RunSequence once the delayed work finishes.
+			task.spawn(function()
+				RunSequence()
+				sequenceRunning = false
+			end)
 			break
 		end
 
@@ -5896,9 +5917,9 @@ end)
 						end
 					end)
 				end)
+				attack2Running = false  -- unlock only after effects have been emitted
 			end)
 
-			attack2Running = false
 			break
 		end
 	end
@@ -6256,30 +6277,40 @@ local isMobile = game:GetService("UserInputService").TouchEnabled and not game:G
 local PlayerGui = player:WaitForChild("PlayerGui")
 local flyScreenGui = Instance.new("ScreenGui", PlayerGui)
 
-local imageButton2 = Instance.new("ImageButton")
-imageButton2.Size = UDim2.new(0, 50, 0, 50)
-imageButton2.Position = UDim2.new(0.5, 200, 0.5, -25)
-imageButton2.AnchorPoint = Vector2.new(0.5, 0.5)
-imageButton2.Image = "rbxassetid://6256840888"
-imageButton2.BackgroundTransparency = 1
-imageButton2.Visible = isMobile
-imageButton2.Parent = flyScreenGui
-
 local imageButton1 = Instance.new("ImageButton")
-imageButton1.Size = UDim2.new(0, 35, 0, 35)
+imageButton1.Size = UDim2.new(0, 50, 0, 50)
 imageButton1.Position = UDim2.new(0.5, 200, 0.5, -25)
-imageButton1.AnchorPoint = Vector2.new(0.5, 0.5)
-imageButton1.ZIndex = imageButton2.ZIndex + 1
 imageButton1.Image = "rbxassetid://18428026508"
 imageButton1.BackgroundTransparency = 1
 imageButton1.Visible = isMobile
 imageButton1.Parent = flyScreenGui
 
-imageButton1.MouseButton1Click:Connect(function()
+local imageButton2 = Instance.new("ImageButton")
+imageButton2.Size = UDim2.new(0, 50, 0, 50)
+imageButton2.Position = UDim2.new(0.5, 200, 0.5, -25)
+imageButton2.Image = "rbxassetid://6256840888"
+imageButton2.BackgroundTransparency = 1
+imageButton2.Visible = isMobile
+imageButton2.Parent = flyScreenGui
+
+imageButton2.MouseButton1Click:Connect(function()
     if flying then
         stopFlying()
+        playLandAnim()
     else
         startFlying()
+    end
+end)
+
+humanoid.Jumping:Connect(function(active)
+    if active and not flying then
+        task.delay(0.12, function()
+            state = humanoid:GetState()
+            if state == Enum.HumanoidStateType.Jumping
+            or state == Enum.HumanoidStateType.Freefall then
+                startFlying()
+            end
+        end)
     end
 end)
 
@@ -6311,6 +6342,18 @@ player.CharacterAdded:Connect(function(newChar)
 
     loadAnim()
     loadLandSounds()
+
+    humanoid.Jumping:Connect(function(active)
+        if active and not flying then
+            task.delay(0.12, function()
+                state = humanoid:GetState()
+                if state == Enum.HumanoidStateType.Jumping
+                or state == Enum.HumanoidStateType.Freefall then
+                    startFlying()
+                end
+            end)
+        end
+    end)
 
     humanoid.StateChanged:Connect(function(_, new)
         if new == Enum.HumanoidStateType.Landed then
