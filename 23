@@ -6275,7 +6275,7 @@ imageButton1.BackgroundTransparency = 1
 imageButton1.Visible = isMobile
 imageButton1.Parent = flyScreenGui
 
-imageButton2.MouseButton1Click:Connect(function()
+imageButton1.MouseButton1Click:Connect(function()
     if flying then
         stopFlying()
         playLandAnim()
