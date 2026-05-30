@@ -6251,6 +6251,36 @@ playLandAnim = function()
     end
 end
 
+local isMobile = game:GetService("UserInputService").TouchEnabled and not game:GetService("UserInputService").KeyboardEnabled
+
+local PlayerGui = player:WaitForChild("PlayerGui")
+local flyScreenGui = Instance.new("ScreenGui", PlayerGui)
+
+local imageButton1 = Instance.new("ImageButton")
+imageButton1.Size = UDim2.new(0, 50, 0, 50)
+imageButton1.Position = UDim2.new(0.5, 200, 0.5, -25)
+imageButton1.Image = "rbxassetid://18428026508"
+imageButton1.BackgroundTransparency = 1
+imageButton1.Visible = isMobile
+imageButton1.Parent = flyScreenGui
+
+local imageButton2 = Instance.new("ImageButton")
+imageButton2.Size = UDim2.new(0, 50, 0, 50)
+imageButton2.Position = UDim2.new(0.5, 200, 0.5, -25)
+imageButton2.Image = "rbxassetid://6256840888"
+imageButton2.BackgroundTransparency = 1
+imageButton2.Visible = isMobile
+imageButton2.Parent = flyScreenGui
+
+imageButton2.MouseButton1Click:Connect(function()
+    if flying then
+        stopFlying()
+        playLandAnim()
+    else
+        startFlying()
+    end
+end)
+
 humanoid.Jumping:Connect(function(active)
     if active and not flying then
         task.delay(0.12, function()
