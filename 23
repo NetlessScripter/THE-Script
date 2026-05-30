@@ -4758,3 +4758,783 @@ RunService.Heartbeat:Connect(function()
 		end
 	end
 end)
+
+
+-- FlyScript (LocalScript) — StarterPlayerScripts or StarterCharacterScripts
+-- Jump to fly. Feel the turn. Feel the air. MWAH 🤌
+
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService     = game:GetService("TweenService")
+local ContentProvider  = game:GetService("ContentProvider")
+
+-- ──────────────────────────────────────────────
+-- CONFIG
+-- ──────────────────────────────────────────────
+local FLY_SPEED    = 110
+local BOOST_MULT   = 2
+local BANK_ANGLE   = 20
+local MAX_FLY_HEIGHT = 350
+
+local FOV_NORMAL   = nil
+local FOV_FLYING   = nil
+
+local FLY_ANIM_ID  = "rbxassetid://78547941116306"
+local DIVE_ANIM_ID = "rbxassetid://122216590829087"
+local LAND_ANIM_ID = "rbxassetid://125881219961499"
+local IDLE_ANIM_ID = "rbxassetid://17124063826"
+local FALL_ANIM_ID = "rbxassetid://15280575192"
+
+local LAND_SOUNDS = {
+    "rbxassetid://12331756832",
+    "rbxassetid://12509675323",
+    "rbxassetid://12509572882",
+    "rbxassetid://9117969892",
+    "rbxassetid://12982203916",
+    "rbxassetid://12308648953",
+    "rbxassetid://12264204235",
+    "rbxassetid://9117969584",
+}
+-- ──────────────────────────────────────────────
+
+local player    = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoid  = character:WaitForChild("Humanoid")
+local rootPart  = character:WaitForChild("HumanoidRootPart")
+local camera    = workspace.CurrentCamera
+local animator  = humanoid:FindFirstChildOfClass("Animator") or humanoid:WaitForChild("Animator")
+
+local function randomName()
+    local s = ""
+    for _ = 1, 12 do s = s .. string.char(math.random(97, 122)) end
+    return s
+end
+local BV_NAME = randomName()
+
+local FOV_TWEEN = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local lastFOVTarget = nil
+local function tweenFOV(target)
+    if target == lastFOVTarget then return end
+    lastFOVTarget = target
+    TweenService:Create(camera, FOV_TWEEN, { FieldOfView = target }):Play()
+end
+
+local controlModule = require(player:WaitForChild("PlayerScripts")
+    :WaitForChild("PlayerModule")
+    :WaitForChild("ControlModule"))
+
+-- ── State ─────────────────────────────────────
+local flying      = false
+local falling     = false
+local renderConn  = nil
+
+local flySound  = nil
+local fadeTween = nil
+local landSounds = {}
+
+local flyTrack  = nil
+local diveTrack = nil
+local landTrack = nil
+local idleTrack = nil
+local fallTrack = nil
+
+local currentBank = 0
+local prevYaw     = 0
+local wasMoving   = false
+local startFlyY   = 0
+
+-- Raycast params built once, reused every frame
+local groundRayParams = RaycastParams.new()
+groundRayParams.FilterType = Enum.RaycastFilterType.Exclude
+
+-- ── Animation loading ─────────────────────────
+local function loadAnim()
+    if flyTrack  then pcall(function() flyTrack:Stop()  end) end
+    if fallTrack then pcall(function() fallTrack:Stop() end) end
+
+    local anim = Instance.new("Animation")
+    anim.AnimationId = FLY_ANIM_ID
+    flyTrack = animator:LoadAnimation(anim)
+    flyTrack.Priority = Enum.AnimationPriority.Action4
+    flyTrack.Looped   = true
+
+    local diveAnim = Instance.new("Animation")
+    diveAnim.AnimationId = DIVE_ANIM_ID
+    diveTrack = animator:LoadAnimation(diveAnim)
+    diveTrack.Priority = Enum.AnimationPriority.Action4
+    diveTrack.Looped   = true
+
+    local landAnim = Instance.new("Animation")
+    landAnim.AnimationId = LAND_ANIM_ID
+    landTrack = animator:LoadAnimation(landAnim)
+    landTrack.Priority = Enum.AnimationPriority.Action4
+    landTrack.Looped   = false
+
+    local idleAnim = Instance.new("Animation")
+    idleAnim.AnimationId = IDLE_ANIM_ID
+    idleTrack = animator:LoadAnimation(idleAnim)
+    idleTrack.Priority = Enum.AnimationPriority.Action4
+    idleTrack.Looped   = true
+
+    local fallAnim = Instance.new("Animation")
+    fallAnim.AnimationId = FALL_ANIM_ID
+    fallTrack = animator:LoadAnimation(fallAnim)
+    fallTrack.Priority = Enum.AnimationPriority.Action4
+    fallTrack.Looped   = true
+end
+loadAnim()
+
+-- ── Pre-load land sounds ───────────────────────
+local function loadLandSounds()
+    for _, snd in ipairs(landSounds) do
+        pcall(function() snd:Destroy() end)
+    end
+    landSounds = {}
+
+    for _, id in ipairs(LAND_SOUNDS) do
+        local snd = Instance.new("Sound")
+        snd.SoundId = id
+        snd.Volume  = 1
+        snd.Parent  = rootPart
+        table.insert(landSounds, snd)
+    end
+
+    -- Preload async so assets are cached before landing
+    task.spawn(function()
+        ContentProvider:PreloadAsync(landSounds)
+    end)
+end
+loadLandSounds()
+
+-- ── Physics ───────────────────────────────────
+local function getOrCreate(name, class)
+    local existing = rootPart:FindFirstChild(name)
+    if existing then return existing end
+    local inst = Instance.new(class)
+    inst.Name   = name
+    inst.Parent = rootPart
+    return inst
+end
+
+local function initPhysics()
+    local bv = getOrCreate(BV_NAME, "BodyVelocity")
+    bv.Velocity = Vector3.zero
+    bv.MaxForce = Vector3.zero
+    bv.P        = 1e4
+end
+
+-- ── Fly sound ─────────────────────────────────
+local function playFlySound()
+    -- Nuke whatever is already playing/fading
+    if fadeTween then fadeTween:Cancel(); fadeTween = nil end
+    if flySound  then flySound:Destroy();  flySound  = nil end
+
+    local snd = Instance.new("Sound")
+    snd.SoundId = "rbxassetid://17862829666"
+    snd.Volume  = 1
+    snd.Parent  = rootPart
+    snd:Play()
+    flySound = snd
+end
+
+local function stopFlySound()
+    if not flySound then return end
+    local snd = flySound
+    if fadeTween then fadeTween:Cancel() end
+    fadeTween = TweenService:Create(snd, TweenInfo.new(0.8, Enum.EasingStyle.Linear), { Volume = 0 })
+    fadeTween:Play()
+    fadeTween.Completed:Connect(function()
+        snd:Destroy()
+        if flySound  == snd  then flySound  = nil end
+        if fadeTween ~= nil  then fadeTween = nil end
+    end)
+end
+
+-- ── Start / Stop ──────────────────────────────
+-- forward declarations so the render loop closure can capture them
+local stopFlying
+local playLandAnim
+
+local function startFlying()
+    if flying then return end
+    flying = true
+    lastFOVTarget = nil
+
+    FOV_NORMAL = camera.FieldOfView
+    FOV_FLYING = FOV_NORMAL * 1.2
+
+    initPhysics()
+    humanoid.PlatformStand = true
+    tweenFOV(FOV_NORMAL)
+    wasMoving = false
+    startFlyY = rootPart.Position.Y
+
+    -- Pop upward on jump-to-fly
+    rootPart.AssemblyLinearVelocity = Vector3.new(
+        rootPart.AssemblyLinearVelocity.X,
+        math.max(rootPart.AssemblyLinearVelocity.Y, 18),
+        rootPart.AssemblyLinearVelocity.Z
+    )
+
+    renderConn = RunService.RenderStepped:Connect(function(dt)
+        local bv = rootPart:FindFirstChild(BV_NAME)
+        if not bv then
+            initPhysics()
+            bv = rootPart:FindFirstChild(BV_NAME)
+            if not bv then return end
+        end
+
+        bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+
+        -- ── Input ─────────────────────────────────────────────────────────
+        local dir      = controlModule:GetMoveVector()
+        local moving   = dir.Magnitude > 0.01
+        local isDiving   = moving and camera.CFrame.LookVector.Y < -0.2 and dir.Z < 0
+        local isBackward = dir.Z > 0
+        local speed    = (isDiving and 175 or FLY_SPEED)
+                         * (UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) and BOOST_MULT or 1)
+
+        -- ── Sound ─────────────────────────────────────────────────────────
+        if moving and not wasMoving then
+            playFlySound()
+        elseif not moving and wasMoving then
+            stopFlySound()
+        end
+        wasMoving = moving
+
+        -- ── Velocity ──────────────────────────────────────────────────────
+        if moving then
+            local vel = Vector3.zero
+            if dir.X ~= 0 then vel = vel + camera.CFrame.RightVector * (dir.X * speed) end
+            if dir.Z ~= 0 then vel = vel - camera.CFrame.LookVector  * (dir.Z * speed) end
+            bv.Velocity = vel
+        else
+            bv.Velocity = Vector3.zero
+        end
+
+        -- ── Ground detection ──────────────────────────────────────────────
+        groundRayParams.FilterDescendantsInstances = { character }
+        local hit     = workspace:Raycast(rootPart.Position, Vector3.new(0, -3.5, 0), groundRayParams)
+        local vertVel = rootPart.AssemblyLinearVelocity.Y
+        if hit and math.abs(vertVel) < 4 then
+            stopFlying()
+            playLandAnim()
+            return
+        end
+
+        -- ── Height ceiling ────────────────────────────────────────────────
+        if rootPart.Position.Y >= startFlyY + MAX_FLY_HEIGHT then
+            stopFlying()
+            falling = true
+            if fallTrack and not fallTrack.IsPlaying then fallTrack:Play(0.2) end
+            return
+        end
+
+        -- ── Animation ─────────────────────────────────────────────────────
+        if moving and isDiving then
+            if flyTrack.IsPlaying  then flyTrack:Stop(0.3)  end
+            if idleTrack.IsPlaying then idleTrack:Stop(0.3) end
+            if not diveTrack.IsPlaying then diveTrack:Play(0.3) end
+        elseif moving and not isBackward then
+            if diveTrack.IsPlaying then diveTrack:Stop(0.3) end
+            if idleTrack.IsPlaying then idleTrack:Stop(0.3) end
+            if not flyTrack.IsPlaying then flyTrack:Play(0.3) end
+        else
+            if flyTrack.IsPlaying  then flyTrack:Stop(0.3)  end
+            if diveTrack.IsPlaying then diveTrack:Stop(0.3) end
+            if not idleTrack.IsPlaying then idleTrack:Play(0.3) end
+        end
+
+        -- ── FOV ───────────────────────────────────────────────────────────
+        tweenFOV(moving and FOV_FLYING or FOV_NORMAL)
+
+        -- ── Rotation: flat yaw + side bank ────────────────────────────────
+        local look     = camera.CFrame.LookVector
+        local flatLook = Vector3.new(look.X, 0, look.Z)
+
+        if moving and flatLook.Magnitude > 0.001 then
+            local yaw = math.atan2(-flatLook.Z, flatLook.X) - math.rad(90)
+
+            local yawDelta = yaw - prevYaw
+            if yawDelta >  math.pi then yawDelta -= math.pi * 2 end
+            if yawDelta < -math.pi then yawDelta += math.pi * 2 end
+            local bankTarget = math.clamp(-yawDelta * (BANK_ANGLE / 0.04), -BANK_ANGLE, BANK_ANGLE)
+            currentBank = currentBank + (bankTarget - currentBank) * math.clamp(dt * 6, 0, 1)
+            prevYaw = yaw
+
+            rootPart.CFrame = CFrame.new(rootPart.Position)
+                * CFrame.Angles(0, yaw, 0)
+                * CFrame.Angles(0, 0, math.rad(currentBank))
+        else
+            currentBank = currentBank + (0 - currentBank) * math.clamp(dt * 7, 0, 1)
+            local _, yaw, _ = rootPart.CFrame:ToEulerAnglesYXZ()
+            rootPart.CFrame = CFrame.new(rootPart.Position)
+                * CFrame.Angles(0, yaw, 0)
+                * CFrame.Angles(0, 0, math.rad(currentBank))
+            prevYaw = yaw
+        end
+    end)
+end
+
+stopFlying = function()
+    if not flying then return end
+    flying = false
+
+    if renderConn then renderConn:Disconnect(); renderConn = nil end
+
+    humanoid.PlatformStand = false
+    tweenFOV(FOV_NORMAL)
+    lastFOVTarget = nil
+
+    local bv = rootPart:FindFirstChild(BV_NAME)
+    if bv then bv.MaxForce = Vector3.zero; bv.Velocity = Vector3.zero end
+
+    if flyTrack  and flyTrack.IsPlaying  then flyTrack:Stop(0.4)  end
+    if diveTrack and diveTrack.IsPlaying then diveTrack:Stop(0.4) end
+    if idleTrack and idleTrack.IsPlaying then idleTrack:Stop(0.4) end
+
+    stopFlySound()
+    currentBank = 0
+end
+
+-- ── Land animation (anchored until done) ─────
+playLandAnim = function()
+    if not landTrack then return end
+
+    -- Stop fall loop if it was playing
+    if fallTrack and fallTrack.IsPlaying then fallTrack:Stop(0.2) end
+    falling = false
+
+    -- Snap to exact ground position so we don't anchor mid-air
+    local snapParams = RaycastParams.new()
+    snapParams.FilterType = Enum.RaycastFilterType.Exclude
+    snapParams.FilterDescendantsInstances = { character }
+    local snapHit = workspace:Raycast(rootPart.Position, Vector3.new(0, -20, 0), snapParams)
+    if snapHit then
+        local targetY = snapHit.Position.Y + humanoid.HipHeight + rootPart.Size.Y / 2
+        local _, yaw, _ = rootPart.CFrame:ToEulerAnglesYXZ()
+        rootPart.CFrame = CFrame.new(rootPart.Position.X, targetY, rootPart.Position.Z)
+            * CFrame.Angles(0, yaw, 0)
+    end
+
+    rootPart.Anchored = true
+    landTrack:Play(0.1)
+    local conn
+    conn = landTrack.Stopped:Connect(function()
+        conn:Disconnect()
+        rootPart.Anchored = false
+    end)
+
+    -- Fire all pre-loaded land sounds instantly
+    for _, snd in ipairs(landSounds) do
+        snd:Play()
+    end
+end
+
+-- ── Jump to fly ───────────────────────────────
+humanoid.Jumping:Connect(function(active)
+    if active and not flying then
+        task.delay(0.12, function()
+            local state = humanoid:GetState()
+            if state == Enum.HumanoidStateType.Jumping
+            or state == Enum.HumanoidStateType.Freefall then
+                startFlying()
+            end
+        end)
+    end
+end)
+
+-- ── Land = stop ───────────────────────────────
+humanoid.StateChanged:Connect(function(_, new)
+    if new == Enum.HumanoidStateType.Landed then
+        if flying then stopFlying() end
+        if flying or falling then playLandAnim() end
+    end
+end)
+
+humanoid.Died:Connect(function()
+    if fallTrack and fallTrack.IsPlaying then fallTrack:Stop(0.2) end
+    falling = false
+end)
+player.CharacterAdded:Connect(function(newChar)
+    character  = newChar
+    humanoid   = newChar:WaitForChild("Humanoid")
+    rootPart   = newChar:WaitForChild("HumanoidRootPart")
+    animator   = humanoid:FindFirstChildOfClass("Animator") or humanoid:WaitForChild("Animator")
+
+    flying      = false
+    falling     = false
+    currentBank = 0
+    lastFOVTarget = nil
+    flySound    = nil
+    fadeTween   = nil
+    if renderConn then renderConn:Disconnect(); renderConn = nil end
+
+    groundRayParams.FilterDescendantsInstances = { newChar }
+    loadAnim()
+    loadLandSounds()
+
+    humanoid.Jumping:Connect(function(active)
+        if active and not flying then
+            task.delay(0.12, function()
+                local state = humanoid:GetState()
+                if state == Enum.HumanoidStateType.Jumping
+                or state == Enum.HumanoidStateType.Freefall then
+                    startFlying()
+                end
+            end)
+        end
+    end)
+
+    humanoid.StateChanged:Connect(function(_, new)
+        if new == Enum.HumanoidStateType.Landed then
+            if flying then stopFlying() end
+            if flying or falling then playLandAnim() end
+        end
+    end)
+
+    humanoid.Died:Connect(function()
+        if fallTrack and fallTrack.IsPlaying then fallTrack:Stop(0.2) end
+        falling = false
+    end)
+end)
+
+task.spawn(function()
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local Debris = game:GetService("Debris")
+local Players = game:GetService("Players")
+
+local LocalPlayer = Players.LocalPlayer
+local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+if not Character then
+    warn("Wind System: Character not found, skipping wind setup")
+    return
+end
+
+local CurrentCamera = workspace.CurrentCamera
+
+local Blur = CurrentCamera:FindFirstChild("Blur")
+if not Blur then
+	Blur = Instance.new("BlurEffect", CurrentCamera)
+end
+Blur.Size = 0
+
+local RunBlur = CurrentCamera:FindFirstChild("RunBlur")
+if not RunBlur then
+	RunBlur = Instance.new("BlurEffect", CurrentCamera)
+	RunBlur.Name = "RunBlur"
+end
+RunBlur.Size = 0
+local runBlurTween = nil
+local wasMoving = false
+
+local isR15 = Character:FindFirstChild("UpperTorso") ~= nil
+local R15 = {"Head","LeftUpperArm","LeftLowerArm","LeftHand","RightUpperArm","RightLowerArm","RightHand","LeftUpperLeg","LeftLowerLeg","LeftFoot","RightUpperLeg","RightLowerLeg","RightFoot"}
+local R6 = {"Head","Left Arm","Right Arm","Left Leg","Right Leg"}
+
+local bodyParts = {}
+for _, n in ipairs(isR15 and R15 or R6) do
+	local p = Character:FindFirstChild(n)
+	if p and p:IsA("BasePart") then
+		bodyParts[#bodyParts + 1] = p
+	end
+end
+
+for _, part in ipairs(bodyParts) do
+	do
+		local e = Instance.new("ParticleEmitter")
+		e.Brightness = 7
+		e.Color = ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.new(1,1,1)),ColorSequenceKeypoint.new(1,Color3.new(1,1,1))})
+		e.LightEmission = 0.5
+		e.LightInfluence = 1
+		e.Orientation = Enum.ParticleOrientation.VelocityParallel
+		e.Size = NumberSequence.new({NumberSequenceKeypoint.new(0,0,0),NumberSequenceKeypoint.new(1,10,0)})
+		e.Squash = NumberSequence.new({NumberSequenceKeypoint.new(0,0,0),NumberSequenceKeypoint.new(1,0,0)})
+		e.Texture = "rbxassetid://4770542473"
+		e.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0,1,0),NumberSequenceKeypoint.new(0.20000000298023224,0.91299998760223389,0),NumberSequenceKeypoint.new(1,1,0)})
+		e.ZOffset = 0
+		e.EmissionDirection = Enum.NormalId.Top
+		e.Enabled = false
+		e.Lifetime = NumberRange.new(0.25,0.5)
+		e.Rate = _G.G_Optimized and 125 or 250
+		e.RotSpeed = NumberRange.new(-50,50)
+		e.Rotation = NumberRange.new(-180,180)
+		e.Speed = NumberRange.new(50,200)
+		e.SpreadAngle = Vector2.new(0,500)
+		e.TimeScale = 1
+		e.Acceleration = Vector3.new(0,0,500)
+		e.Drag = 5
+		e.VelocityInheritance = 0
+		e.WindAffectsDrag = false
+		e.Shape = Enum.ParticleEmitterShape.Box
+		e.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
+		e.ShapePartial = 1
+		e.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+		e.FlipbookFramerate = NumberRange.new(1,1)
+		e.FlipbookLayout = Enum.ParticleFlipbookLayout.None
+		e.FlipbookMode = Enum.ParticleFlipbookMode.Loop
+		e.FlipbookStartRandom = false
+		e.LockedToPart = true
+		e.Name = "Wind1"
+		e:Emit(15)
+		e.Parent = part
+	end
+	do
+		local e = Instance.new("ParticleEmitter")
+		e.Brightness = 7
+		e.Color = ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.new(1,1,1)),ColorSequenceKeypoint.new(1,Color3.new(1,1,1))})
+		e.LightEmission = 0.5
+		e.LightInfluence = 1
+		e.Orientation = Enum.ParticleOrientation.VelocityParallel
+		e.Size = NumberSequence.new({NumberSequenceKeypoint.new(0,0,0),NumberSequenceKeypoint.new(1,3,1.8124997615814209)})
+		e.Squash = NumberSequence.new({NumberSequenceKeypoint.new(0,0,0),NumberSequenceKeypoint.new(1,3,0)})
+		e.Texture = "rbxassetid://4770542473"
+		e.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0,1,0),NumberSequenceKeypoint.new(0.20000000298023224,0.85000002384185791,0),NumberSequenceKeypoint.new(1,1,0)})
+		e.ZOffset = 0
+		e.EmissionDirection = Enum.NormalId.Top
+		e.Enabled = false
+		e.Lifetime = NumberRange.new(0.25,0.5)
+		e.Rate = _G.G_Optimized and 125 or 250
+		e.RotSpeed = NumberRange.new(0,0)
+		e.Rotation = NumberRange.new(-90,-90)
+		e.Speed = NumberRange.new(50,200)
+		e.SpreadAngle = Vector2.new(0,500)
+		e.TimeScale = 1
+		e.Acceleration = Vector3.new(0,0,500)
+		e.Drag = 5
+		e.VelocityInheritance = 0
+		e.WindAffectsDrag = false
+		e.Shape = Enum.ParticleEmitterShape.Box
+		e.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
+		e.ShapePartial = 1
+		e.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+		e.FlipbookFramerate = NumberRange.new(1,1)
+		e.FlipbookLayout = Enum.ParticleFlipbookLayout.None
+		e.FlipbookMode = Enum.ParticleFlipbookMode.Loop
+		e.FlipbookStartRandom = false
+		e.LockedToPart = true
+		e.Name = "Wind2"
+		e:Emit(15)
+		e.Parent = part
+	end
+	do
+		local e = Instance.new("ParticleEmitter")
+		e.Brightness = 7
+		e.Color = ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.new(1,1,1)),ColorSequenceKeypoint.new(1,Color3.new(1,1,1))})
+		e.LightEmission = 0.5
+		e.LightInfluence = 1
+		e.Orientation = Enum.ParticleOrientation.VelocityParallel
+		e.Size = NumberSequence.new({NumberSequenceKeypoint.new(0,0,0),NumberSequenceKeypoint.new(1,10,0)})
+		e.Squash = NumberSequence.new({NumberSequenceKeypoint.new(0,0,0),NumberSequenceKeypoint.new(1,0,0)})
+		e.Texture = "rbxassetid://4770542473"
+		e.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0,1,0),NumberSequenceKeypoint.new(0.20000000298023224,0.81300002336502075,0),NumberSequenceKeypoint.new(1,1,0)})
+		e.ZOffset = 0
+		e.EmissionDirection = Enum.NormalId.Back
+		e.Enabled = false
+		e.Lifetime = NumberRange.new(0.5,1)
+		e.Rate = _G.G_Optimized and 75 or 150
+		e.RotSpeed = NumberRange.new(-50,50)
+		e.Rotation = NumberRange.new(-180,180)
+		e.Speed = NumberRange.new(30,100)
+		e.SpreadAngle = Vector2.new(50,50)
+		e.TimeScale = 1
+		e.Acceleration = Vector3.new(0,0,100)
+		e.Drag = 0
+		e.VelocityInheritance = 0
+		e.WindAffectsDrag = false
+		e.Shape = Enum.ParticleEmitterShape.Box
+		e.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
+		e.ShapePartial = 1
+		e.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+		e.FlipbookFramerate = NumberRange.new(1,1)
+		e.FlipbookLayout = Enum.ParticleFlipbookLayout.None
+		e.FlipbookMode = Enum.ParticleFlipbookMode.Loop
+		e.FlipbookStartRandom = false
+		e.LockedToPart = true
+		e.Name = "Wind3"
+		e:Emit(15)
+		e.Parent = part
+	end
+end
+
+local wndPart = Instance.new("Part")
+wndPart.Transparency = 1
+wndPart.Anchored = true
+wndPart.CanCollide = false
+wndPart.Massless = true
+wndPart.Size = Vector3.new(1,1,1)
+wndPart.Name = "wnd"
+wndPart.Parent = workspace
+
+local wndAttachment = Instance.new("Attachment", wndPart)
+wndAttachment.Name = "Attachment"
+
+local function makeWind(name, emissionDir, lifetimeMin, lifetimeMax, rate, rotSpeedMin, rotSpeedMax, rotMin, rotMax, speedMin, speedMax, spreadAngle, acceleration, drag, sizeSeq, squashSeq, transparencySeq)
+	local e = Instance.new("ParticleEmitter")
+	e.Brightness = 7
+	e.Color = ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.new(1,1,1)),ColorSequenceKeypoint.new(1,Color3.new(1,1,1))})
+	e.LightEmission = 0.5
+	e.LightInfluence = 1
+	e.Orientation = Enum.ParticleOrientation.VelocityParallel
+	e.Size = sizeSeq
+	e.Squash = squashSeq
+	e.Texture = "rbxassetid://4770542473"
+	e.Transparency = transparencySeq
+	e.ZOffset = 0
+	e.EmissionDirection = emissionDir
+	e.Enabled = false
+	e.Lifetime = NumberRange.new(lifetimeMin, lifetimeMax)
+	e.Rate = _G.G_Optimized and math.floor(rate * 0.5) or rate
+	e.RotSpeed = NumberRange.new(rotSpeedMin, rotSpeedMax)
+	e.Rotation = NumberRange.new(rotMin, rotMax)
+	e.Speed = NumberRange.new(speedMin, speedMax)
+	e.SpreadAngle = spreadAngle
+	e.TimeScale = 1
+	e.Acceleration = acceleration
+	e.Drag = drag
+	e.VelocityInheritance = 0
+	e.WindAffectsDrag = false
+	e.Shape = Enum.ParticleEmitterShape.Box
+	e.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
+	e.ShapePartial = 1
+	e.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+	e.FlipbookFramerate = NumberRange.new(1,1)
+	e.FlipbookLayout = Enum.ParticleFlipbookLayout.None
+	e.FlipbookMode = Enum.ParticleFlipbookMode.Loop
+	e.FlipbookStartRandom = false
+	e.LockedToPart = true
+	e.Name = name
+	e.Parent = wndAttachment
+end
+
+makeWind(
+	"Wind1", Enum.NormalId.Top, 0.25, 0.5, 250, -50, 50, -180, 180, 50, 200,
+	Vector2.new(0,500), Vector3.new(0,0,500), 5,
+	NumberSequence.new({NumberSequenceKeypoint.new(0,0,0),NumberSequenceKeypoint.new(1,10,0)}),
+	NumberSequence.new({NumberSequenceKeypoint.new(0,0,0),NumberSequenceKeypoint.new(1,0,0)}),
+	NumberSequence.new({NumberSequenceKeypoint.new(0,1,0),NumberSequenceKeypoint.new(0.20000000298023224,0.91299998760223389,0),NumberSequenceKeypoint.new(1,1,0)})
+)
+
+makeWind(
+	"Wind2", Enum.NormalId.Top, 0.25, 0.5, 250, 0, 0, -90, -90, 50, 200,
+	Vector2.new(0,500), Vector3.new(0,0,500), 5,
+	NumberSequence.new({NumberSequenceKeypoint.new(0,0,0),NumberSequenceKeypoint.new(1,3,1.8124997615814209)}),
+	NumberSequence.new({NumberSequenceKeypoint.new(0,0,0),NumberSequenceKeypoint.new(1,3,0)}),
+	NumberSequence.new({NumberSequenceKeypoint.new(0,1,0),NumberSequenceKeypoint.new(0.20000000298023224,0.85000002384185791,0),NumberSequenceKeypoint.new(1,1,0)})
+)
+
+makeWind(
+	"Wind3", Enum.NormalId.Back, 0.5, 1, 150, -50, 50, -180, 180, 30, 100,
+	Vector2.new(50,50), Vector3.new(0,0,100), 0,
+	NumberSequence.new({NumberSequenceKeypoint.new(0,0,0),NumberSequenceKeypoint.new(1,10,0)}),
+	NumberSequence.new({NumberSequenceKeypoint.new(0,0,0),NumberSequenceKeypoint.new(1,0,0)}),
+	NumberSequence.new({NumberSequenceKeypoint.new(0,1,0),NumberSequenceKeypoint.new(0.20000000298023224,0.81300002336502075,0),NumberSequenceKeypoint.new(1,1,0)})
+)
+
+local Part_upvr = Instance.new("Part", Character)
+Part_upvr.Transparency = 1
+Part_upvr.Anchored = true
+Part_upvr.CanCollide = false
+Part_upvr.Massless = true
+Part_upvr.Size = Vector3.new()
+
+local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
+local Humanoid = Character:WaitForChild("Humanoid")
+
+local tickW = 0
+
+RunService.RenderStepped:Connect(function()
+	local Magnitude = HumanoidRootPart.Velocity.Magnitude
+
+	if 0 < Magnitude then
+		Part_upvr.CFrame = CFrame.new(CurrentCamera.CFrame.Position, CurrentCamera.CFrame.Position + HumanoidRootPart.Velocity * 5)
+	else
+		Part_upvr.Position = CurrentCamera.CFrame.Position
+	end
+
+	tickW += 1
+
+	Blur.Size = math.clamp(Magnitude / 70, 0, 9)
+
+	-- RunBlur: triggers at max when player starts moving, fades out over 0.3s
+	local isMovingNow = Magnitude > 8
+	if isMovingNow and not wasMoving then
+		if runBlurTween then runBlurTween:Cancel() end
+		RunBlur.Size = 0
+		runBlurTween = TweenService:Create(
+			RunBlur,
+			TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+			{Size = 0}
+		)
+		runBlurTween:Play()
+	elseif not isMovingNow then
+		if runBlurTween then runBlurTween:Cancel() end
+		RunBlur.Size = 0
+	end
+	wasMoving = isMovingNow
+
+	local wndPos = CurrentCamera.CFrame.Position + CurrentCamera.CFrame.LookVector * 15
+	wndPart.CFrame = CFrame.new(wndPos, wndPos + CurrentCamera.CFrame.LookVector)
+
+	if 80 <= Magnitude and tickW % math.max(1, math.floor(50 / Magnitude)) == 0 then
+		local Part = Instance.new("Part")
+		Part.CastShadow = false
+		Part.Color = Color3.new(1,1,1)
+		Part.Material = Enum.Material.ForceField
+		Part.Transparency = 1
+		Part.Size = Vector3.new(0.03, 0.03, Magnitude / 60)
+		Part.CanCollide = false
+		Part.Massless = true
+		Part.Parent = workspace
+
+		local SpecialMesh = Instance.new("SpecialMesh")
+		SpecialMesh.MeshType = Enum.MeshType.Sphere
+		SpecialMesh.Parent = Part
+
+		local cframe = CFrame.new(math.random(-300,300)/100, math.random(-200,200)/100, -math.floor(Magnitude/50)*2)
+
+		local Weld = Instance.new("Weld", Part)
+		Weld.Part0 = Part_upvr
+		Weld.Part1 = Part
+		Weld.C0 = cframe
+
+		for _, v in pairs(wndAttachment:GetDescendants()) do
+			if v:IsA("ParticleEmitter") then
+				v.Enabled = true
+				if v.Name ~= "Wind3" then
+					v.Speed = NumberRange.new(math.clamp(5*Magnitude/40,-100,50), math.clamp(20*Magnitude/40,-100,200))
+					v.Rate = math.clamp(2*Magnitude/4, 0, _G.G_Optimized and 1000 or 2000)
+				elseif v.Name == "Wind3" then
+					local lock = false
+					if Humanoid.FloorMaterial == Enum.Material.Air then
+						if 250 >= Magnitude then
+							lock = false
+						else
+							lock = true
+						end
+					end
+					v.LockedToPart = lock
+				end
+			end
+		end
+
+		Debris:AddItem(Part, 0.6)
+
+		TweenService:Create(Part, TweenInfo.new(0.05, Enum.EasingStyle.Linear, Enum.EasingDirection.In, 0, false, 0), {Transparency = 0.8}):Play()
+		TweenService:Create(Weld, TweenInfo.new(0.3, Enum.EasingStyle.Linear, Enum.EasingDirection.In, 0, false, 0), {C0 = CFrame.new(cframe.Position.X, cframe.Position.Y, math.floor(Magnitude/100)*4)}):Play()
+
+		wait(0.225)
+
+		TweenService:Create(Part, TweenInfo.new(0.095, Enum.EasingStyle.Linear, Enum.EasingDirection.In, 0, false, 0), {Transparency = 1}):Play()
+	else
+		for _, v in pairs(wndAttachment:GetChildren()) do
+			if v:IsA("ParticleEmitter") then
+				v.Enabled = false
+			end
+		end
+	end
+end)
+
+end) -- end task.spawn (Wind System)
