@@ -6436,8 +6436,8 @@ local PlayerGui = player:WaitForChild("PlayerGui")
 local flyScreenGui = Instance.new("ScreenGui", PlayerGui)
 
 local imageButton2 = Instance.new("ImageButton")
-imageButton2.Size = UDim2.new(0, 50, 0, 50)
-imageButton2.Position = UDim2.new(0.5, 200, 0.5, -25)
+imageButton2.Size = UDim2.new(0, 54, 0, 54)
+imageButton2.Position = UDim2.new(0.8456, 0, 0.4677, 0)
 imageButton2.AnchorPoint = Vector2.new(0.5, 0.5)
 imageButton2.Image = "rbxassetid://6256840888"
 imageButton2.BackgroundTransparency = 1
@@ -6446,7 +6446,7 @@ imageButton2.Parent = flyScreenGui
 
 local imageButton1 = Instance.new("ImageButton")
 imageButton1.Size = UDim2.new(0, 35, 0, 35)
-imageButton1.Position = UDim2.new(0.5, 200, 0.5, -25)
+imageButton1.Position = UDim2.new(0.8456, 0, 0.4677, 0)
 imageButton1.AnchorPoint = Vector2.new(0.5, 0.5)
 imageButton1.ZIndex = imageButton2.ZIndex + 1
 imageButton1.Image = "rbxassetid://18428026508"
