@@ -6049,7 +6049,6 @@ end)
 					end)
 				end)
 
-				PlaySound("rbxassetid://12424750285", 1, 10, 150)
 				PlaySound("rbxassetid://7123907538",  1, 10, 150)
 				PlaySound("rbxassetid://9117969687",  1, 10, 150)
 				PlaySound("rbxassetid://7406698049",  1, 10, 150)
