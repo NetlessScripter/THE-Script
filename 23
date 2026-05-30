@@ -4129,6 +4129,74 @@ function RunSequence()
 			hit = true
 			touchConn:Disconnect()
 			task.delay(1, function()
+local p = game:GetService("Players")
+local r = game:GetService("ReplicatedStorage")
+local d = game:GetService("Debris")
+
+local lp = p.LocalPlayer
+local c = lp.Character or lp.CharacterAdded:Wait()
+local h = c:WaitForChild("Humanoid")
+local a = h:FindFirstChildOfClass("Animator") or Instance.new("Animator")
+a.Parent = h
+
+local hrp = c:WaitForChild("HumanoidRootPart")
+
+local function efx(t, n, k)
+	local x = t:Clone()
+	x.Parent = hrp
+	for _, v in pairs(x:GetDescendants()) do
+		if v:IsA("ParticleEmitter") then
+			v:Emit(n or 15)
+			v.Enabled = k == true
+		end
+	end
+	d:AddItem(x, 5)
+end
+
+local o = {}
+
+local function s(v)
+	if v:IsA("BasePart") or v:IsA("Decal") or v:IsA("Texture") then
+		o[v] = v.Transparency
+	end
+	for _, x in pairs(v:GetChildren()) do
+		s(x)
+	end
+end
+
+s(c)
+
+local function vis(b)
+	for v, t in pairs(o) do
+		if v and v.Parent then
+			v.Transparency = b and 1 or t
+		end
+	end
+end
+
+local res = r:WaitForChild("Resources")
+local n = res:WaitForChild("NinjaUlt")
+local se = n:WaitForChild("Start_Effects")
+local ps = se:WaitForChild("Particles")
+
+efx(ps:WaitForChild("Low"))
+efx(ps:WaitForChild("Center_Tilted"))
+efx(ps:WaitForChild("Ground"))
+
+local sfx = Instance.new("Sound")
+sfx.SoundId = "rbxassetid://3339374157"
+sfx.Volume = 1
+sfx.Parent = hrp
+sfx:Play()
+d:AddItem(sfx, 5)
+
+vis(true)
+task.wait(0.01)
+vis(false)
+task.wait(0.01)
+vis(true)
+task.wait(0.01)
+vis(false)
 				if HumanoidRootPart and HumanoidRootPart.Parent then
 					HumanoidRootPart.CFrame = otherHRP.CFrame * CFrame.new(0, 0, 3)
 				end
