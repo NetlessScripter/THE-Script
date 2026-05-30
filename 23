@@ -20,6 +20,20 @@ function PlaySound(id, volume, minDist, maxDist)
 	game:GetService("Debris"):AddItem(sound, 10)
 	return sound
 end
+
+local function GetGitSound(GithubSnd, SoundName)
+    local url = GithubSnd
+    if not isfile(SoundName .. ".mp3") then
+        writefile(SoundName .. ".mp3", game:HttpGet(url))
+    end
+    local sound = Instance.new("Sound")
+    sound.SoundId = (getcustomasset or getsynasset)(SoundName .. ".mp3")
+    sound.Volume = 1  
+    sound.Name = "HAGAH"  
+    sound.Parent = workspace
+    return sound
+end
+
 _gc_CollectionService = game:GetService("CollectionService")
 _gc_TweenService      = game:GetService("TweenService")
 _gc_LocalPlayer       = game.Players.LocalPlayer
@@ -5942,7 +5956,11 @@ wait(0.2)
         task.wait(1.8)
         effectPart3:Destroy()
 end)
-			
+            local sound = GetGitSound(
+           "https://github.com/NetlessScripter/GOKU/blob/5b3ac08281bbd2939f5dc8e9219b7f51a7604662/copy_BD21A594-0B70-45EA-8757-39EEB8949364.mp3?raw=true",
+           "HAGAH"
+           )
+            sound:Play()
 			task.delay(0.13, function()
 				EmitDash3()
 				EmitCrescentAura()
