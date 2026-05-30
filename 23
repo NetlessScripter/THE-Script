@@ -9,6 +9,13 @@ TRIGGER_ANIM_IDS = {
 	ATTACK1 = "10471336737",
 	ATTACK2 = "10466974800",
 }
+-- Finisher animations that must fully cancel Attack 2 (animation, VFX, and sounds)
+ATTACK2_CANCEL_IDS = {
+	["71181015443030"]  = true,
+	["75127576841159"]  = true,
+}
+attack2LastFired = -math.huge  -- tick() timestamp; prevents finisher re-triggering attack2
+ATTACK2_COOLDOWN = 3           -- seconds to lock out after attack2 completes
 function PlaySound(id, volume, minDist, maxDist)
 	sound = Instance.new("Sound")
 	sound.SoundId = id
@@ -724,7 +731,7 @@ function _gc_craterDebris(v363)
                 v431.CFrame = v430 * (v436 * l_Angles_3(v441, v443, (math.rad((v444:NextNumber(v440, v442))))));
                 v431.Transparency = 0;
                 table.insert(v408, v431);
-                v430 = true;
+                v430 = false;
                 if #l_v424_0 ~= 0 then
                     v430 = v363.ground:GetAttribute("Breakable") or not v363.ground.Anchored;
                 end;
@@ -1059,7 +1066,7 @@ function GroundCrater(params)
 	end;
 	_gc_hitPart, _gc_hitPos, _, _gc_hitNormal = _gc_raycast({
 		orig = params.start, 
-		dir = params["end"]
+		dir = params["end"] or Vector3.new(0, -1000, 0)
 	});
 	if params.Sound then
 		params.Sound.CFrame = CFrame.new(_gc_hitPos);
@@ -4118,7 +4125,7 @@ function RunSequence()
 					Effect   = "Ground Crater",
 					start    = HumanoidRootPart.Position,
 					Seed     = 115442933,
-					["end"] = Vector3.new(0, -7, 0),
+					["end"] = Vector3.new(0, -1000, 0),
 					nosound  = true,
 				})
 			end)
@@ -4232,6 +4239,7 @@ end
 RunService = game:GetService("RunService")
 sequenceRunning = false
 attack2Running = false
+attack2Cancelled = false  -- set true when a finisher anim cancels the sequence
 
 RunService.Heartbeat:Connect(function()
 	for _, track in ipairs(Animator:GetPlayingAnimationTracks()) do
@@ -4248,9 +4256,47 @@ RunService.Heartbeat:Connect(function()
 			break
 		end
 
+		-- If a finisher animation plays while attack2 is active, cancel everything immediately.
+		if attack2Running and not attack2Cancelled then
+			local animId = track.Animation.AnimationId:match("%d+") or ""
+			if ATTACK2_CANCEL_IDS[animId] and track ~= attack2Track then
+				attack2Cancelled = true
+				attack2LastFired = tick()  -- start cooldown so attack2 won't re-fire after cancel
+				-- Stop the attack2 animation track right away
+				if attack2Track then
+					pcall(function() attack2Track:Stop(0) end)
+				end
+				-- Destroy the yellow-charge VFX attachment so particles stop
+				if containerYellowCharge and containerYellowCharge.Parent then
+					pcall(function()
+						for _, em in ipairs(containerYellowCharge:GetChildren()) do
+							if em:IsA("ParticleEmitter") then em.Enabled = false end
+						end
+						containerYellowCharge:Destroy()
+					end)
+				end
+				-- Clean up any floating effect parts spawned by attack2
+				pcall(function()
+					if effectPart1 and effectPart1.Parent then effectPart1:Destroy() end
+					if effectPart2 and effectPart2.Parent then effectPart2:Destroy() end
+					if effectPart3 and effectPart3.Parent then effectPart3:Destroy() end
+				end)
+				-- Kill any pending Attack2Flash screen guis
+				pcall(function()
+					for _, gui in ipairs(LocalPlayer.PlayerGui:GetChildren()) do
+						if gui.Name == "Attack2Flash" then gui:Destroy() end
+					end
+				end)
+				attack2Running = false
+				break
+			end
+		end
+
 		
-		if not attack2Running and string.find(track.Animation.AnimationId, TRIGGER_ANIM_IDS.ATTACK2) then
+		if not attack2Running and (tick() - attack2LastFired > ATTACK2_COOLDOWN) and string.find(track.Animation.AnimationId, TRIGGER_ANIM_IDS.ATTACK2) then
 			attack2Running = true
+			attack2LastFired = tick()
+			attack2Cancelled = false
 			track:Stop(0)
 			attack2Anim = Instance.new("Animation")
 			attack2Anim.AnimationId = "rbxassetid://71181015443030"
@@ -4721,13 +4767,14 @@ RunService.Heartbeat:Connect(function()
 			containerYellowCharge.Parent = RightArm
 			
 			task.delay(0.3, function()
+				if attack2Cancelled then return end
 				for _, em in ipairs(containerYellowCharge:GetChildren()) do
 					if em:IsA("ParticleEmitter") then em.Enabled = false end
 				end
 				game:GetService("Debris"):AddItem(containerYellowCharge, 1.5)
 			end)
 
-			
+			if attack2Cancelled then return end
 			PlaySound("rbxassetid://14065053293", 1, 10, 150)
 			PlaySound("rbxassetid://12534785859", 1, 10, 150)
 			PlaySound("rbxassetid://10481117326", 1, 10, 150)
@@ -4737,6 +4784,7 @@ RunService.Heartbeat:Connect(function()
 			PlaySound("rbxassetid://12981921930", 1, 10, 150)
 task.spawn(function()
 wait(0.2)
+        if attack2Cancelled then return end
         Players = game:GetService("Players")
         RunService = game:GetService("RunService")
 
@@ -5956,6 +6004,7 @@ wait(0.2)
         task.wait(1.8)
         effectPart3:Destroy()
 end)
+            if not attack2Cancelled then
             local sound = GetGitSound(
            "https://github.com/NetlessScripter/GOKU/blob/5b3ac08281bbd2939f5dc8e9219b7f51a7604662/copy_BD21A594-0B70-45EA-8757-39EEB8949364.mp3?raw=true",
            "HAGAH"
@@ -5970,10 +6019,23 @@ end)
            )
            end)
             sound:Play()
+            end
 			task.delay(0.13, function()
+				if attack2Cancelled then return end
 				EmitDash3()
 				EmitCrescentAura()
 				EmitMostEffects()
+				task.spawn(function()
+					pcall(function()
+						GroundCrater({
+							Effect   = "Ground Crater",
+							start    = HumanoidRootPart.Position,
+							Seed     = 115442933,
+							["end"] = Vector3.new(0, -1000, 0),
+							nosound  = true,
+						})
+					end)
+				end)
 
 				PlaySound("rbxassetid://12424750285", 1, 10, 150)
 				PlaySound("rbxassetid://7123907538",  1, 10, 150)
