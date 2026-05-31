@@ -6479,6 +6479,20 @@ imageButton1.MouseButton1Click:Connect(function()
     end
 end)
 
+-- PC keybind: press Z to toggle flying
+if not isMobile then
+    UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed then return end
+        if input.KeyCode == Enum.KeyCode.Z then
+            if flying then
+                stopFlying()
+            else
+                startFlying()
+            end
+        end
+    end)
+end
+
 humanoid.StateChanged:Connect(function(_, new)
     if new == Enum.HumanoidStateType.Landed then
         if flying then stopFlying() end
