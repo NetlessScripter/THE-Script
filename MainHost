@@ -433,7 +433,7 @@ local function DoTeleport()
     SetVisibility(false)
 end
 
--- Mobile: tap the button to teleport
+-- Mobile: tap button to teleport
 afterImageBtn.MouseButton1Click:Connect(DoTeleport)
 
 -- PC: press R to teleport
@@ -542,9 +542,13 @@ local function PlayWindVFX()
     windPart.CFrame      = rootPart.CFrame * CFrame.new(0, 0, -5)
     windPart.Parent      = Workspace
     Debris:AddItem(windPart, 1)
-    local windEmitter = game:GetService("ReplicatedStorage").Resources.KJEffects.DropkickExtra.firstHit:GetChildren()[3].Wind:Clone()
-    windEmitter.Parent = windPart
-    windEmitter:Emit(10)
+    local attachment = ReplicatedStorage.Resources.KJEffects.DropkickExtra.firstHit:GetChildren()[3]
+    local windEmitter = attachment and attachment:FindFirstChild("Wind")
+    if windEmitter then
+        windEmitter = windEmitter:Clone()
+        windEmitter.Parent = windPart
+        windEmitter:Emit(10)
+    end
 end
 
 local function PlayHitSound(key, targetModel)
