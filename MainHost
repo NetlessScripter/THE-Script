@@ -359,7 +359,7 @@ afterImageIcon.Image                = "rbxassetid://13630346552"
 afterImageIcon.ScaleType            = Enum.ScaleType.Fit
 afterImageIcon.Parent               = afterImageBtn
 
-afterImageBtn.MouseButton1Click:Connect(function()
+local function DoTeleport()
     local char = localPlayer.Character or localPlayer.CharacterAdded:Wait()
     local hrp  = char:WaitForChild("HumanoidRootPart")
 
@@ -431,7 +431,21 @@ afterImageBtn.MouseButton1Click:Connect(function()
     SetVisibility(false) task.wait(0.01)
     SetVisibility(true)  task.wait(0.01)
     SetVisibility(false)
-end)
+end
+
+-- Mobile: tap the button to teleport
+afterImageBtn.MouseButton1Click:Connect(DoTeleport)
+
+-- PC: press R to teleport
+local UserInputService = game:GetService("UserInputService")
+if not isMobile then
+    UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed then return end
+        if input.KeyCode == Enum.KeyCode.R then
+            DoTeleport()
+        end
+    end)
+end
 
 local comboAnimMap = {
     ["rbxassetid://10469493270"] = { hitSfxId = "rbxassetid://13064223399", hitVfxId = "rbxassetid://17889458563", swingUrl = "https://github.com/NetlessScripter/Vegeta/blob/456e46fc178620c7a2b1a43ba5a049b41fb15c35/copy_28A5F52E-2133-4E5C-8F0B-AC83081AA11F.mp3?raw=true", key = "S1" },
