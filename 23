@@ -8,6 +8,8 @@ RightArm = Character:WaitForChild("Right Arm")
 TRIGGER_ANIM_IDS = {
 	ATTACK1 = "10471336737",
 	ATTACK2 = "10466974800",
+	ATTACK3 = "12510170988",
+	ATTACK4 = "10468665991",
 }
 -- Finisher animations that must fully cancel Attack 2 (animation, VFX, and sounds)
 ATTACK2_CANCEL_IDS = {
@@ -49,6 +51,94 @@ _gc_CollectionService = game:GetService("CollectionService")
 _gc_TweenService      = game:GetService("TweenService")
 _gc_LocalPlayer       = game.Players.LocalPlayer
 _gc_LegacyReplication = game.ReplicatedStorage.Resources.LegacyReplication
+
+-- Preload attack4 model once so we can clone it cheaply instead of calling GetObjects every time
+do
+	local _a4folder = game.ReplicatedStorage:FindFirstChild("_Attack4Assets")
+		or Instance.new("Folder")
+	_a4folder.Name = "_Attack4Assets"
+	_a4folder.Parent = game.ReplicatedStorage
+	if not _a4folder:FindFirstChild("Attack4Model") then
+		local _a4model = game:GetObjects("rbxassetid://115677204094535")[1]
+		_a4model.Name = "Attack4Model"
+		_a4model.Parent = _a4folder
+	end
+end
+-- Load Animator6D module once at startup
+loadstring(game:HttpGet(
+	"https://raw.githubusercontent.com/NetlessScripter/Universal-KJ-Port/refs/heads/main/Animation%20Module"
+))()
+
+-- Build a KeyframeSequence from the JSON at startup so Animator6D takes the
+-- Instance path (AnimPlayer.new directly) with zero loading delay at call time.
+do
+	local _CACHE_URL  = "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/anim6d_kfcache_15986498343.json"
+	local _CACHE_FILE = "anim6d_kfcache_15986498343.json"
+	local _HttpService = game:GetService("HttpService")
+
+	local _jsonBody
+	if isfile and isfile(_CACHE_FILE) then
+		local ok, raw = pcall(readfile, _CACHE_FILE)
+		if ok and raw and #raw > 100 then _jsonBody = raw end
+	end
+	if not _jsonBody then
+		local ok, body = pcall(game.HttpGet, game, _CACHE_URL)
+		if ok and body and #body > 100 then
+			_jsonBody = body
+			if writefile then writefile(_CACHE_FILE, body) end
+		else
+			warn("[Animator6D] Failed to fetch JSON cache")
+		end
+	end
+
+	local _attack4KFS = nil
+
+	if _jsonBody then
+		local ok, data = pcall(_HttpService.JSONDecode, _HttpService, _jsonBody)
+		if ok and data and data.KeyframeData and data.KeyframeData.Frames then
+			-- Build a real KeyframeSequence Instance from the JSON frames
+			local kfs = Instance.new("KeyframeSequence")
+			kfs.Loop = data.KeyframeData.Loop or false
+			kfs.Name = "Attack4KFS"
+
+			for _, f in ipairs(data.KeyframeData.Frames) do
+				local kf = Instance.new("Keyframe")
+				kf.Time = f.Time
+				for boneName, poseData in pairs(f.Poses) do
+					local pose = Instance.new("Pose")
+					pose.Name = boneName
+					local cf = poseData.CFrame
+					pose.CFrame = CFrame.new(
+						cf[1],  cf[2],  cf[3],
+						cf[4],  cf[5],  cf[6],
+						cf[7],  cf[8],  cf[9],
+						cf[10], cf[11], cf[12]
+					)
+					local styleName = poseData.EasingStyle or "Linear"
+					local dirName   = poseData.EasingDirection or "Out"
+					pcall(function() pose.EasingStyle    = Enum.EasingStyle[styleName] end)
+					pcall(function() pose.EasingDirection = Enum.EasingDirection[dirName] end)
+					pose.Parent = kf
+				end
+				kf.Parent = kfs
+			end
+
+			-- Park it nil-parented so it stays in memory without cluttering workspace
+			kfs.Parent = nil
+			_attack4KFS = kfs
+		end
+	end
+
+	function PlayAttack4Anim()
+		if _attack4KFS then
+			-- Instance path: Animator6D → findKFS → AnimPlayer.new, no loading at all
+			Animator6D(_attack4KFS, 1, false)
+		else
+			warn("[Animator6D] Attack4 KFS not built — cannot play")
+		end
+	end
+end
+
 _gc_partPool          = {}
 _gc_sweepTick         = tick()
 _gc_rayExclude        = { workspace.Live, workspace.Thrown }
@@ -2652,6 +2742,384 @@ function EmitDash3()
 	end
 	game:GetService("Debris"):AddItem(anchor, 2)
 end
+-- Beam charge VFX: spawns the blue charge attachment on RightArm, holds for `duration`
+-- seconds, then destroys it. Returns the container so callers can destroy early if needed.
+function Charge(duration)
+	local container = Instance.new("Attachment")
+	container.Name = "Beam Charge 4 1"
+		
+	emitter2 = Instance.new("ParticleEmitter")
+	emitter2.Name = "Charge"
+	emitter2.Texture = "rbxassetid://1084976679"
+	emitter2.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.403922, 0.760784, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.403922, 0.760784, 1))})
+	emitter2.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1, 0), NumberSequenceKeypoint.new(0.15, 0, 0), NumberSequenceKeypoint.new(0.6, 0, 0), NumberSequenceKeypoint.new(1, 1, 0)})
+	emitter2.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 0, 0), NumberSequenceKeypoint.new(0.1, 1.99092, 0), NumberSequenceKeypoint.new(0.2, 3.83231, 0), NumberSequenceKeypoint.new(0.3, 5.52167, 0), NumberSequenceKeypoint.new(0.4, 7.05617, 0), NumberSequenceKeypoint.new(0.5, 8.43275, 0), NumberSequenceKeypoint.new(0.6, 9.64825, 0), NumberSequenceKeypoint.new(0.7, 10.7001, 0), NumberSequenceKeypoint.new(0.8, 11.5887, 0), NumberSequenceKeypoint.new(0.9, 12.3259, 0), NumberSequenceKeypoint.new(1, 13, 0), NumberSequenceKeypoint.new(1, 13, 0)})
+	emitter2.Brightness = 2
+	emitter2.LightEmission = 1
+	emitter2.LightInfluence = 0
+	emitter2.ZOffset = 0
+	emitter2.FlipbookLayout = Enum.ParticleFlipbookLayout.None
+	emitter2.FlipbookMode = Enum.ParticleFlipbookMode.Loop
+	emitter2.FlipbookFramerate = NumberRange.new(1, 1)
+	emitter2.FlipbookStartRandom = false
+	emitter2.Shape = Enum.ParticleEmitterShape.Box
+	emitter2.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+	emitter2.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
+	emitter2.ShapePartial = 1
+	emitter2.Enabled = true
+	emitter2.Rate = 6
+	emitter2.Lifetime = NumberRange.new(0.45, 0.45)
+	emitter2.EmissionDirection = Enum.NormalId.Top
+	emitter2.TimeScale = 1
+	emitter2.Speed = NumberRange.new(0, 0)
+	emitter2.SpreadAngle = Vector2.new(0, 0)
+	emitter2.Rotation = NumberRange.new(0, 360)
+	emitter2.RotSpeed = NumberRange.new(50, 50)
+	emitter2.VelocityInheritance = 0
+	emitter2.Acceleration = Vector3.new(0, 0, 0)
+	emitter2.Drag = 0
+	emitter2.WindAffectsDrag = false
+	emitter2.LockedToPart = true
+	emitter2:SetAttribute("EmitDelay", 0)
+	emitter2:SetAttribute("EmitCount", 0)
+	emitter2:SetAttribute("DoDisableOnImpact", false)
+	emitter2.Parent = container
+		
+	emitter3 = Instance.new("ParticleEmitter")
+	emitter3.Name = "Haze"
+	emitter3.Texture = "rbxassetid://272050333"
+	emitter3.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.352941, 0.631373, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.352941, 0.631373, 1))})
+	emitter3.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1, 0), NumberSequenceKeypoint.new(0.1, 0.3, 0), NumberSequenceKeypoint.new(0.4, 0.3, 0), NumberSequenceKeypoint.new(1, 1, 0)})
+	emitter3.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 0, 0), NumberSequenceKeypoint.new(0.2, 16.5639, 0), NumberSequenceKeypoint.new(0.575, 19.6696, 0), NumberSequenceKeypoint.new(1, 24.8458, 0)})
+	emitter3.Brightness = 0.35
+	emitter3.LightEmission = 1
+	emitter3.LightInfluence = 0
+	emitter3.ZOffset = -0.65
+	emitter3.FlipbookLayout = Enum.ParticleFlipbookLayout.None
+	emitter3.FlipbookMode = Enum.ParticleFlipbookMode.Loop
+	emitter3.FlipbookFramerate = NumberRange.new(1, 1)
+	emitter3.FlipbookStartRandom = false
+	emitter3.Shape = Enum.ParticleEmitterShape.Box
+	emitter3.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+	emitter3.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
+	emitter3.ShapePartial = 1
+	emitter3.Enabled = true
+	emitter3.Rate = 1.75
+	emitter3.Lifetime = NumberRange.new(1, 1)
+	emitter3.EmissionDirection = Enum.NormalId.Top
+	emitter3.TimeScale = 1
+	emitter3.Speed = NumberRange.new(0.0265022, 0.0265022)
+	emitter3.SpreadAngle = Vector2.new(0, 0)
+	emitter3.Rotation = NumberRange.new(0, 0)
+	emitter3.RotSpeed = NumberRange.new(0, 0)
+	emitter3.VelocityInheritance = 0
+	emitter3.Acceleration = Vector3.new(0, 0, 0)
+	emitter3.Drag = 0
+	emitter3.WindAffectsDrag = false
+	emitter3.LockedToPart = true
+	emitter3:SetAttribute("EmitDelay", 0)
+	emitter3:SetAttribute("EmitCount", 1)
+	emitter3:SetAttribute("DoDisableOnImpact", false)
+	emitter3.Parent = container
+		
+	emitter4 = Instance.new("ParticleEmitter")
+	emitter4.Name = "Rays1"
+	emitter4.Texture = "rbxassetid://15816318077"
+	emitter4.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.254902, 0.627451, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.254902, 0.627451, 1))})
+	emitter4.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1, 0), NumberSequenceKeypoint.new(0.3, 0, 0), NumberSequenceKeypoint.new(1, 1, 0)})
+	emitter4.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 40.5962, 0), NumberSequenceKeypoint.new(0.1, 28.9706, 0), NumberSequenceKeypoint.new(0.2, 23.1159, 0), NumberSequenceKeypoint.new(0.3, 19.1122, 0), NumberSequenceKeypoint.new(0.4, 16.2069, 0), NumberSequenceKeypoint.new(0.5, 14.0662, 0), NumberSequenceKeypoint.new(0.6, 12.5036, 0), NumberSequenceKeypoint.new(0.7, 11.4011, 0), NumberSequenceKeypoint.new(0.8, 10.6778, 0), NumberSequenceKeypoint.new(0.9, 10.2752, 0), NumberSequenceKeypoint.new(1, 10.149, 0)})
+	emitter4.Brightness = 1.5
+	emitter4.LightEmission = 1
+	emitter4.LightInfluence = 0
+	emitter4.ZOffset = -0.21
+	emitter4.FlipbookLayout = Enum.ParticleFlipbookLayout.Grid8x8
+	emitter4.FlipbookMode = Enum.ParticleFlipbookMode.OneShot
+	emitter4.FlipbookFramerate = NumberRange.new(1, 1)
+	emitter4.FlipbookStartRandom = false
+	emitter4.Shape = Enum.ParticleEmitterShape.Box
+	emitter4.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+	emitter4.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
+	emitter4.ShapePartial = 1
+	emitter4.Enabled = true
+	emitter4.Rate = 11.3333
+	emitter4.Lifetime = NumberRange.new(0.3, 0.3)
+	emitter4.EmissionDirection = Enum.NormalId.Top
+	emitter4.TimeScale = 1
+	emitter4.Speed = NumberRange.new(0, 0)
+	emitter4.SpreadAngle = Vector2.new(0, 0)
+	emitter4.Rotation = NumberRange.new(-180, 180)
+	emitter4.RotSpeed = NumberRange.new(-35, 35)
+	emitter4.VelocityInheritance = 0
+	emitter4.Acceleration = Vector3.new(0, 0, 0)
+	emitter4.Drag = 0
+	emitter4.WindAffectsDrag = false
+	emitter4.LockedToPart = true
+	emitter4:SetAttribute("DoDisableOnImpact", false)
+	emitter4.Parent = container
+		
+	emitter5 = Instance.new("ParticleEmitter")
+	emitter5.Name = "Light"
+	emitter5.Texture = "rbxassetid://1084999891"
+	emitter5.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.411765, 0.733333, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.411765, 0.733333, 1))})
+	emitter5.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1, 0), NumberSequenceKeypoint.new(0.2, 0.5, 0), NumberSequenceKeypoint.new(0.8, 0.5, 0), NumberSequenceKeypoint.new(1, 1, 0)})
+	emitter5.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 0, 0), NumberSequenceKeypoint.new(0.100266, 0, 0), NumberSequenceKeypoint.new(0.25, 25.6878, 1), NumberSequenceKeypoint.new(0.899734, 0, 0), NumberSequenceKeypoint.new(1, 0, 0)})
+	emitter5.Brightness = 0.2
+	emitter5.LightEmission = 1
+	emitter5.LightInfluence = 0
+	emitter5.ZOffset = -0.65
+	emitter5.FlipbookLayout = Enum.ParticleFlipbookLayout.None
+	emitter5.FlipbookMode = Enum.ParticleFlipbookMode.Loop
+	emitter5.FlipbookFramerate = NumberRange.new(1, 1)
+	emitter5.FlipbookStartRandom = false
+	emitter5.Shape = Enum.ParticleEmitterShape.Box
+	emitter5.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+	emitter5.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
+	emitter5.ShapePartial = 1
+	emitter5.Enabled = true
+	emitter5.Rate = 8
+	emitter5.Lifetime = NumberRange.new(0.4, 0.6)
+	emitter5.EmissionDirection = Enum.NormalId.Top
+	emitter5.TimeScale = 1
+	emitter5.Speed = NumberRange.new(0.0153704, 0.0153704)
+	emitter5.SpreadAngle = Vector2.new(0, 0)
+	emitter5.Rotation = NumberRange.new(-360, 360)
+	emitter5.RotSpeed = NumberRange.new(-50, 100)
+	emitter5.VelocityInheritance = 0
+	emitter5.Acceleration = Vector3.new(0, 0, 0)
+	emitter5.Drag = 0
+	emitter5.WindAffectsDrag = false
+	emitter5.LockedToPart = true
+	emitter5:SetAttribute("EmitDelay", 0)
+	emitter5:SetAttribute("EmitCount", 3)
+	emitter5:SetAttribute("DoDisableOnImpact", false)
+	emitter5.Parent = container
+		
+	emitter6 = Instance.new("ParticleEmitter")
+	emitter6.Name = "Dots"
+	emitter6.Texture = "rbxassetid://8511527728"
+	emitter6.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.235294, 0.462745, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.235294, 0.462745, 1))})
+	emitter6.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1, 0), NumberSequenceKeypoint.new(0.15, 0, 0), NumberSequenceKeypoint.new(0.7, 0, 0), NumberSequenceKeypoint.new(1, 1, 0)})
+	emitter6.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 0, 0), NumberSequenceKeypoint.new(0.18, 2.25, 1.5), NumberSequenceKeypoint.new(1, 0, 0)})
+	emitter6.Brightness = 17.5
+	emitter6.LightEmission = -2
+	emitter6.LightInfluence = 0
+	emitter6.ZOffset = 0.65
+	emitter6.FlipbookLayout = Enum.ParticleFlipbookLayout.None
+	emitter6.FlipbookMode = Enum.ParticleFlipbookMode.Random
+	emitter6.FlipbookFramerate = NumberRange.new(0, 0)
+	emitter6.FlipbookStartRandom = false
+	emitter6.Shape = Enum.ParticleEmitterShape.Box
+	emitter6.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+	emitter6.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
+	emitter6.ShapePartial = 1
+	emitter6.Enabled = true
+	emitter6.Rate = 40
+	emitter6.Lifetime = NumberRange.new(0.35, 0.55)
+	emitter6.EmissionDirection = Enum.NormalId.Top
+	emitter6.TimeScale = 1
+	emitter6.Speed = NumberRange.new(47.5312, 171.113)
+	emitter6.SpreadAngle = Vector2.new(360, 360)
+	emitter6.Rotation = NumberRange.new(0, 360)
+	emitter6.RotSpeed = NumberRange.new(0, 0)
+	emitter6.VelocityInheritance = 0
+	emitter6.Acceleration = Vector3.new(0, 0, 0)
+	emitter6.Drag = 8
+	emitter6.WindAffectsDrag = false
+	emitter6.LockedToPart = false
+	emitter6:SetAttribute("EmitDelay", 0)
+	emitter6:SetAttribute("EmitCount", 26.6667)
+	emitter6:SetAttribute("DoDisableOnImpact", false)
+	emitter6.Parent = container
+		
+	emitter7 = Instance.new("ParticleEmitter")
+	emitter7.Name = "Waves1"
+	emitter7.Texture = "rbxassetid://14005221169"
+	emitter7.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)), ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1))})
+	emitter7.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1, 0), NumberSequenceKeypoint.new(0.125, 0.5, 0), NumberSequenceKeypoint.new(0.6, 0.5, 0), NumberSequenceKeypoint.new(1, 1, 0)})
+	emitter7.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 4.5, 0), NumberSequenceKeypoint.new(0.1, 5.58577, 0), NumberSequenceKeypoint.new(0.2, 6.61083, 0), NumberSequenceKeypoint.new(0.3, 7.56807, 0), NumberSequenceKeypoint.new(0.4, 8.44874, 0), NumberSequenceKeypoint.new(0.5, 9.24189, 0), NumberSequenceKeypoint.new(0.6, 9.9335, 0), NumberSequenceKeypoint.new(0.7, 10.5053, 0), NumberSequenceKeypoint.new(0.8, 10.9329, 0), NumberSequenceKeypoint.new(0.9, 11.186, 0), NumberSequenceKeypoint.new(1, 11.25, 0), NumberSequenceKeypoint.new(1, 11.25, 0)})
+	emitter7.Brightness = 0
+	emitter7.LightEmission = 0.1
+	emitter7.LightInfluence = 0
+	emitter7.ZOffset = -0.15
+	emitter7.FlipbookLayout = Enum.ParticleFlipbookLayout.None
+	emitter7.FlipbookMode = Enum.ParticleFlipbookMode.Loop
+	emitter7.FlipbookFramerate = NumberRange.new(1, 1)
+	emitter7.FlipbookStartRandom = false
+	emitter7.Shape = Enum.ParticleEmitterShape.Box
+	emitter7.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+	emitter7.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
+	emitter7.ShapePartial = 1
+	emitter7.Enabled = true
+	emitter7.Rate = 3
+	emitter7.Lifetime = NumberRange.new(0.55, 0.55)
+	emitter7.EmissionDirection = Enum.NormalId.Front
+	emitter7.TimeScale = 1
+	emitter7.Speed = NumberRange.new(0.0329458, 0.0329458)
+	emitter7.SpreadAngle = Vector2.new(0, 0)
+	emitter7.Rotation = NumberRange.new(90, 90)
+	emitter7.RotSpeed = NumberRange.new(0, 0)
+	emitter7.VelocityInheritance = 1
+	emitter7.Acceleration = Vector3.new(0, 0, 0)
+	emitter7.Drag = 0
+	emitter7.WindAffectsDrag = false
+	emitter7.LockedToPart = true
+	emitter7:SetAttribute("EmitDelay", 0)
+	emitter7:SetAttribute("EmitCount", 1)
+	emitter7:SetAttribute("DoDisableOnImpact", false)
+	emitter7.Parent = container
+		
+	emitter8 = Instance.new("ParticleEmitter")
+	emitter8.Name = "Core2"
+	emitter8.Texture = "http://www.roblox.com/asset/?id=5304157808"
+	emitter8.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.396078, 0.686275, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.396078, 0.686275, 1))})
+	emitter8.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1, 0), NumberSequenceKeypoint.new(0.2, 0.36, 0), NumberSequenceKeypoint.new(0.5, 0, 0), NumberSequenceKeypoint.new(0.8, 0.36, 0), NumberSequenceKeypoint.new(1, 1, 0)})
+	emitter8.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 1.29375, 0), NumberSequenceKeypoint.new(1, 0.251563, 0)})
+	emitter8.Brightness = 1
+	emitter8.LightEmission = 1
+	emitter8.LightInfluence = 0
+	emitter8.ZOffset = 0.51
+	emitter8.FlipbookLayout = Enum.ParticleFlipbookLayout.None
+	emitter8.FlipbookMode = Enum.ParticleFlipbookMode.Loop
+	emitter8.FlipbookFramerate = NumberRange.new(1, 1)
+	emitter8.FlipbookStartRandom = false
+	emitter8.Shape = Enum.ParticleEmitterShape.Box
+	emitter8.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+	emitter8.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
+	emitter8.ShapePartial = 1
+	emitter8.Enabled = true
+	emitter8.Rate = 6
+	emitter8.Lifetime = NumberRange.new(0.5, 0.5)
+	emitter8.EmissionDirection = Enum.NormalId.Top
+	emitter8.TimeScale = 1
+	emitter8.Speed = NumberRange.new(0, 0)
+	emitter8.SpreadAngle = Vector2.new(0, 0)
+	emitter8.Rotation = NumberRange.new(0, 360)
+	emitter8.RotSpeed = NumberRange.new(0, 0)
+	emitter8.VelocityInheritance = 0
+	emitter8.Acceleration = Vector3.new(0, 0, 0)
+	emitter8.Drag = 0
+	emitter8.WindAffectsDrag = false
+	emitter8.LockedToPart = true
+	emitter8:SetAttribute("EmitDelay", 0)
+	emitter8:SetAttribute("EmitCount", 0)
+	emitter8:SetAttribute("DoDisableOnImpact", false)
+	emitter8.Parent = container
+		
+	emitter9 = Instance.new("ParticleEmitter")
+	emitter9.Name = "Core1"
+	emitter9.Texture = "http://www.roblox.com/asset/?id=5304157808"
+	emitter9.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.294118, 0.6, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.294118, 0.6, 1))})
+	emitter9.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1, 0), NumberSequenceKeypoint.new(0.2, 0.36, 0), NumberSequenceKeypoint.new(0.5, 0, 0), NumberSequenceKeypoint.new(0.8, 0.36, 0), NumberSequenceKeypoint.new(1, 1, 0)})
+	emitter9.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 2.5875, 0), NumberSequenceKeypoint.new(1, 0.503125, 0)})
+	emitter9.Brightness = 3
+	emitter9.LightEmission = 0.3
+	emitter9.LightInfluence = 0
+	emitter9.ZOffset = 0.5
+	emitter9.FlipbookLayout = Enum.ParticleFlipbookLayout.None
+	emitter9.FlipbookMode = Enum.ParticleFlipbookMode.Loop
+	emitter9.FlipbookFramerate = NumberRange.new(1, 1)
+	emitter9.FlipbookStartRandom = false
+	emitter9.Shape = Enum.ParticleEmitterShape.Box
+	emitter9.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+	emitter9.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
+	emitter9.ShapePartial = 1
+	emitter9.Enabled = true
+	emitter9.Rate = 6
+	emitter9.Lifetime = NumberRange.new(0.5, 0.5)
+	emitter9.EmissionDirection = Enum.NormalId.Top
+	emitter9.TimeScale = 1
+	emitter9.Speed = NumberRange.new(0, 0)
+	emitter9.SpreadAngle = Vector2.new(0, 0)
+	emitter9.Rotation = NumberRange.new(0, 360)
+	emitter9.RotSpeed = NumberRange.new(0, 0)
+	emitter9.VelocityInheritance = 0
+	emitter9.Acceleration = Vector3.new(0, 0, 0)
+	emitter9.Drag = 0
+	emitter9.WindAffectsDrag = false
+	emitter9.LockedToPart = true
+	emitter9:SetAttribute("EmitDelay", 0)
+	emitter9:SetAttribute("EmitCount", 0)
+	emitter9:SetAttribute("DoDisableOnImpact", false)
+	emitter9.Parent = container
+		
+	emitter10 = Instance.new("ParticleEmitter")
+	emitter10.Name = "CorePull"
+	emitter10.Texture = "http://www.roblox.com/asset/?id=15817440279"
+	emitter10.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.254902, 0.615686, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.0392157, 0.262745, 1))})
+	emitter10.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1, 0), NumberSequenceKeypoint.new(0.2, 0.75, 0), NumberSequenceKeypoint.new(0.4, 0, 0), NumberSequenceKeypoint.new(1, 1, 0)})
+	emitter10.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 12.5, 0), NumberSequenceKeypoint.new(0.1, 9.96107, 0), NumberSequenceKeypoint.new(0.2, 8.16728, 0), NumberSequenceKeypoint.new(0.3, 6.76594, 0), NumberSequenceKeypoint.new(0.4, 5.64448, 0), NumberSequenceKeypoint.new(0.5, 4.7424, 0), NumberSequenceKeypoint.new(0.6, 4.02121, 0), NumberSequenceKeypoint.new(0.7, 3.45411, 0), NumberSequenceKeypoint.new(0.8, 3.02123, 0), NumberSequenceKeypoint.new(0.9, 2.70726, 0), NumberSequenceKeypoint.new(1, 2.5, 0)})
+	emitter10.Brightness = 1.8
+	emitter10.LightEmission = 0.85
+	emitter10.LightInfluence = 0
+	emitter10.ZOffset = 0.02
+	emitter10.FlipbookLayout = Enum.ParticleFlipbookLayout.None
+	emitter10.FlipbookMode = Enum.ParticleFlipbookMode.Loop
+	emitter10.FlipbookFramerate = NumberRange.new(1, 1)
+	emitter10.FlipbookStartRandom = false
+	emitter10.Shape = Enum.ParticleEmitterShape.Box
+	emitter10.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+	emitter10.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
+	emitter10.ShapePartial = 1
+	emitter10.Enabled = true
+	emitter10.Rate = 6.66667
+	emitter10.Lifetime = NumberRange.new(0.5, 0.5)
+	emitter10.EmissionDirection = Enum.NormalId.Top
+	emitter10.TimeScale = 1
+	emitter10.Speed = NumberRange.new(0, 0)
+	emitter10.SpreadAngle = Vector2.new(0, 0)
+	emitter10.Rotation = NumberRange.new(-180, 180)
+	emitter10.RotSpeed = NumberRange.new(0, 0)
+	emitter10.VelocityInheritance = 0
+	emitter10.Acceleration = Vector3.new(0, 0, 0)
+	emitter10.Drag = 0
+	emitter10.WindAffectsDrag = false
+	emitter10.LockedToPart = true
+	emitter10:SetAttribute("DoDisableOnImpact", false)
+	emitter10.Parent = container
+		
+	emitter11 = Instance.new("ParticleEmitter")
+	emitter11.Name = "Wind1"
+	emitter11.Texture = "http://www.roblox.com/asset/?id=15863808127"
+	emitter11.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.313726, 0.678431, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.313726, 0.678431, 1))})
+	emitter11.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1, 0), NumberSequenceKeypoint.new(0.15, 0.3, 0), NumberSequenceKeypoint.new(0.48, 0.75, 0.1), NumberSequenceKeypoint.new(1, 1, 0)})
+	emitter11.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 0, 3.75), NumberSequenceKeypoint.new(0.1, 8.58688, 3.75), NumberSequenceKeypoint.new(0.2, 11.3286, 3.75), NumberSequenceKeypoint.new(0.3, 13.0954, 3.75), NumberSequenceKeypoint.new(0.4, 14.35, 3.75), NumberSequenceKeypoint.new(0.5, 15.271, 3.75), NumberSequenceKeypoint.new(0.6, 15.9489, 3.75), NumberSequenceKeypoint.new(0.7, 16.436, 3.75), NumberSequenceKeypoint.new(0.8, 16.7645, 3.75), NumberSequenceKeypoint.new(0.9, 16.9531, 3.75), NumberSequenceKeypoint.new(1, 17.01, 3.75)})
+	emitter11.Brightness = 4
+	emitter11.LightEmission = 1
+	emitter11.LightInfluence = 0
+	emitter11.ZOffset = 0
+	emitter11.FlipbookLayout = Enum.ParticleFlipbookLayout.None
+	emitter11.FlipbookMode = Enum.ParticleFlipbookMode.OneShot
+	emitter11.FlipbookFramerate = NumberRange.new(1, 1)
+	emitter11.FlipbookStartRandom = false
+	emitter11.Shape = Enum.ParticleEmitterShape.Box
+	emitter11.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+	emitter11.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
+	emitter11.ShapePartial = 1
+	emitter11.Enabled = true
+	emitter11.Rate = 5
+	emitter11.Lifetime = NumberRange.new(0.45, 0.75)
+	emitter11.EmissionDirection = Enum.NormalId.Top
+	emitter11.TimeScale = 1
+	emitter11.Speed = NumberRange.new(0.0109148, 0.0109148)
+	emitter11.SpreadAngle = Vector2.new(65, 65)
+	emitter11.Rotation = NumberRange.new(0, 360)
+	emitter11.RotSpeed = NumberRange.new(300, 300)
+	emitter11.VelocityInheritance = 0
+	emitter11.Acceleration = Vector3.new(0, 0, 0)
+	emitter11.Drag = 0
+	emitter11.WindAffectsDrag = false
+	emitter11.LockedToPart = false
+	emitter11:SetAttribute("EmitDelay", 0)
+	emitter11:SetAttribute("EmitCount", 5)
+	emitter11:SetAttribute("DoDisableOnImpact", false)
+	emitter11.Parent = container
+	container.CFrame = CFrame.new(0, -1.35, 0)
+	container.Parent = RightArm
+	task.wait(duration)
+	if container and container.Parent then container:Destroy() end
+	return container
+end
+
 function RunSequence()
 	-- Capture health snapshot for this run
 	local runDone = Instance.new("BindableEvent")
@@ -2695,378 +3163,7 @@ sound:Play()
 	PlaySound("rbxassetid://12331756832", 1, 10, 150)
 	PlaySound("rbxassetid://12983297694", 1, 10, 150)
 	PlaySound("rbxassetid://4458760046",  1, 10, 150)
-	containerBeamCharge = Instance.new("Attachment")
-	containerBeamCharge.Name = "Beam Charge 4 1"
-		
-	emitter2 = Instance.new("ParticleEmitter")
-	emitter2.Name = "Charge"
-	emitter2.Texture = "rbxassetid://1084976679"
-	emitter2.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.403922, 0.760784, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.403922, 0.760784, 1))})
-	emitter2.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1, 0), NumberSequenceKeypoint.new(0.15, 0, 0), NumberSequenceKeypoint.new(0.6, 0, 0), NumberSequenceKeypoint.new(1, 1, 0)})
-	emitter2.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 0, 0), NumberSequenceKeypoint.new(0.1, 1.99092, 0), NumberSequenceKeypoint.new(0.2, 3.83231, 0), NumberSequenceKeypoint.new(0.3, 5.52167, 0), NumberSequenceKeypoint.new(0.4, 7.05617, 0), NumberSequenceKeypoint.new(0.5, 8.43275, 0), NumberSequenceKeypoint.new(0.6, 9.64825, 0), NumberSequenceKeypoint.new(0.7, 10.7001, 0), NumberSequenceKeypoint.new(0.8, 11.5887, 0), NumberSequenceKeypoint.new(0.9, 12.3259, 0), NumberSequenceKeypoint.new(1, 13, 0), NumberSequenceKeypoint.new(1, 13, 0)})
-	emitter2.Brightness = 2
-	emitter2.LightEmission = 1
-	emitter2.LightInfluence = 0
-	emitter2.ZOffset = 0
-	emitter2.FlipbookLayout = Enum.ParticleFlipbookLayout.None
-	emitter2.FlipbookMode = Enum.ParticleFlipbookMode.Loop
-	emitter2.FlipbookFramerate = NumberRange.new(1, 1)
-	emitter2.FlipbookStartRandom = false
-	emitter2.Shape = Enum.ParticleEmitterShape.Box
-	emitter2.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
-	emitter2.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
-	emitter2.ShapePartial = 1
-	emitter2.Enabled = true
-	emitter2.Rate = 6
-	emitter2.Lifetime = NumberRange.new(0.45, 0.45)
-	emitter2.EmissionDirection = Enum.NormalId.Top
-	emitter2.TimeScale = 1
-	emitter2.Speed = NumberRange.new(0, 0)
-	emitter2.SpreadAngle = Vector2.new(0, 0)
-	emitter2.Rotation = NumberRange.new(0, 360)
-	emitter2.RotSpeed = NumberRange.new(50, 50)
-	emitter2.VelocityInheritance = 0
-	emitter2.Acceleration = Vector3.new(0, 0, 0)
-	emitter2.Drag = 0
-	emitter2.WindAffectsDrag = false
-	emitter2.LockedToPart = true
-	emitter2:SetAttribute("EmitDelay", 0)
-	emitter2:SetAttribute("EmitCount", 0)
-	emitter2:SetAttribute("DoDisableOnImpact", false)
-	emitter2.Parent = containerBeamCharge
-		
-	emitter3 = Instance.new("ParticleEmitter")
-	emitter3.Name = "Haze"
-	emitter3.Texture = "rbxassetid://272050333"
-	emitter3.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.352941, 0.631373, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.352941, 0.631373, 1))})
-	emitter3.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1, 0), NumberSequenceKeypoint.new(0.1, 0.3, 0), NumberSequenceKeypoint.new(0.4, 0.3, 0), NumberSequenceKeypoint.new(1, 1, 0)})
-	emitter3.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 0, 0), NumberSequenceKeypoint.new(0.2, 16.5639, 0), NumberSequenceKeypoint.new(0.575, 19.6696, 0), NumberSequenceKeypoint.new(1, 24.8458, 0)})
-	emitter3.Brightness = 0.35
-	emitter3.LightEmission = 1
-	emitter3.LightInfluence = 0
-	emitter3.ZOffset = -0.65
-	emitter3.FlipbookLayout = Enum.ParticleFlipbookLayout.None
-	emitter3.FlipbookMode = Enum.ParticleFlipbookMode.Loop
-	emitter3.FlipbookFramerate = NumberRange.new(1, 1)
-	emitter3.FlipbookStartRandom = false
-	emitter3.Shape = Enum.ParticleEmitterShape.Box
-	emitter3.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
-	emitter3.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
-	emitter3.ShapePartial = 1
-	emitter3.Enabled = true
-	emitter3.Rate = 1.75
-	emitter3.Lifetime = NumberRange.new(1, 1)
-	emitter3.EmissionDirection = Enum.NormalId.Top
-	emitter3.TimeScale = 1
-	emitter3.Speed = NumberRange.new(0.0265022, 0.0265022)
-	emitter3.SpreadAngle = Vector2.new(0, 0)
-	emitter3.Rotation = NumberRange.new(0, 0)
-	emitter3.RotSpeed = NumberRange.new(0, 0)
-	emitter3.VelocityInheritance = 0
-	emitter3.Acceleration = Vector3.new(0, 0, 0)
-	emitter3.Drag = 0
-	emitter3.WindAffectsDrag = false
-	emitter3.LockedToPart = true
-	emitter3:SetAttribute("EmitDelay", 0)
-	emitter3:SetAttribute("EmitCount", 1)
-	emitter3:SetAttribute("DoDisableOnImpact", false)
-	emitter3.Parent = containerBeamCharge
-		
-	emitter4 = Instance.new("ParticleEmitter")
-	emitter4.Name = "Rays1"
-	emitter4.Texture = "rbxassetid://15816318077"
-	emitter4.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.254902, 0.627451, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.254902, 0.627451, 1))})
-	emitter4.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1, 0), NumberSequenceKeypoint.new(0.3, 0, 0), NumberSequenceKeypoint.new(1, 1, 0)})
-	emitter4.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 40.5962, 0), NumberSequenceKeypoint.new(0.1, 28.9706, 0), NumberSequenceKeypoint.new(0.2, 23.1159, 0), NumberSequenceKeypoint.new(0.3, 19.1122, 0), NumberSequenceKeypoint.new(0.4, 16.2069, 0), NumberSequenceKeypoint.new(0.5, 14.0662, 0), NumberSequenceKeypoint.new(0.6, 12.5036, 0), NumberSequenceKeypoint.new(0.7, 11.4011, 0), NumberSequenceKeypoint.new(0.8, 10.6778, 0), NumberSequenceKeypoint.new(0.9, 10.2752, 0), NumberSequenceKeypoint.new(1, 10.149, 0)})
-	emitter4.Brightness = 1.5
-	emitter4.LightEmission = 1
-	emitter4.LightInfluence = 0
-	emitter4.ZOffset = -0.21
-	emitter4.FlipbookLayout = Enum.ParticleFlipbookLayout.Grid8x8
-	emitter4.FlipbookMode = Enum.ParticleFlipbookMode.OneShot
-	emitter4.FlipbookFramerate = NumberRange.new(1, 1)
-	emitter4.FlipbookStartRandom = false
-	emitter4.Shape = Enum.ParticleEmitterShape.Box
-	emitter4.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
-	emitter4.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
-	emitter4.ShapePartial = 1
-	emitter4.Enabled = true
-	emitter4.Rate = 11.3333
-	emitter4.Lifetime = NumberRange.new(0.3, 0.3)
-	emitter4.EmissionDirection = Enum.NormalId.Top
-	emitter4.TimeScale = 1
-	emitter4.Speed = NumberRange.new(0, 0)
-	emitter4.SpreadAngle = Vector2.new(0, 0)
-	emitter4.Rotation = NumberRange.new(-180, 180)
-	emitter4.RotSpeed = NumberRange.new(-35, 35)
-	emitter4.VelocityInheritance = 0
-	emitter4.Acceleration = Vector3.new(0, 0, 0)
-	emitter4.Drag = 0
-	emitter4.WindAffectsDrag = false
-	emitter4.LockedToPart = true
-	emitter4:SetAttribute("DoDisableOnImpact", false)
-	emitter4.Parent = containerBeamCharge
-		
-	emitter5 = Instance.new("ParticleEmitter")
-	emitter5.Name = "Light"
-	emitter5.Texture = "rbxassetid://1084999891"
-	emitter5.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.411765, 0.733333, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.411765, 0.733333, 1))})
-	emitter5.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1, 0), NumberSequenceKeypoint.new(0.2, 0.5, 0), NumberSequenceKeypoint.new(0.8, 0.5, 0), NumberSequenceKeypoint.new(1, 1, 0)})
-	emitter5.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 0, 0), NumberSequenceKeypoint.new(0.100266, 0, 0), NumberSequenceKeypoint.new(0.25, 25.6878, 1), NumberSequenceKeypoint.new(0.899734, 0, 0), NumberSequenceKeypoint.new(1, 0, 0)})
-	emitter5.Brightness = 0.2
-	emitter5.LightEmission = 1
-	emitter5.LightInfluence = 0
-	emitter5.ZOffset = -0.65
-	emitter5.FlipbookLayout = Enum.ParticleFlipbookLayout.None
-	emitter5.FlipbookMode = Enum.ParticleFlipbookMode.Loop
-	emitter5.FlipbookFramerate = NumberRange.new(1, 1)
-	emitter5.FlipbookStartRandom = false
-	emitter5.Shape = Enum.ParticleEmitterShape.Box
-	emitter5.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
-	emitter5.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
-	emitter5.ShapePartial = 1
-	emitter5.Enabled = true
-	emitter5.Rate = 8
-	emitter5.Lifetime = NumberRange.new(0.4, 0.6)
-	emitter5.EmissionDirection = Enum.NormalId.Top
-	emitter5.TimeScale = 1
-	emitter5.Speed = NumberRange.new(0.0153704, 0.0153704)
-	emitter5.SpreadAngle = Vector2.new(0, 0)
-	emitter5.Rotation = NumberRange.new(-360, 360)
-	emitter5.RotSpeed = NumberRange.new(-50, 100)
-	emitter5.VelocityInheritance = 0
-	emitter5.Acceleration = Vector3.new(0, 0, 0)
-	emitter5.Drag = 0
-	emitter5.WindAffectsDrag = false
-	emitter5.LockedToPart = true
-	emitter5:SetAttribute("EmitDelay", 0)
-	emitter5:SetAttribute("EmitCount", 3)
-	emitter5:SetAttribute("DoDisableOnImpact", false)
-	emitter5.Parent = containerBeamCharge
-		
-	emitter6 = Instance.new("ParticleEmitter")
-	emitter6.Name = "Dots"
-	emitter6.Texture = "rbxassetid://8511527728"
-	emitter6.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.235294, 0.462745, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.235294, 0.462745, 1))})
-	emitter6.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1, 0), NumberSequenceKeypoint.new(0.15, 0, 0), NumberSequenceKeypoint.new(0.7, 0, 0), NumberSequenceKeypoint.new(1, 1, 0)})
-	emitter6.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 0, 0), NumberSequenceKeypoint.new(0.18, 2.25, 1.5), NumberSequenceKeypoint.new(1, 0, 0)})
-	emitter6.Brightness = 17.5
-	emitter6.LightEmission = -2
-	emitter6.LightInfluence = 0
-	emitter6.ZOffset = 0.65
-	emitter6.FlipbookLayout = Enum.ParticleFlipbookLayout.None
-	emitter6.FlipbookMode = Enum.ParticleFlipbookMode.Random
-	emitter6.FlipbookFramerate = NumberRange.new(0, 0)
-	emitter6.FlipbookStartRandom = false
-	emitter6.Shape = Enum.ParticleEmitterShape.Box
-	emitter6.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
-	emitter6.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
-	emitter6.ShapePartial = 1
-	emitter6.Enabled = true
-	emitter6.Rate = 40
-	emitter6.Lifetime = NumberRange.new(0.35, 0.55)
-	emitter6.EmissionDirection = Enum.NormalId.Top
-	emitter6.TimeScale = 1
-	emitter6.Speed = NumberRange.new(47.5312, 171.113)
-	emitter6.SpreadAngle = Vector2.new(360, 360)
-	emitter6.Rotation = NumberRange.new(0, 360)
-	emitter6.RotSpeed = NumberRange.new(0, 0)
-	emitter6.VelocityInheritance = 0
-	emitter6.Acceleration = Vector3.new(0, 0, 0)
-	emitter6.Drag = 8
-	emitter6.WindAffectsDrag = false
-	emitter6.LockedToPart = false
-	emitter6:SetAttribute("EmitDelay", 0)
-	emitter6:SetAttribute("EmitCount", 26.6667)
-	emitter6:SetAttribute("DoDisableOnImpact", false)
-	emitter6.Parent = containerBeamCharge
-		
-	emitter7 = Instance.new("ParticleEmitter")
-	emitter7.Name = "Waves1"
-	emitter7.Texture = "rbxassetid://14005221169"
-	emitter7.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)), ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1))})
-	emitter7.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1, 0), NumberSequenceKeypoint.new(0.125, 0.5, 0), NumberSequenceKeypoint.new(0.6, 0.5, 0), NumberSequenceKeypoint.new(1, 1, 0)})
-	emitter7.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 4.5, 0), NumberSequenceKeypoint.new(0.1, 5.58577, 0), NumberSequenceKeypoint.new(0.2, 6.61083, 0), NumberSequenceKeypoint.new(0.3, 7.56807, 0), NumberSequenceKeypoint.new(0.4, 8.44874, 0), NumberSequenceKeypoint.new(0.5, 9.24189, 0), NumberSequenceKeypoint.new(0.6, 9.9335, 0), NumberSequenceKeypoint.new(0.7, 10.5053, 0), NumberSequenceKeypoint.new(0.8, 10.9329, 0), NumberSequenceKeypoint.new(0.9, 11.186, 0), NumberSequenceKeypoint.new(1, 11.25, 0), NumberSequenceKeypoint.new(1, 11.25, 0)})
-	emitter7.Brightness = 0
-	emitter7.LightEmission = 0.1
-	emitter7.LightInfluence = 0
-	emitter7.ZOffset = -0.15
-	emitter7.FlipbookLayout = Enum.ParticleFlipbookLayout.None
-	emitter7.FlipbookMode = Enum.ParticleFlipbookMode.Loop
-	emitter7.FlipbookFramerate = NumberRange.new(1, 1)
-	emitter7.FlipbookStartRandom = false
-	emitter7.Shape = Enum.ParticleEmitterShape.Box
-	emitter7.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
-	emitter7.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
-	emitter7.ShapePartial = 1
-	emitter7.Enabled = true
-	emitter7.Rate = 3
-	emitter7.Lifetime = NumberRange.new(0.55, 0.55)
-	emitter7.EmissionDirection = Enum.NormalId.Front
-	emitter7.TimeScale = 1
-	emitter7.Speed = NumberRange.new(0.0329458, 0.0329458)
-	emitter7.SpreadAngle = Vector2.new(0, 0)
-	emitter7.Rotation = NumberRange.new(90, 90)
-	emitter7.RotSpeed = NumberRange.new(0, 0)
-	emitter7.VelocityInheritance = 1
-	emitter7.Acceleration = Vector3.new(0, 0, 0)
-	emitter7.Drag = 0
-	emitter7.WindAffectsDrag = false
-	emitter7.LockedToPart = true
-	emitter7:SetAttribute("EmitDelay", 0)
-	emitter7:SetAttribute("EmitCount", 1)
-	emitter7:SetAttribute("DoDisableOnImpact", false)
-	emitter7.Parent = containerBeamCharge
-		
-	emitter8 = Instance.new("ParticleEmitter")
-	emitter8.Name = "Core2"
-	emitter8.Texture = "http://www.roblox.com/asset/?id=5304157808"
-	emitter8.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.396078, 0.686275, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.396078, 0.686275, 1))})
-	emitter8.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1, 0), NumberSequenceKeypoint.new(0.2, 0.36, 0), NumberSequenceKeypoint.new(0.5, 0, 0), NumberSequenceKeypoint.new(0.8, 0.36, 0), NumberSequenceKeypoint.new(1, 1, 0)})
-	emitter8.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 1.29375, 0), NumberSequenceKeypoint.new(1, 0.251563, 0)})
-	emitter8.Brightness = 1
-	emitter8.LightEmission = 1
-	emitter8.LightInfluence = 0
-	emitter8.ZOffset = 0.51
-	emitter8.FlipbookLayout = Enum.ParticleFlipbookLayout.None
-	emitter8.FlipbookMode = Enum.ParticleFlipbookMode.Loop
-	emitter8.FlipbookFramerate = NumberRange.new(1, 1)
-	emitter8.FlipbookStartRandom = false
-	emitter8.Shape = Enum.ParticleEmitterShape.Box
-	emitter8.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
-	emitter8.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
-	emitter8.ShapePartial = 1
-	emitter8.Enabled = true
-	emitter8.Rate = 6
-	emitter8.Lifetime = NumberRange.new(0.5, 0.5)
-	emitter8.EmissionDirection = Enum.NormalId.Top
-	emitter8.TimeScale = 1
-	emitter8.Speed = NumberRange.new(0, 0)
-	emitter8.SpreadAngle = Vector2.new(0, 0)
-	emitter8.Rotation = NumberRange.new(0, 360)
-	emitter8.RotSpeed = NumberRange.new(0, 0)
-	emitter8.VelocityInheritance = 0
-	emitter8.Acceleration = Vector3.new(0, 0, 0)
-	emitter8.Drag = 0
-	emitter8.WindAffectsDrag = false
-	emitter8.LockedToPart = true
-	emitter8:SetAttribute("EmitDelay", 0)
-	emitter8:SetAttribute("EmitCount", 0)
-	emitter8:SetAttribute("DoDisableOnImpact", false)
-	emitter8.Parent = containerBeamCharge
-		
-	emitter9 = Instance.new("ParticleEmitter")
-	emitter9.Name = "Core1"
-	emitter9.Texture = "http://www.roblox.com/asset/?id=5304157808"
-	emitter9.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.294118, 0.6, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.294118, 0.6, 1))})
-	emitter9.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1, 0), NumberSequenceKeypoint.new(0.2, 0.36, 0), NumberSequenceKeypoint.new(0.5, 0, 0), NumberSequenceKeypoint.new(0.8, 0.36, 0), NumberSequenceKeypoint.new(1, 1, 0)})
-	emitter9.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 2.5875, 0), NumberSequenceKeypoint.new(1, 0.503125, 0)})
-	emitter9.Brightness = 3
-	emitter9.LightEmission = 0.3
-	emitter9.LightInfluence = 0
-	emitter9.ZOffset = 0.5
-	emitter9.FlipbookLayout = Enum.ParticleFlipbookLayout.None
-	emitter9.FlipbookMode = Enum.ParticleFlipbookMode.Loop
-	emitter9.FlipbookFramerate = NumberRange.new(1, 1)
-	emitter9.FlipbookStartRandom = false
-	emitter9.Shape = Enum.ParticleEmitterShape.Box
-	emitter9.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
-	emitter9.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
-	emitter9.ShapePartial = 1
-	emitter9.Enabled = true
-	emitter9.Rate = 6
-	emitter9.Lifetime = NumberRange.new(0.5, 0.5)
-	emitter9.EmissionDirection = Enum.NormalId.Top
-	emitter9.TimeScale = 1
-	emitter9.Speed = NumberRange.new(0, 0)
-	emitter9.SpreadAngle = Vector2.new(0, 0)
-	emitter9.Rotation = NumberRange.new(0, 360)
-	emitter9.RotSpeed = NumberRange.new(0, 0)
-	emitter9.VelocityInheritance = 0
-	emitter9.Acceleration = Vector3.new(0, 0, 0)
-	emitter9.Drag = 0
-	emitter9.WindAffectsDrag = false
-	emitter9.LockedToPart = true
-	emitter9:SetAttribute("EmitDelay", 0)
-	emitter9:SetAttribute("EmitCount", 0)
-	emitter9:SetAttribute("DoDisableOnImpact", false)
-	emitter9.Parent = containerBeamCharge
-		
-	emitter10 = Instance.new("ParticleEmitter")
-	emitter10.Name = "CorePull"
-	emitter10.Texture = "http://www.roblox.com/asset/?id=15817440279"
-	emitter10.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.254902, 0.615686, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.0392157, 0.262745, 1))})
-	emitter10.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1, 0), NumberSequenceKeypoint.new(0.2, 0.75, 0), NumberSequenceKeypoint.new(0.4, 0, 0), NumberSequenceKeypoint.new(1, 1, 0)})
-	emitter10.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 12.5, 0), NumberSequenceKeypoint.new(0.1, 9.96107, 0), NumberSequenceKeypoint.new(0.2, 8.16728, 0), NumberSequenceKeypoint.new(0.3, 6.76594, 0), NumberSequenceKeypoint.new(0.4, 5.64448, 0), NumberSequenceKeypoint.new(0.5, 4.7424, 0), NumberSequenceKeypoint.new(0.6, 4.02121, 0), NumberSequenceKeypoint.new(0.7, 3.45411, 0), NumberSequenceKeypoint.new(0.8, 3.02123, 0), NumberSequenceKeypoint.new(0.9, 2.70726, 0), NumberSequenceKeypoint.new(1, 2.5, 0)})
-	emitter10.Brightness = 1.8
-	emitter10.LightEmission = 0.85
-	emitter10.LightInfluence = 0
-	emitter10.ZOffset = 0.02
-	emitter10.FlipbookLayout = Enum.ParticleFlipbookLayout.None
-	emitter10.FlipbookMode = Enum.ParticleFlipbookMode.Loop
-	emitter10.FlipbookFramerate = NumberRange.new(1, 1)
-	emitter10.FlipbookStartRandom = false
-	emitter10.Shape = Enum.ParticleEmitterShape.Box
-	emitter10.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
-	emitter10.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
-	emitter10.ShapePartial = 1
-	emitter10.Enabled = true
-	emitter10.Rate = 6.66667
-	emitter10.Lifetime = NumberRange.new(0.5, 0.5)
-	emitter10.EmissionDirection = Enum.NormalId.Top
-	emitter10.TimeScale = 1
-	emitter10.Speed = NumberRange.new(0, 0)
-	emitter10.SpreadAngle = Vector2.new(0, 0)
-	emitter10.Rotation = NumberRange.new(-180, 180)
-	emitter10.RotSpeed = NumberRange.new(0, 0)
-	emitter10.VelocityInheritance = 0
-	emitter10.Acceleration = Vector3.new(0, 0, 0)
-	emitter10.Drag = 0
-	emitter10.WindAffectsDrag = false
-	emitter10.LockedToPart = true
-	emitter10:SetAttribute("DoDisableOnImpact", false)
-	emitter10.Parent = containerBeamCharge
-		
-	emitter11 = Instance.new("ParticleEmitter")
-	emitter11.Name = "Wind1"
-	emitter11.Texture = "http://www.roblox.com/asset/?id=15863808127"
-	emitter11.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(0.313726, 0.678431, 1)), ColorSequenceKeypoint.new(1, Color3.new(0.313726, 0.678431, 1))})
-	emitter11.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1, 0), NumberSequenceKeypoint.new(0.15, 0.3, 0), NumberSequenceKeypoint.new(0.48, 0.75, 0.1), NumberSequenceKeypoint.new(1, 1, 0)})
-	emitter11.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 0, 3.75), NumberSequenceKeypoint.new(0.1, 8.58688, 3.75), NumberSequenceKeypoint.new(0.2, 11.3286, 3.75), NumberSequenceKeypoint.new(0.3, 13.0954, 3.75), NumberSequenceKeypoint.new(0.4, 14.35, 3.75), NumberSequenceKeypoint.new(0.5, 15.271, 3.75), NumberSequenceKeypoint.new(0.6, 15.9489, 3.75), NumberSequenceKeypoint.new(0.7, 16.436, 3.75), NumberSequenceKeypoint.new(0.8, 16.7645, 3.75), NumberSequenceKeypoint.new(0.9, 16.9531, 3.75), NumberSequenceKeypoint.new(1, 17.01, 3.75)})
-	emitter11.Brightness = 4
-	emitter11.LightEmission = 1
-	emitter11.LightInfluence = 0
-	emitter11.ZOffset = 0
-	emitter11.FlipbookLayout = Enum.ParticleFlipbookLayout.None
-	emitter11.FlipbookMode = Enum.ParticleFlipbookMode.OneShot
-	emitter11.FlipbookFramerate = NumberRange.new(1, 1)
-	emitter11.FlipbookStartRandom = false
-	emitter11.Shape = Enum.ParticleEmitterShape.Box
-	emitter11.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
-	emitter11.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
-	emitter11.ShapePartial = 1
-	emitter11.Enabled = true
-	emitter11.Rate = 5
-	emitter11.Lifetime = NumberRange.new(0.45, 0.75)
-	emitter11.EmissionDirection = Enum.NormalId.Top
-	emitter11.TimeScale = 1
-	emitter11.Speed = NumberRange.new(0.0109148, 0.0109148)
-	emitter11.SpreadAngle = Vector2.new(65, 65)
-	emitter11.Rotation = NumberRange.new(0, 360)
-	emitter11.RotSpeed = NumberRange.new(300, 300)
-	emitter11.VelocityInheritance = 0
-	emitter11.Acceleration = Vector3.new(0, 0, 0)
-	emitter11.Drag = 0
-	emitter11.WindAffectsDrag = false
-	emitter11.LockedToPart = false
-	emitter11:SetAttribute("EmitDelay", 0)
-	emitter11:SetAttribute("EmitCount", 5)
-	emitter11:SetAttribute("DoDisableOnImpact", false)
-	emitter11.Parent = containerBeamCharge
-	containerBeamCharge.CFrame = CFrame.new(0, -1.35, 0)
-	containerBeamCharge.CFrame = CFrame.new(0, -1.35, 0)
-	containerBeamCharge.Parent = RightArm
-	table.insert(runContainers, containerBeamCharge)
+	task.spawn(function() containerBeamCharge = Charge(0.6); table.insert(runContainers, containerBeamCharge) end)
 	containerHit = Instance.new("Attachment")
 	containerHit.Name = "Hit"
 		
@@ -4085,7 +4182,7 @@ sound:Play()
 	runDelayThread = task.delay(0.37, function()
 		healthConn_local:Disconnect()
 		if runCancelled then return end  -- health dropped before delay fired; bail out
-		containerBeamCharge:Destroy()
+		if containerBeamCharge and containerBeamCharge.Parent then containerBeamCharge:Destroy() end
 		flashGui = Instance.new("ScreenGui")
 		flashGui.Name = "AttackFlash"
 		flashGui.IgnoreGuiInset = true
@@ -4257,6 +4354,8 @@ RunService = game:GetService("RunService")
 sequenceRunning = false
 attack2Running = false
 attack2Cancelled = false  -- set true when a finisher anim cancels the sequence
+attack3Running = false
+attack4Running = false
 
 RunService.Heartbeat:Connect(function()
 	for _, track in ipairs(Animator:GetPlayingAnimationTracks()) do
@@ -6092,6 +6191,140 @@ end)
 					end)
 				end)
 				attack2Running = false  -- unlock only after effects have been emitted
+			end)
+
+			break
+		end
+
+		-- Attack 3 trigger
+		if not attack3Running and string.find(track.Animation.AnimationId, TRIGGER_ANIM_IDS.ATTACK3) then
+			attack3Running = true
+			track:Stop(0)  -- stop the original trigger animation immediately
+
+			task.spawn(function()
+				local ok, err = pcall(function()
+					local attack3Anim = Instance.new("Animation")
+					attack3Anim.AnimationId = "rbxassetid://135289891173395"
+					local attack3Track = Animator:LoadAnimation(attack3Anim)
+					attack3Track:Play(0)
+					attack3Track.TimePosition = 0.29
+
+					-- Play the SkyBreaker sound
+					local sound = GetGitSound(
+						"https://github.com/NetlessScripter/GOKU/blob/f36d3d301c8c5a29d63bddbf8e8c31f59270fab7/copy_EB8D2B34-4652-4DAF-9F3A-D567BE268032.mp3?raw=true",
+						"SkyBreaker"
+					)
+					sound:Play()
+
+					-- Stop at 1.17 and reset flag
+					local connection
+					connection = game:GetService("RunService").Heartbeat:Connect(function()
+						if attack3Track.TimePosition >= 1.17 then
+							connection:Disconnect()
+							attack3Track:Stop(0)
+							attack3Running = false
+						end
+					end)
+
+					-- Fallback: always reset after 2 seconds no matter what
+					task.delay(2, function()
+						pcall(function() connection:Disconnect() end)
+						pcall(function() attack3Track:Stop(0) end)
+						attack3Running = false
+					end)
+				end)
+
+				if not ok then
+					attack3Running = false
+				end
+			end)
+
+			break
+		end
+
+		-- Attack 4 trigger
+		if not attack4Running and string.find(track.Animation.AnimationId, TRIGGER_ANIM_IDS.ATTACK4) then
+			attack4Running = true
+			track:Stop(0)
+
+			task.spawn(function()
+				local ok, err = pcall(function()
+					PlayAttack4Anim()
+					task.spawn(function()
+						GetGitSound("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/BeamSFX.mp3", "SFX", 2):Play()
+					end)
+					task.spawn(function()
+						GetGitSound("https://raw.githubusercontent.com/NetlessScripter/GOKU/fe932410b649a18432468eddbb8d4bfe106e6bf5/copy_5801B72C-B51F-4D23-A425-20E3BB77A75C.mp3", "VoiceLineKM", 2):Play()
+					end)
+
+					-- Beam charge VFX for 0.6s, then spawn the model
+					Charge(0.6)
+
+					-- Clone the preloaded model instead of fetching it every time
+					local model = game.ReplicatedStorage._Attack4Assets.Attack4Model:Clone()
+					model.Parent = workspace
+
+					-- Find a reference part to anchor the positioning
+					local refPart
+					for _, part in ipairs(model:GetDescendants()) do
+						if part:IsA("BasePart") then
+							refPart = part
+							break
+						end
+					end
+
+					if refPart then
+						local refCFrame = refPart.CFrame
+						local targetCFrame = HumanoidRootPart.CFrame * CFrame.new(0, 0, -24)
+						for _, part in ipairs(model:GetDescendants()) do
+							if part:IsA("BasePart") then
+								local offset = refCFrame:ToObjectSpace(part.CFrame)
+								part.CFrame = targetCFrame * offset
+							end
+						end
+					end
+
+					-- After 1 second: disable all particles then fade the whole model out
+					task.delay(1, function()
+						-- Disable particles first so they stop emitting mid-fade
+						for _, desc in ipairs(model:GetDescendants()) do
+							if desc:IsA("ParticleEmitter") or desc:IsA("Trail") or desc:IsA("Beam") then
+								desc.Enabled = false
+							end
+						end
+
+						-- Collect all parts and their original transparencies
+						local parts = {}
+						for _, desc in ipairs(model:GetDescendants()) do
+							if desc:IsA("BasePart") then
+								table.insert(parts, {part = desc, originalTransparency = desc.Transparency})
+							end
+						end
+
+						-- Tween transparency from original to 1 over 0.5s
+						local fadeDuration = 0.5
+						local elapsed = 0
+						local fadeConn
+						fadeConn = game:GetService("RunService").Heartbeat:Connect(function(dt)
+							elapsed = elapsed + dt
+							local alpha = math.min(elapsed / fadeDuration, 1)
+							for _, entry in ipairs(parts) do
+								if entry.part and entry.part.Parent then
+									entry.part.Transparency = entry.originalTransparency + (1 - entry.originalTransparency) * alpha
+								end
+							end
+							if alpha >= 1 then
+								fadeConn:Disconnect()
+								if model and model.Parent then model:Destroy() end
+							end
+						end)
+					end)
+				end)
+
+				if not ok then
+					warn("[Attack4] Error:", err)
+				end
+				attack4Running = false
 			end)
 
 			break
