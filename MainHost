@@ -542,7 +542,7 @@ local function PlayWindVFX()
     windPart.CFrame      = rootPart.CFrame * CFrame.new(0, 0, -5)
     windPart.Parent      = Workspace
     Debris:AddItem(windPart, 1)
-    local windEmitter = ReplicatedStorage.Resources.KJEffects.DropkickExtra.firstHit.Attachment.Wind:Clone()
+    local windEmitter = game:GetService("ReplicatedStorage").Resources.KJEffects.DropkickExtra.firstHit:GetChildren()[3].Wind:Clone()
     windEmitter.Parent = windPart
     windEmitter:Emit(10)
 end
