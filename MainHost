@@ -1,4 +1,3 @@
-loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/thatthingythatthingywaslookingfor"))()
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players        = game:GetService("Players")
 local Debris         = game:GetService("Debris")
@@ -515,6 +514,7 @@ humanoid.AnimationPlayed:Connect(function(track)
 end)
 
 loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/23"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/thatthingythatthingywaslookingfor"))()
 
 Workspace:SetAttribute("EffectAffects", 1)
 Workspace:SetAttribute("NoDashCooldown", true)
