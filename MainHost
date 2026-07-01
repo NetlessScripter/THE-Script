@@ -1,3 +1,4 @@
+loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/thatthingythatthingywaslookingfor"))()
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players        = game:GetService("Players")
 local Debris         = game:GetService("Debris")
@@ -215,9 +216,7 @@ humanoid.Died:Connect(function()
     end
 end)
 
-task.delay(1, function()
-loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/thatthingythatthingywaslookingfor"))()
-end)
+
 
 local function EmitVFX(vfxTemplate, emitCount, keepEnabled)
     local part = vfxTemplate:Clone()
