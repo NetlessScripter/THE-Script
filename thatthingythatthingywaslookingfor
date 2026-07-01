@@ -1,0 +1,1287 @@
+local l = game:GetService('Lighting')
+do
+local i = Instance.new('SunRaysEffect')
+i.Intensity = 0.07800000160932541
+i.Spread = 0
+i.Enabled = true
+i.Parent = l
+end
+do
+local i = Instance.new('DepthOfFieldEffect')
+i.FarIntensity = 0.18000000715255737
+i.FocusDistance = 75
+i.InFocusRadius = 2.299999952316284
+i.NearIntensity = 0
+i.Enabled = true
+i.Parent = l
+end
+do
+local i = Instance.new('BloomEffect')
+i.Intensity = 1
+i.Size = 25
+i.Threshold = 1.100000023841858
+i.Enabled = true
+i.Parent = l
+end
+do
+local i = Instance.new('Atmosphere')
+i.Density = 0.30000001192092896
+i.Offset = 1
+i.Color = Color3.new(0.6352941393852234,0.6352941393852234,0.6352941393852234)
+i.Decay = Color3.new(0.7411764860153198,0.7411764860153198,0.7411764860153198)
+i.Glare = 0.3199999928474426
+i.Haze = 1
+i.Parent = l
+end
+do
+local i = Instance.new('Sky')
+i.SkyboxBk = "http://www.roblox.com/asset/?id=252760981"
+i.SkyboxDn = "http://www.roblox.com/asset/?id=252763035"
+i.SkyboxFt = "http://www.roblox.com/asset/?id=252761439"
+i.SkyboxLf = "http://www.roblox.com/asset/?id=252760980"
+i.SkyboxRt = "http://www.roblox.com/asset/?id=252760986"
+i.SkyboxUp = "http://www.roblox.com/asset/?id=252762652"
+i.MoonAngularSize = 11
+i.MoonTextureId = "rbxasset://sky/moon.jpg"
+i.SunAngularSize = 11
+i.SunTextureId = "rbxassetid://1345009717"
+i.Parent = l
+end
+l.Brightness = 1.600000023841858
+l.ClockTime = -15.828888893127441
+l.FogEnd = 100000
+l.FogStart = 0
+l.FogColor = Color3.new(0.7529412508010864,0.7529412508010864,0.7529412508010864)
+l.OutdoorAmbient = Color3.new(0.37254902720451355,0.38823530077934265,0.0470588244497776)
+l.Ambient = Color3.new(0.4274510145187378,0.4274510145187378,0.4274510145187378)
+l.GlobalShadows = true
+l.GeographicLatitude = 35.59749984741211
+l.EnvironmentSpecularScale = 0
+l.EnvironmentDiffuseScale = 0.10000000149011612
+l.ExposureCompensation = 0
+l.ColorShift_Bottom = Color3.new(0.49803921580314636,0.4588235318660736,0.22745098173618317)
+l.ColorShift_Top = Color3.new(0.8745098114013672,0.6274510025978088,0.007843137718737125)
+l.Technology = Enum.Technology.ShadowMap
+l.ShadowSoftness = 1
+l.TimeOfDay = "-15:49:44"
+
+loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/GOKU/refs/heads/main/RAIN%20MODULE"))()
+local CollectionService = game:GetService("CollectionService")
+local Lighting = game:GetService("Lighting")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+
+
+local FLARE_TAG = "LensFlare"
+local PASSTHROUGH_TAG = "LensFlarePassthrough"
+local FADE_TWEEN_INFO = TweenInfo.new(0.025, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut)
+local CHARACTER_PASSTHROUGH_DISTANCE = 2 -- studs; ignore own character in raycasts when camera is this close to it
+local SUN_DISTANCE = 12000 -- studs; how far out to place the virtual sun flare source
+
+local PSEUDO_ADDITIVE_BLENDING = true
+local PSEUDO_BLEND_WHITENING = 0.42
+local PSEUDO_BLEND_BOOST = 0.22
+l
+
+local function getViewSizeX()
+	local viewportSize = Camera.ViewportSize
+	local rawX, rawY = viewportSize.X, viewportSize.Y
+	if rawX == 0 then
+		return 1024
+	elseif rawY < rawX then
+		return rawX
+	else
+		return rawY
+	end
+end
+
+local function getViewSizeY()
+	local viewportSize = Camera.ViewportSize
+	local rawX, rawY = viewportSize.X, viewportSize.Y
+	if rawY == 0 then
+		return 768
+	elseif rawY < rawX then
+		return rawY
+	else
+		return rawX
+	end
+end
+
+local function getAspectRatio()
+	return getViewSizeX() / getViewSizeY()
+end
+
+local function screenWidthToWorldWidth(screenWidth, distance)
+	local halfFovRad = math.rad(Camera.FieldOfView) / 2
+	local widthFactor = getAspectRatio() * math.tan(halfFovRad)
+	return -(screenWidth / getViewSizeX()) * 2 * widthFactor * distance
+end
+
+local function screenHeightToWorldHeight(screenHeight, distance)
+	local halfFovRad = math.rad(Camera.FieldOfView) / 2
+	local heightFactor = math.tan(halfFovRad)
+	return -(screenHeight / getViewSizeY()) * 2 * heightFactor * distance
+end
+
+-- ===== Setup =====
+
+-- Invisible part every flare's BillboardGui is adorned to. Repositioned/resized
+-- every frame to sit directly in front of the camera so 2D screen-space math
+-- (image positions, sizes) can be driven off a 3D Adornee.
+local flarePart = Instance.new("Part")
+flarePart.Name = "FlarePart"
+flarePart.Anchored = true
+flarePart.CanCollide = false
+flarePart.CanQuery = false
+flarePart.CanTouch = false
+flarePart.Transparency = 1
+flarePart.Parent = workspace
+
+-- Virtual "sun" flare source, repositioned every frame along the current sun
+-- direction. Tagged like any other flare source so it goes through the same code path.
+local sunFlarePart = Instance.new("Part")
+sunFlarePart.Name = "SunFlarePart"
+sunFlarePart.Anchored = true
+sunFlarePart.Transparency = 1
+sunFlarePart.Parent = workspace
+sunFlarePart:SetAttribute("LensFlareStrength", 1)
+sunFlarePart:SetAttribute("LensFlareRange", 0)
+CollectionService:AddTag(sunFlarePart, FLARE_TAG)
+
+local LensFlareTemplate = Instance.new("SurfaceGui")
+LensFlareTemplate.Name = "LensFlareTemplate"
+LensFlareTemplate.Parent = game:GetService('Players').LocalPlayer.PlayerGui
+LensFlareTemplate.ClipsDescendants = false
+LensFlareTemplate.CanvasSize = Vector2.new(1920.000000, 1080.000000)
+LensFlareTemplate.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+LensFlareTemplate.Active = true
+LensFlareTemplate.Face = Enum.NormalId.Back
+LensFlareTemplate.AlwaysOnTop = true
+local Frame = Instance.new("Frame")
+Frame.Name = "Frame"
+Frame.Parent = LensFlareTemplate
+Frame.Size = UDim2.new(1.000000, 0, 1.000000, 0)
+Frame.Position = UDim2.new(0.500000, 0, 0.500000, 0)
+Frame.AnchorPoint = Vector2.new(0.500000, 0.500000)
+Frame.Rotation = 0
+Frame.ZIndex = 1
+Frame.Visible = true
+Frame.BackgroundColor3 = Color3.new(1.000000, 1.000000, 1.000000)
+Frame.BackgroundTransparency = 1
+Frame.BorderColor3 = Color3.new(0.105882, 0.164706, 0.207843)
+Frame.BorderSizePixel = 0
+Frame.LayoutOrder = 0
+Frame.ClipsDescendants = false
+Frame.AutomaticSize = Enum.AutomaticSize.None
+Frame.SizeConstraint = Enum.SizeConstraint.RelativeXY
+Frame.Selectable = false
+Frame.Active = false
+local BaseGlow2 = Instance.new("ImageLabel")
+BaseGlow2.Name = "BaseGlow2"
+BaseGlow2.Parent = Frame
+BaseGlow2.Size = UDim2.new(0.500000, 0, 0.125000, 0)
+BaseGlow2.Position = UDim2.new(0.000000, 0, 0.000000, 0)
+BaseGlow2.AnchorPoint = Vector2.new(0.500000, 0.500000)
+BaseGlow2.Rotation = 0
+BaseGlow2.ZIndex = 1
+BaseGlow2.Visible = true
+BaseGlow2.BackgroundColor3 = Color3.new(1.000000, 1.000000, 1.000000)
+BaseGlow2.BackgroundTransparency = 1
+BaseGlow2.BorderColor3 = Color3.new(0.105882, 0.164706, 0.207843)
+BaseGlow2.BorderSizePixel = 0
+BaseGlow2.Image = "rbxassetid://1215684307"
+BaseGlow2.ImageColor3 = Color3.new(0.690196, 0.815686, 1.000000)
+BaseGlow2.ImageTransparency = 1
+BaseGlow2.ResampleMode = Enum.ResamplerMode.Default
+BaseGlow2.ScaleType = Enum.ScaleType.Stretch
+BaseGlow2.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+BaseGlow2.SliceScale = 1
+BaseGlow2.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+BaseGlow2.ImageRectSize = Vector2.new(0.000000, 0.000000)
+BaseGlow2.LayoutOrder = 0
+BaseGlow2.ClipsDescendants = false
+BaseGlow2.AutomaticSize = Enum.AutomaticSize.None
+BaseGlow2.SizeConstraint = Enum.SizeConstraint.RelativeXY
+BaseGlow2.Selectable = false
+BaseGlow2.Active = false
+BaseGlow2.ScaleType = Enum.ScaleType.Stretch
+BaseGlow2.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+BaseGlow2.SliceScale = 1
+BaseGlow2.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+BaseGlow2.ImageRectSize = Vector2.new(0.000000, 0.000000)
+local UIAspectRatioConstraint = Instance.new("UIAspectRatioConstraint")
+UIAspectRatioConstraint.Name = "UIAspectRatioConstraint"
+UIAspectRatioConstraint.Parent = BaseGlow2
+UIAspectRatioConstraint.AspectRatio = 1
+UIAspectRatioConstraint.DominantAxis = Enum.DominantAxis.Height
+BaseGlow2:SetAttribute("Offset", Vector2.new(0.00, 0.00))
+BaseGlow2:SetAttribute("Transparency", 0.00)
+local BaseGlow3 = Instance.new("ImageLabel")
+BaseGlow3.Name = "BaseGlow3"
+BaseGlow3.Parent = Frame
+BaseGlow3.Size = UDim2.new(0.500000, 0, 0.065000, 0)
+BaseGlow3.Position = UDim2.new(0.000000, 0, 0.000000, 0)
+BaseGlow3.AnchorPoint = Vector2.new(0.500000, 0.500000)
+BaseGlow3.Rotation = 0
+BaseGlow3.ZIndex = 1
+BaseGlow3.Visible = true
+BaseGlow3.BackgroundColor3 = Color3.new(1.000000, 1.000000, 1.000000)
+BaseGlow3.BackgroundTransparency = 1
+BaseGlow3.BorderColor3 = Color3.new(0.105882, 0.164706, 0.207843)
+BaseGlow3.BorderSizePixel = 0
+BaseGlow3.Image = "rbxassetid://1215684307"
+BaseGlow3.ImageColor3 = Color3.new(0.792157, 0.909804, 1.000000)
+BaseGlow3.ImageTransparency = 1
+BaseGlow3.ResampleMode = Enum.ResamplerMode.Default
+BaseGlow3.ScaleType = Enum.ScaleType.Stretch
+BaseGlow3.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+BaseGlow3.SliceScale = 1
+BaseGlow3.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+BaseGlow3.ImageRectSize = Vector2.new(0.000000, 0.000000)
+BaseGlow3.LayoutOrder = 0
+BaseGlow3.ClipsDescendants = false
+BaseGlow3.AutomaticSize = Enum.AutomaticSize.None
+BaseGlow3.SizeConstraint = Enum.SizeConstraint.RelativeXY
+BaseGlow3.Selectable = false
+BaseGlow3.Active = false
+BaseGlow3.ScaleType = Enum.ScaleType.Stretch
+BaseGlow3.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+BaseGlow3.SliceScale = 1
+BaseGlow3.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+BaseGlow3.ImageRectSize = Vector2.new(0.000000, 0.000000)
+local UIAspectRatioConstraint = Instance.new("UIAspectRatioConstraint")
+UIAspectRatioConstraint.Name = "UIAspectRatioConstraint"
+UIAspectRatioConstraint.Parent = BaseGlow3
+UIAspectRatioConstraint.AspectRatio = 1
+UIAspectRatioConstraint.DominantAxis = Enum.DominantAxis.Height
+BaseGlow3:SetAttribute("Offset", Vector2.new(0.02, 0.02))
+BaseGlow3:SetAttribute("Transparency", 0.05)
+local LargeGlare = Instance.new("ImageLabel")
+LargeGlare.Name = "LargeGlare"
+LargeGlare.Parent = Frame
+LargeGlare.Size = UDim2.new(0.500000, 0, 3.000000, 0)
+LargeGlare.Position = UDim2.new(0.000000, 0, 0.000000, 0)
+LargeGlare.AnchorPoint = Vector2.new(0.500000, 0.500000)
+LargeGlare.Rotation = 0
+LargeGlare.ZIndex = 1
+LargeGlare.Visible = true
+LargeGlare.BackgroundColor3 = Color3.new(1.000000, 1.000000, 1.000000)
+LargeGlare.BackgroundTransparency = 1
+LargeGlare.BorderColor3 = Color3.new(0.105882, 0.164706, 0.207843)
+LargeGlare.BorderSizePixel = 0
+LargeGlare.Image = "rbxassetid://9691415433"
+LargeGlare.ImageColor3 = Color3.new(1.000000, 0.811765, 0.541176)
+LargeGlare.ImageTransparency = 1
+LargeGlare.ResampleMode = Enum.ResamplerMode.Default
+LargeGlare.ScaleType = Enum.ScaleType.Stretch
+LargeGlare.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+LargeGlare.SliceScale = 1
+LargeGlare.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+LargeGlare.ImageRectSize = Vector2.new(0.000000, 0.000000)
+LargeGlare.LayoutOrder = 0
+LargeGlare.ClipsDescendants = false
+LargeGlare.AutomaticSize = Enum.AutomaticSize.None
+LargeGlare.SizeConstraint = Enum.SizeConstraint.RelativeXY
+LargeGlare.Selectable = false
+LargeGlare.Active = false
+LargeGlare.ScaleType = Enum.ScaleType.Stretch
+LargeGlare.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+LargeGlare.SliceScale = 1
+LargeGlare.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+LargeGlare.ImageRectSize = Vector2.new(0.000000, 0.000000)
+local UIAspectRatioConstraint = Instance.new("UIAspectRatioConstraint")
+UIAspectRatioConstraint.Name = "UIAspectRatioConstraint"
+UIAspectRatioConstraint.Parent = LargeGlare
+UIAspectRatioConstraint.AspectRatio = 1
+UIAspectRatioConstraint.DominantAxis = Enum.DominantAxis.Height
+LargeGlare:SetAttribute("Offset", Vector2.new(0.06, 0.06))
+LargeGlare:SetAttribute("Transparency", 0.12)
+local Streaks2 = Instance.new("ImageLabel")
+Streaks2.Name = "Streaks2"
+Streaks2.Parent = Frame
+Streaks2.Size = UDim2.new(0.500000, 0, 0.800000, 0)
+Streaks2.Position = UDim2.new(0.000000, 0, 0.000000, 0)
+Streaks2.AnchorPoint = Vector2.new(0.500000, 0.500000)
+Streaks2.Rotation = 0
+Streaks2.ZIndex = 1
+Streaks2.Visible = true
+Streaks2.BackgroundColor3 = Color3.new(1.000000, 1.000000, 1.000000)
+Streaks2.BackgroundTransparency = 1
+Streaks2.BorderColor3 = Color3.new(0.105882, 0.164706, 0.207843)
+Streaks2.BorderSizePixel = 0
+Streaks2.Image = "rbxassetid://9691597027"
+Streaks2.ImageColor3 = Color3.new(1.000000, 0.921569, 0.737255)
+Streaks2.ImageTransparency = 1
+Streaks2.ResampleMode = Enum.ResamplerMode.Default
+Streaks2.ScaleType = Enum.ScaleType.Stretch
+Streaks2.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Streaks2.SliceScale = 1
+Streaks2.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Streaks2.ImageRectSize = Vector2.new(0.000000, 0.000000)
+Streaks2.LayoutOrder = 0
+Streaks2.ClipsDescendants = false
+Streaks2.AutomaticSize = Enum.AutomaticSize.None
+Streaks2.SizeConstraint = Enum.SizeConstraint.RelativeXY
+Streaks2.Selectable = false
+Streaks2.Active = false
+Streaks2.ScaleType = Enum.ScaleType.Stretch
+Streaks2.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Streaks2.SliceScale = 1
+Streaks2.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Streaks2.ImageRectSize = Vector2.new(0.000000, 0.000000)
+local UIAspectRatioConstraint = Instance.new("UIAspectRatioConstraint")
+UIAspectRatioConstraint.Name = "UIAspectRatioConstraint"
+UIAspectRatioConstraint.Parent = Streaks2
+UIAspectRatioConstraint.AspectRatio = 1
+UIAspectRatioConstraint.DominantAxis = Enum.DominantAxis.Height
+Streaks2:SetAttribute("Offset", Vector2.new(0.12, 0.12))
+Streaks2:SetAttribute("Transparency", 0.18)
+Streaks2:SetAttribute("CanRotate", true)
+Streaks2:SetAttribute("BaseRotation", 12)
+local Streaks1 = Instance.new("ImageLabel")
+Streaks1.Name = "Streaks1"
+Streaks1.Parent = Frame
+Streaks1.Size = UDim2.new(0.500000, 0, 0.400000, 0)
+Streaks1.Position = UDim2.new(0.000000, 0, 0.000000, 0)
+Streaks1.AnchorPoint = Vector2.new(0.500000, 0.500000)
+Streaks1.Rotation = 0
+Streaks1.ZIndex = 1
+Streaks1.Visible = true
+Streaks1.BackgroundColor3 = Color3.new(1.000000, 1.000000, 1.000000)
+Streaks1.BackgroundTransparency = 1
+Streaks1.BorderColor3 = Color3.new(0.105882, 0.164706, 0.207843)
+Streaks1.BorderSizePixel = 0
+Streaks1.Image = "rbxassetid://9691597027"
+Streaks1.ImageColor3 = Color3.new(1.000000, 0.921569, 0.737255)
+Streaks1.ImageTransparency = 1
+Streaks1.ResampleMode = Enum.ResamplerMode.Default
+Streaks1.ScaleType = Enum.ScaleType.Stretch
+Streaks1.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Streaks1.SliceScale = 1
+Streaks1.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Streaks1.ImageRectSize = Vector2.new(0.000000, 0.000000)
+Streaks1.LayoutOrder = 0
+Streaks1.ClipsDescendants = false
+Streaks1.AutomaticSize = Enum.AutomaticSize.None
+Streaks1.SizeConstraint = Enum.SizeConstraint.RelativeXY
+Streaks1.Selectable = false
+Streaks1.Active = false
+Streaks1.ScaleType = Enum.ScaleType.Stretch
+Streaks1.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Streaks1.SliceScale = 1
+Streaks1.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Streaks1.ImageRectSize = Vector2.new(0.000000, 0.000000)
+local UIAspectRatioConstraint = Instance.new("UIAspectRatioConstraint")
+UIAspectRatioConstraint.Name = "UIAspectRatioConstraint"
+UIAspectRatioConstraint.Parent = Streaks1
+UIAspectRatioConstraint.AspectRatio = 1
+UIAspectRatioConstraint.DominantAxis = Enum.DominantAxis.Height
+Streaks1:SetAttribute("Offset", Vector2.new(0.18, 0.18))
+Streaks1:SetAttribute("Transparency", 0.18)
+Streaks1:SetAttribute("CanRotate", true)
+Streaks1:SetAttribute("BaseRotation", -12)
+local Bokeh = Instance.new("ImageLabel")
+Bokeh.Name = "Bokeh"
+Bokeh.Parent = Frame
+Bokeh.Size = UDim2.new(0.500000, 0, 0.035000, 0)
+Bokeh.Position = UDim2.new(0.000000, 0, 0.000000, 0)
+Bokeh.AnchorPoint = Vector2.new(0.500000, 0.500000)
+Bokeh.Rotation = 0
+Bokeh.ZIndex = 1
+Bokeh.Visible = true
+Bokeh.BackgroundColor3 = Color3.new(1.000000, 1.000000, 1.000000)
+Bokeh.BackgroundTransparency = 1
+Bokeh.BorderColor3 = Color3.new(0.105882, 0.164706, 0.207843)
+Bokeh.BorderSizePixel = 0
+Bokeh.Image = "rbxassetid://1215684307"
+Bokeh.ImageColor3 = Color3.new(1.000000, 0.839216, 0.576471)
+Bokeh.ImageTransparency = 1
+Bokeh.ResampleMode = Enum.ResamplerMode.Default
+Bokeh.ScaleType = Enum.ScaleType.Stretch
+Bokeh.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Bokeh.SliceScale = 1
+Bokeh.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Bokeh.ImageRectSize = Vector2.new(0.000000, 0.000000)
+Bokeh.LayoutOrder = 0
+Bokeh.ClipsDescendants = false
+Bokeh.AutomaticSize = Enum.AutomaticSize.None
+Bokeh.SizeConstraint = Enum.SizeConstraint.RelativeXY
+Bokeh.Selectable = false
+Bokeh.Active = false
+Bokeh.ScaleType = Enum.ScaleType.Stretch
+Bokeh.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Bokeh.SliceScale = 1
+Bokeh.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Bokeh.ImageRectSize = Vector2.new(0.000000, 0.000000)
+local UIAspectRatioConstraint = Instance.new("UIAspectRatioConstraint")
+UIAspectRatioConstraint.Name = "UIAspectRatioConstraint"
+UIAspectRatioConstraint.Parent = Bokeh
+UIAspectRatioConstraint.AspectRatio = 1
+UIAspectRatioConstraint.DominantAxis = Enum.DominantAxis.Height
+Bokeh:SetAttribute("Offset", Vector2.new(0.28, 0.28))
+Bokeh:SetAttribute("Transparency", 0.10)
+local Bokeh = Instance.new("ImageLabel")
+Bokeh.Name = "Bokeh"
+Bokeh.Parent = Frame
+Bokeh.Size = UDim2.new(0.500000, 0, 0.045000, 0)
+Bokeh.Position = UDim2.new(0.000000, 0, 0.000000, 0)
+Bokeh.AnchorPoint = Vector2.new(0.500000, 0.500000)
+Bokeh.Rotation = 0
+Bokeh.ZIndex = 1
+Bokeh.Visible = true
+Bokeh.BackgroundColor3 = Color3.new(1.000000, 1.000000, 1.000000)
+Bokeh.BackgroundTransparency = 1
+Bokeh.BorderColor3 = Color3.new(0.105882, 0.164706, 0.207843)
+Bokeh.BorderSizePixel = 0
+Bokeh.Image = "rbxassetid://1215684307"
+Bokeh.ImageColor3 = Color3.new(1.000000, 0.772549, 0.545098)
+Bokeh.ImageTransparency = 1
+Bokeh.ResampleMode = Enum.ResamplerMode.Default
+Bokeh.ScaleType = Enum.ScaleType.Stretch
+Bokeh.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Bokeh.SliceScale = 1
+Bokeh.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Bokeh.ImageRectSize = Vector2.new(0.000000, 0.000000)
+Bokeh.LayoutOrder = 0
+Bokeh.ClipsDescendants = false
+Bokeh.AutomaticSize = Enum.AutomaticSize.None
+Bokeh.SizeConstraint = Enum.SizeConstraint.RelativeXY
+Bokeh.Selectable = false
+Bokeh.Active = false
+Bokeh.ScaleType = Enum.ScaleType.Stretch
+Bokeh.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Bokeh.SliceScale = 1
+Bokeh.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Bokeh.ImageRectSize = Vector2.new(0.000000, 0.000000)
+local UIAspectRatioConstraint = Instance.new("UIAspectRatioConstraint")
+UIAspectRatioConstraint.Name = "UIAspectRatioConstraint"
+UIAspectRatioConstraint.Parent = Bokeh
+UIAspectRatioConstraint.AspectRatio = 1
+UIAspectRatioConstraint.DominantAxis = Enum.DominantAxis.Height
+Bokeh:SetAttribute("Offset", Vector2.new(0.40, 0.40))
+Bokeh:SetAttribute("Transparency", 0.12)
+local Bokeh = Instance.new("ImageLabel")
+Bokeh.Name = "Bokeh"
+Bokeh.Parent = Frame
+Bokeh.Size = UDim2.new(0.500000, 0, 0.075000, 0)
+Bokeh.Position = UDim2.new(0.000000, 0, 0.000000, 0)
+Bokeh.AnchorPoint = Vector2.new(0.500000, 0.500000)
+Bokeh.Rotation = 0
+Bokeh.ZIndex = 1
+Bokeh.Visible = true
+Bokeh.BackgroundColor3 = Color3.new(1.000000, 1.000000, 1.000000)
+Bokeh.BackgroundTransparency = 1
+Bokeh.BorderColor3 = Color3.new(0.105882, 0.164706, 0.207843)
+Bokeh.BorderSizePixel = 0
+Bokeh.Image = "rbxassetid://1215684307"
+Bokeh.ImageColor3 = Color3.new(1.000000, 0.839216, 0.576471)
+Bokeh.ImageTransparency = 1
+Bokeh.ResampleMode = Enum.ResamplerMode.Default
+Bokeh.ScaleType = Enum.ScaleType.Stretch
+Bokeh.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Bokeh.SliceScale = 1
+Bokeh.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Bokeh.ImageRectSize = Vector2.new(0.000000, 0.000000)
+Bokeh.LayoutOrder = 0
+Bokeh.ClipsDescendants = false
+Bokeh.AutomaticSize = Enum.AutomaticSize.None
+Bokeh.SizeConstraint = Enum.SizeConstraint.RelativeXY
+Bokeh.Selectable = false
+Bokeh.Active = false
+Bokeh.ScaleType = Enum.ScaleType.Stretch
+Bokeh.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Bokeh.SliceScale = 1
+Bokeh.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Bokeh.ImageRectSize = Vector2.new(0.000000, 0.000000)
+local UIAspectRatioConstraint = Instance.new("UIAspectRatioConstraint")
+UIAspectRatioConstraint.Name = "UIAspectRatioConstraint"
+UIAspectRatioConstraint.Parent = Bokeh
+UIAspectRatioConstraint.AspectRatio = 1
+UIAspectRatioConstraint.DominantAxis = Enum.DominantAxis.Height
+Bokeh:SetAttribute("Offset", Vector2.new(0.55, 0.55))
+Bokeh:SetAttribute("Transparency", 0.16)
+local Bokeh = Instance.new("ImageLabel")
+Bokeh.Name = "Bokeh"
+Bokeh.Parent = Frame
+Bokeh.Size = UDim2.new(0.500000, 0, 0.250000, 0)
+Bokeh.Position = UDim2.new(0.000000, 0, 0.000000, 0)
+Bokeh.AnchorPoint = Vector2.new(0.500000, 0.500000)
+Bokeh.Rotation = 0
+Bokeh.ZIndex = 1
+Bokeh.Visible = true
+Bokeh.BackgroundColor3 = Color3.new(1.000000, 1.000000, 1.000000)
+Bokeh.BackgroundTransparency = 1
+Bokeh.BorderColor3 = Color3.new(0.105882, 0.164706, 0.207843)
+Bokeh.BorderSizePixel = 0
+Bokeh.Image = "rbxassetid://1215684307"
+Bokeh.ImageColor3 = Color3.new(0.721569, 0.831373, 1.000000)
+Bokeh.ImageTransparency = 1
+Bokeh.ResampleMode = Enum.ResamplerMode.Default
+Bokeh.ScaleType = Enum.ScaleType.Stretch
+Bokeh.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Bokeh.SliceScale = 1
+Bokeh.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Bokeh.ImageRectSize = Vector2.new(0.000000, 0.000000)
+Bokeh.LayoutOrder = 0
+Bokeh.ClipsDescendants = false
+Bokeh.AutomaticSize = Enum.AutomaticSize.None
+Bokeh.SizeConstraint = Enum.SizeConstraint.RelativeXY
+Bokeh.Selectable = false
+Bokeh.Active = false
+Bokeh.ScaleType = Enum.ScaleType.Stretch
+Bokeh.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Bokeh.SliceScale = 1
+Bokeh.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Bokeh.ImageRectSize = Vector2.new(0.000000, 0.000000)
+local UIAspectRatioConstraint = Instance.new("UIAspectRatioConstraint")
+UIAspectRatioConstraint.Name = "UIAspectRatioConstraint"
+UIAspectRatioConstraint.Parent = Bokeh
+UIAspectRatioConstraint.AspectRatio = 1
+UIAspectRatioConstraint.DominantAxis = Enum.DominantAxis.Height
+Bokeh:SetAttribute("Offset", Vector2.new(0.72, 0.72))
+Bokeh:SetAttribute("Transparency", 0.20)
+local Bokeh = Instance.new("ImageLabel")
+Bokeh.Name = "Bokeh"
+Bokeh.Parent = Frame
+Bokeh.Size = UDim2.new(0.500000, 0, 0.125000, 0)
+Bokeh.Position = UDim2.new(0.000000, 0, 0.000000, 0)
+Bokeh.AnchorPoint = Vector2.new(0.500000, 0.500000)
+Bokeh.Rotation = 0
+Bokeh.ZIndex = 1
+Bokeh.Visible = true
+Bokeh.BackgroundColor3 = Color3.new(1.000000, 1.000000, 1.000000)
+Bokeh.BackgroundTransparency = 1
+Bokeh.BorderColor3 = Color3.new(0.105882, 0.164706, 0.207843)
+Bokeh.BorderSizePixel = 0
+Bokeh.Image = "rbxassetid://1215684307"
+Bokeh.ImageColor3 = Color3.new(0.792157, 1.000000, 0.776471)
+Bokeh.ImageTransparency = 1
+Bokeh.ResampleMode = Enum.ResamplerMode.Default
+Bokeh.ScaleType = Enum.ScaleType.Stretch
+Bokeh.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Bokeh.SliceScale = 1
+Bokeh.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Bokeh.ImageRectSize = Vector2.new(0.000000, 0.000000)
+Bokeh.LayoutOrder = 0
+Bokeh.ClipsDescendants = false
+Bokeh.AutomaticSize = Enum.AutomaticSize.None
+Bokeh.SizeConstraint = Enum.SizeConstraint.RelativeXY
+Bokeh.Selectable = false
+Bokeh.Active = false
+Bokeh.ScaleType = Enum.ScaleType.Stretch
+Bokeh.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Bokeh.SliceScale = 1
+Bokeh.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Bokeh.ImageRectSize = Vector2.new(0.000000, 0.000000)
+local UIAspectRatioConstraint = Instance.new("UIAspectRatioConstraint")
+UIAspectRatioConstraint.Name = "UIAspectRatioConstraint"
+UIAspectRatioConstraint.Parent = Bokeh
+UIAspectRatioConstraint.AspectRatio = 1
+UIAspectRatioConstraint.DominantAxis = Enum.DominantAxis.Height
+Bokeh:SetAttribute("Offset", Vector2.new(0.90, 0.90))
+Bokeh:SetAttribute("Transparency", 0.24)
+local Bokeh = Instance.new("ImageLabel")
+Bokeh.Name = "Bokeh"
+Bokeh.Parent = Frame
+Bokeh.Size = UDim2.new(0.500000, 0, 0.050000, 0)
+Bokeh.Position = UDim2.new(0.000000, 0, 0.000000, 0)
+Bokeh.AnchorPoint = Vector2.new(0.500000, 0.500000)
+Bokeh.Rotation = 0
+Bokeh.ZIndex = 1
+Bokeh.Visible = true
+Bokeh.BackgroundColor3 = Color3.new(1.000000, 1.000000, 1.000000)
+Bokeh.BackgroundTransparency = 1
+Bokeh.BorderColor3 = Color3.new(0.105882, 0.164706, 0.207843)
+Bokeh.BorderSizePixel = 0
+Bokeh.Image = "rbxassetid://1215684307"
+Bokeh.ImageColor3 = Color3.new(1.000000, 0.843137, 0.725490)
+Bokeh.ImageTransparency = 1
+Bokeh.ResampleMode = Enum.ResamplerMode.Default
+Bokeh.ScaleType = Enum.ScaleType.Stretch
+Bokeh.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Bokeh.SliceScale = 1
+Bokeh.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Bokeh.ImageRectSize = Vector2.new(0.000000, 0.000000)
+Bokeh.LayoutOrder = 0
+Bokeh.ClipsDescendants = false
+Bokeh.AutomaticSize = Enum.AutomaticSize.None
+Bokeh.SizeConstraint = Enum.SizeConstraint.RelativeXY
+Bokeh.Selectable = false
+Bokeh.Active = false
+Bokeh.ScaleType = Enum.ScaleType.Stretch
+Bokeh.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Bokeh.SliceScale = 1
+Bokeh.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Bokeh.ImageRectSize = Vector2.new(0.000000, 0.000000)
+local UIAspectRatioConstraint = Instance.new("UIAspectRatioConstraint")
+UIAspectRatioConstraint.Name = "UIAspectRatioConstraint"
+UIAspectRatioConstraint.Parent = Bokeh
+UIAspectRatioConstraint.AspectRatio = 1
+UIAspectRatioConstraint.DominantAxis = Enum.DominantAxis.Height
+Bokeh:SetAttribute("Offset", Vector2.new(1.08, 1.08))
+Bokeh:SetAttribute("Transparency", 0.28)
+local Bokeh = Instance.new("ImageLabel")
+Bokeh.Name = "Bokeh"
+Bokeh.Parent = Frame
+Bokeh.Size = UDim2.new(0.500000, 0, 0.050000, 0)
+Bokeh.Position = UDim2.new(0.000000, 0, 0.000000, 0)
+Bokeh.AnchorPoint = Vector2.new(0.500000, 0.500000)
+Bokeh.Rotation = 0
+Bokeh.ZIndex = 1
+Bokeh.Visible = true
+Bokeh.BackgroundColor3 = Color3.new(1.000000, 1.000000, 1.000000)
+Bokeh.BackgroundTransparency = 1
+Bokeh.BorderColor3 = Color3.new(0.105882, 0.164706, 0.207843)
+Bokeh.BorderSizePixel = 0
+Bokeh.Image = "rbxassetid://1215684307"
+Bokeh.ImageColor3 = Color3.new(1.000000, 1.000000, 1.000000)
+Bokeh.ImageTransparency = 1
+Bokeh.ResampleMode = Enum.ResamplerMode.Default
+Bokeh.ScaleType = Enum.ScaleType.Stretch
+Bokeh.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Bokeh.SliceScale = 1
+Bokeh.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Bokeh.ImageRectSize = Vector2.new(0.000000, 0.000000)
+Bokeh.LayoutOrder = 0
+Bokeh.ClipsDescendants = false
+Bokeh.AutomaticSize = Enum.AutomaticSize.None
+Bokeh.SizeConstraint = Enum.SizeConstraint.RelativeXY
+Bokeh.Selectable = false
+Bokeh.Active = false
+Bokeh.ScaleType = Enum.ScaleType.Stretch
+Bokeh.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Bokeh.SliceScale = 1
+Bokeh.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Bokeh.ImageRectSize = Vector2.new(0.000000, 0.000000)
+local UIAspectRatioConstraint = Instance.new("UIAspectRatioConstraint")
+UIAspectRatioConstraint.Name = "UIAspectRatioConstraint"
+UIAspectRatioConstraint.Parent = Bokeh
+UIAspectRatioConstraint.AspectRatio = 1
+UIAspectRatioConstraint.DominantAxis = Enum.DominantAxis.Height
+Bokeh:SetAttribute("Offset", Vector2.new(1.28, 1.28))
+Bokeh:SetAttribute("Transparency", 0.32)
+local Glare = Instance.new("ImageLabel")
+Glare.Name = "Glare"
+Glare.Parent = Frame
+Glare.Size = UDim2.new(0.500000, 0, 0.175000, 0)
+Glare.Position = UDim2.new(0.000000, 0, 0.000000, 0)
+Glare.AnchorPoint = Vector2.new(0.500000, 0.500000)
+Glare.Rotation = 0
+Glare.ZIndex = 1
+Glare.Visible = true
+Glare.BackgroundColor3 = Color3.new(1.000000, 1.000000, 1.000000)
+Glare.BackgroundTransparency = 1
+Glare.BorderColor3 = Color3.new(0.105882, 0.164706, 0.207843)
+Glare.BorderSizePixel = 0
+Glare.Image = "rbxassetid://9691415433"
+Glare.ImageColor3 = Color3.new(1.000000, 0.854902, 0.615686)
+Glare.ImageTransparency = 1
+Glare.ResampleMode = Enum.ResamplerMode.Default
+Glare.ScaleType = Enum.ScaleType.Stretch
+Glare.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Glare.SliceScale = 1
+Glare.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Glare.ImageRectSize = Vector2.new(0.000000, 0.000000)
+Glare.LayoutOrder = 0
+Glare.ClipsDescendants = false
+Glare.AutomaticSize = Enum.AutomaticSize.None
+Glare.SizeConstraint = Enum.SizeConstraint.RelativeXY
+Glare.Selectable = false
+Glare.Active = false
+Glare.ScaleType = Enum.ScaleType.Stretch
+Glare.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Glare.SliceScale = 1
+Glare.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Glare.ImageRectSize = Vector2.new(0.000000, 0.000000)
+local UIAspectRatioConstraint = Instance.new("UIAspectRatioConstraint")
+UIAspectRatioConstraint.Name = "UIAspectRatioConstraint"
+UIAspectRatioConstraint.Parent = Glare
+UIAspectRatioConstraint.AspectRatio = 1
+UIAspectRatioConstraint.DominantAxis = Enum.DominantAxis.Height
+Glare:SetAttribute("Offset", Vector2.new(1.48, 1.48))
+Glare:SetAttribute("Transparency", 0.36)
+local Bokeh = Instance.new("ImageLabel")
+Bokeh.Name = "Bokeh"
+Bokeh.Parent = Frame
+Bokeh.Size = UDim2.new(0.500000, 0, 0.125000, 0)
+Bokeh.Position = UDim2.new(0.000000, 0, 0.000000, 0)
+Bokeh.AnchorPoint = Vector2.new(0.500000, 0.500000)
+Bokeh.Rotation = 0
+Bokeh.ZIndex = 1
+Bokeh.Visible = true
+Bokeh.BackgroundColor3 = Color3.new(1.000000, 1.000000, 1.000000)
+Bokeh.BackgroundTransparency = 1
+Bokeh.BorderColor3 = Color3.new(0.105882, 0.164706, 0.207843)
+Bokeh.BorderSizePixel = 0
+Bokeh.Image = "rbxassetid://1215684307"
+Bokeh.ImageColor3 = Color3.new(0.921569, 1.000000, 0.741176)
+Bokeh.ImageTransparency = 1
+Bokeh.ResampleMode = Enum.ResamplerMode.Default
+Bokeh.ScaleType = Enum.ScaleType.Stretch
+Bokeh.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Bokeh.SliceScale = 1
+Bokeh.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Bokeh.ImageRectSize = Vector2.new(0.000000, 0.000000)
+Bokeh.LayoutOrder = 0
+Bokeh.ClipsDescendants = false
+Bokeh.AutomaticSize = Enum.AutomaticSize.None
+Bokeh.SizeConstraint = Enum.SizeConstraint.RelativeXY
+Bokeh.Selectable = false
+Bokeh.Active = false
+Bokeh.ScaleType = Enum.ScaleType.Stretch
+Bokeh.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Bokeh.SliceScale = 1
+Bokeh.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Bokeh.ImageRectSize = Vector2.new(0.000000, 0.000000)
+local UIAspectRatioConstraint = Instance.new("UIAspectRatioConstraint")
+UIAspectRatioConstraint.Name = "UIAspectRatioConstraint"
+UIAspectRatioConstraint.Parent = Bokeh
+UIAspectRatioConstraint.AspectRatio = 1
+UIAspectRatioConstraint.DominantAxis = Enum.DominantAxis.Height
+Bokeh:SetAttribute("Offset", Vector2.new(-0.15, -0.15))
+Bokeh:SetAttribute("Transparency", 0.12)
+local Bokeh = Instance.new("ImageLabel")
+Bokeh.Name = "Bokeh"
+Bokeh.Parent = Frame
+Bokeh.Size = UDim2.new(0.500000, 0, 0.250000, 0)
+Bokeh.Position = UDim2.new(0.000000, 0, 0.000000, 0)
+Bokeh.AnchorPoint = Vector2.new(0.500000, 0.500000)
+Bokeh.Rotation = 0
+Bokeh.ZIndex = 1
+Bokeh.Visible = true
+Bokeh.BackgroundColor3 = Color3.new(1.000000, 1.000000, 1.000000)
+Bokeh.BackgroundTransparency = 1
+Bokeh.BorderColor3 = Color3.new(0.105882, 0.164706, 0.207843)
+Bokeh.BorderSizePixel = 0
+Bokeh.Image = "rbxassetid://1215684307"
+Bokeh.ImageColor3 = Color3.new(0.666667, 0.811765, 1.000000)
+Bokeh.ImageTransparency = 1
+Bokeh.ResampleMode = Enum.ResamplerMode.Default
+Bokeh.ScaleType = Enum.ScaleType.Stretch
+Bokeh.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Bokeh.SliceScale = 1
+Bokeh.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Bokeh.ImageRectSize = Vector2.new(0.000000, 0.000000)
+Bokeh.LayoutOrder = 0
+Bokeh.ClipsDescendants = false
+Bokeh.AutomaticSize = Enum.AutomaticSize.None
+Bokeh.SizeConstraint = Enum.SizeConstraint.RelativeXY
+Bokeh.Selectable = false
+Bokeh.Active = false
+Bokeh.ScaleType = Enum.ScaleType.Stretch
+Bokeh.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Bokeh.SliceScale = 1
+Bokeh.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Bokeh.ImageRectSize = Vector2.new(0.000000, 0.000000)
+local UIAspectRatioConstraint = Instance.new("UIAspectRatioConstraint")
+UIAspectRatioConstraint.Name = "UIAspectRatioConstraint"
+UIAspectRatioConstraint.Parent = Bokeh
+UIAspectRatioConstraint.AspectRatio = 1
+UIAspectRatioConstraint.DominantAxis = Enum.DominantAxis.Height
+Bokeh:SetAttribute("Offset", Vector2.new(-0.30, -0.30))
+Bokeh:SetAttribute("Transparency", 0.16)
+local Glare = Instance.new("ImageLabel")
+Glare.Name = "Glare"
+Glare.Parent = Frame
+Glare.Size = UDim2.new(0.500000, 0, 0.250000, 0)
+Glare.Position = UDim2.new(0.000000, 0, 0.000000, 0)
+Glare.AnchorPoint = Vector2.new(0.500000, 0.500000)
+Glare.Rotation = 0
+Glare.ZIndex = 1
+Glare.Visible = true
+Glare.BackgroundColor3 = Color3.new(1.000000, 1.000000, 1.000000)
+Glare.BackgroundTransparency = 1
+Glare.BorderColor3 = Color3.new(0.105882, 0.164706, 0.207843)
+Glare.BorderSizePixel = 0
+Glare.Image = "rbxassetid://9691415433"
+Glare.ImageColor3 = Color3.new(1.000000, 0.878431, 0.564706)
+Glare.ImageTransparency = 1
+Glare.ResampleMode = Enum.ResamplerMode.Default
+Glare.ScaleType = Enum.ScaleType.Stretch
+Glare.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Glare.SliceScale = 1
+Glare.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Glare.ImageRectSize = Vector2.new(0.000000, 0.000000)
+Glare.LayoutOrder = 0
+Glare.ClipsDescendants = false
+Glare.AutomaticSize = Enum.AutomaticSize.None
+Glare.SizeConstraint = Enum.SizeConstraint.RelativeXY
+Glare.Selectable = false
+Glare.Active = false
+Glare.ScaleType = Enum.ScaleType.Stretch
+Glare.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Glare.SliceScale = 1
+Glare.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Glare.ImageRectSize = Vector2.new(0.000000, 0.000000)
+local UIAspectRatioConstraint = Instance.new("UIAspectRatioConstraint")
+UIAspectRatioConstraint.Name = "UIAspectRatioConstraint"
+UIAspectRatioConstraint.Parent = Glare
+UIAspectRatioConstraint.AspectRatio = 1
+UIAspectRatioConstraint.DominantAxis = Enum.DominantAxis.Height
+Glare:SetAttribute("Offset", Vector2.new(-0.45, -0.45))
+Glare:SetAttribute("Transparency", 0.20)
+local Glare = Instance.new("ImageLabel")
+Glare.Name = "Glare"
+Glare.Parent = Frame
+Glare.Size = UDim2.new(0.500000, 0, 0.350000, 0)
+Glare.Position = UDim2.new(0.000000, 0, 0.000000, 0)
+Glare.AnchorPoint = Vector2.new(0.500000, 0.500000)
+Glare.Rotation = 0
+Glare.ZIndex = 1
+Glare.Visible = true
+Glare.BackgroundColor3 = Color3.new(1.000000, 1.000000, 1.000000)
+Glare.BackgroundTransparency = 1
+Glare.BorderColor3 = Color3.new(0.105882, 0.164706, 0.207843)
+Glare.BorderSizePixel = 0
+Glare.Image = "rbxassetid://9691415433"
+Glare.ImageColor3 = Color3.new(0.909804, 1.000000, 0.650980)
+Glare.ImageTransparency = 1
+Glare.ResampleMode = Enum.ResamplerMode.Default
+Glare.ScaleType = Enum.ScaleType.Stretch
+Glare.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Glare.SliceScale = 1
+Glare.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Glare.ImageRectSize = Vector2.new(0.000000, 0.000000)
+Glare.LayoutOrder = 0
+Glare.ClipsDescendants = false
+Glare.AutomaticSize = Enum.AutomaticSize.None
+Glare.SizeConstraint = Enum.SizeConstraint.RelativeXY
+Glare.Selectable = false
+Glare.Active = false
+Glare.ScaleType = Enum.ScaleType.Stretch
+Glare.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Glare.SliceScale = 1
+Glare.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Glare.ImageRectSize = Vector2.new(0.000000, 0.000000)
+local UIAspectRatioConstraint = Instance.new("UIAspectRatioConstraint")
+UIAspectRatioConstraint.Name = "UIAspectRatioConstraint"
+UIAspectRatioConstraint.Parent = Glare
+UIAspectRatioConstraint.AspectRatio = 1
+UIAspectRatioConstraint.DominantAxis = Enum.DominantAxis.Height
+Glare:SetAttribute("Offset", Vector2.new(-0.60, -0.60))
+Glare:SetAttribute("Transparency", 0.24)
+local Glare = Instance.new("ImageLabel")
+Glare.Name = "Glare"
+Glare.Parent = Frame
+Glare.Size = UDim2.new(0.500000, 0, 0.350000, 0)
+Glare.Position = UDim2.new(0.000000, 0, 0.000000, 0)
+Glare.AnchorPoint = Vector2.new(0.500000, 0.500000)
+Glare.Rotation = 0
+Glare.ZIndex = 1
+Glare.Visible = true
+Glare.BackgroundColor3 = Color3.new(1.000000, 1.000000, 1.000000)
+Glare.BackgroundTransparency = 1
+Glare.BorderColor3 = Color3.new(0.105882, 0.164706, 0.207843)
+Glare.BorderSizePixel = 0
+Glare.Image = "rbxassetid://9691415433"
+Glare.ImageColor3 = Color3.new(1.000000, 0.745098, 0.564706)
+Glare.ImageTransparency = 1
+Glare.ResampleMode = Enum.ResamplerMode.Default
+Glare.ScaleType = Enum.ScaleType.Stretch
+Glare.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Glare.SliceScale = 1
+Glare.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Glare.ImageRectSize = Vector2.new(0.000000, 0.000000)
+Glare.LayoutOrder = 0
+Glare.ClipsDescendants = false
+Glare.AutomaticSize = Enum.AutomaticSize.None
+Glare.SizeConstraint = Enum.SizeConstraint.RelativeXY
+Glare.Selectable = false
+Glare.Active = false
+Glare.ScaleType = Enum.ScaleType.Stretch
+Glare.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Glare.SliceScale = 1
+Glare.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Glare.ImageRectSize = Vector2.new(0.000000, 0.000000)
+local UIAspectRatioConstraint = Instance.new("UIAspectRatioConstraint")
+UIAspectRatioConstraint.Name = "UIAspectRatioConstraint"
+UIAspectRatioConstraint.Parent = Glare
+UIAspectRatioConstraint.AspectRatio = 1
+UIAspectRatioConstraint.DominantAxis = Enum.DominantAxis.Height
+Glare:SetAttribute("Offset", Vector2.new(-0.76, -0.76))
+Glare:SetAttribute("Transparency", 0.28)
+local Glare = Instance.new("ImageLabel")
+Glare.Name = "Glare"
+Glare.Parent = Frame
+Glare.Size = UDim2.new(0.500000, 0, 0.150000, 0)
+Glare.Position = UDim2.new(0.000000, 0, 0.000000, 0)
+Glare.AnchorPoint = Vector2.new(0.500000, 0.500000)
+Glare.Rotation = 0
+Glare.ZIndex = 1
+Glare.Visible = true
+Glare.BackgroundColor3 = Color3.new(1.000000, 1.000000, 1.000000)
+Glare.BackgroundTransparency = 1
+Glare.BorderColor3 = Color3.new(0.105882, 0.164706, 0.207843)
+Glare.BorderSizePixel = 0
+Glare.Image = "rbxassetid://9691415433"
+Glare.ImageColor3 = Color3.new(1.000000, 0.862745, 0.725490)
+Glare.ImageTransparency = 1
+Glare.ResampleMode = Enum.ResamplerMode.Default
+Glare.ScaleType = Enum.ScaleType.Stretch
+Glare.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Glare.SliceScale = 1
+Glare.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Glare.ImageRectSize = Vector2.new(0.000000, 0.000000)
+Glare.LayoutOrder = 0
+Glare.ClipsDescendants = false
+Glare.AutomaticSize = Enum.AutomaticSize.None
+Glare.SizeConstraint = Enum.SizeConstraint.RelativeXY
+Glare.Selectable = false
+Glare.Active = false
+Glare.ScaleType = Enum.ScaleType.Stretch
+Glare.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Glare.SliceScale = 1
+Glare.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Glare.ImageRectSize = Vector2.new(0.000000, 0.000000)
+local UIAspectRatioConstraint = Instance.new("UIAspectRatioConstraint")
+UIAspectRatioConstraint.Name = "UIAspectRatioConstraint"
+UIAspectRatioConstraint.Parent = Glare
+UIAspectRatioConstraint.AspectRatio = 1
+UIAspectRatioConstraint.DominantAxis = Enum.DominantAxis.Height
+Glare:SetAttribute("Offset", Vector2.new(-0.92, -0.92))
+Glare:SetAttribute("Transparency", 0.32)
+local Glare = Instance.new("ImageLabel")
+Glare.Name = "Glare"
+Glare.Parent = Frame
+Glare.Size = UDim2.new(0.500000, 0, 0.400000, 0)
+Glare.Position = UDim2.new(0.000000, 0, 0.000000, 0)
+Glare.AnchorPoint = Vector2.new(0.500000, 0.500000)
+Glare.Rotation = 0
+Glare.ZIndex = 1
+Glare.Visible = true
+Glare.BackgroundColor3 = Color3.new(1.000000, 1.000000, 1.000000)
+Glare.BackgroundTransparency = 1
+Glare.BorderColor3 = Color3.new(0.105882, 0.164706, 0.207843)
+Glare.BorderSizePixel = 0
+Glare.Image = "rbxassetid://9691415433"
+Glare.ImageColor3 = Color3.new(0.635294, 0.796079, 1.000000)
+Glare.ImageTransparency = 1
+Glare.ResampleMode = Enum.ResamplerMode.Default
+Glare.ScaleType = Enum.ScaleType.Stretch
+Glare.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Glare.SliceScale = 1
+Glare.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Glare.ImageRectSize = Vector2.new(0.000000, 0.000000)
+Glare.LayoutOrder = 0
+Glare.ClipsDescendants = false
+Glare.AutomaticSize = Enum.AutomaticSize.None
+Glare.SizeConstraint = Enum.SizeConstraint.RelativeXY
+Glare.Selectable = false
+Glare.Active = false
+Glare.ScaleType = Enum.ScaleType.Stretch
+Glare.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Glare.SliceScale = 1
+Glare.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Glare.ImageRectSize = Vector2.new(0.000000, 0.000000)
+local UIAspectRatioConstraint = Instance.new("UIAspectRatioConstraint")
+UIAspectRatioConstraint.Name = "UIAspectRatioConstraint"
+UIAspectRatioConstraint.Parent = Glare
+UIAspectRatioConstraint.AspectRatio = 1
+UIAspectRatioConstraint.DominantAxis = Enum.DominantAxis.Height
+Glare:SetAttribute("Offset", Vector2.new(-1.08, -1.08))
+Glare:SetAttribute("Transparency", 0.36)
+local Glare = Instance.new("ImageLabel")
+Glare.Name = "Glare"
+Glare.Parent = Frame
+Glare.Size = UDim2.new(0.500000, 0, 0.250000, 0)
+Glare.Position = UDim2.new(0.000000, 0, 0.000000, 0)
+Glare.AnchorPoint = Vector2.new(0.500000, 0.500000)
+Glare.Rotation = 0
+Glare.ZIndex = 1
+Glare.Visible = true
+Glare.BackgroundColor3 = Color3.new(1.000000, 1.000000, 1.000000)
+Glare.BackgroundTransparency = 1
+Glare.BorderColor3 = Color3.new(0.105882, 0.164706, 0.207843)
+Glare.BorderSizePixel = 0
+Glare.Image = "rbxassetid://9691415433"
+Glare.ImageColor3 = Color3.new(0.705882, 0.835294, 1.000000)
+Glare.ImageTransparency = 1
+Glare.ResampleMode = Enum.ResamplerMode.Default
+Glare.ScaleType = Enum.ScaleType.Stretch
+Glare.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Glare.SliceScale = 1
+Glare.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Glare.ImageRectSize = Vector2.new(0.000000, 0.000000)
+Glare.LayoutOrder = 0
+Glare.ClipsDescendants = false
+Glare.AutomaticSize = Enum.AutomaticSize.None
+Glare.SizeConstraint = Enum.SizeConstraint.RelativeXY
+Glare.Selectable = false
+Glare.Active = false
+Glare.ScaleType = Enum.ScaleType.Stretch
+Glare.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Glare.SliceScale = 1
+Glare.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Glare.ImageRectSize = Vector2.new(0.000000, 0.000000)
+local UIAspectRatioConstraint = Instance.new("UIAspectRatioConstraint")
+UIAspectRatioConstraint.Name = "UIAspectRatioConstraint"
+UIAspectRatioConstraint.Parent = Glare
+UIAspectRatioConstraint.AspectRatio = 1
+UIAspectRatioConstraint.DominantAxis = Enum.DominantAxis.Height
+Glare:SetAttribute("Offset", Vector2.new(-1.24, -1.24))
+Glare:SetAttribute("Transparency", 0.40)
+local Glare = Instance.new("ImageLabel")
+Glare.Name = "Glare"
+Glare.Parent = Frame
+Glare.Size = UDim2.new(0.500000, 0, 0.250000, 0)
+Glare.Position = UDim2.new(0.000000, 0, 0.000000, 0)
+Glare.AnchorPoint = Vector2.new(0.500000, 0.500000)
+Glare.Rotation = 0
+Glare.ZIndex = 1
+Glare.Visible = true
+Glare.BackgroundColor3 = Color3.new(1.000000, 1.000000, 1.000000)
+Glare.BackgroundTransparency = 1
+Glare.BorderColor3 = Color3.new(0.105882, 0.164706, 0.207843)
+Glare.BorderSizePixel = 0
+Glare.Image = "rbxassetid://9691415433"
+Glare.ImageColor3 = Color3.new(1.000000, 0.886275, 0.600000)
+Glare.ImageTransparency = 1
+Glare.ResampleMode = Enum.ResamplerMode.Default
+Glare.ScaleType = Enum.ScaleType.Stretch
+Glare.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Glare.SliceScale = 1
+Glare.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Glare.ImageRectSize = Vector2.new(0.000000, 0.000000)
+Glare.LayoutOrder = 0
+Glare.ClipsDescendants = false
+Glare.AutomaticSize = Enum.AutomaticSize.None
+Glare.SizeConstraint = Enum.SizeConstraint.RelativeXY
+Glare.Selectable = false
+Glare.Active = false
+Glare.ScaleType = Enum.ScaleType.Stretch
+Glare.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+Glare.SliceScale = 1
+Glare.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+Glare.ImageRectSize = Vector2.new(0.000000, 0.000000)
+local UIAspectRatioConstraint = Instance.new("UIAspectRatioConstraint")
+UIAspectRatioConstraint.Name = "UIAspectRatioConstraint"
+UIAspectRatioConstraint.Parent = Glare
+UIAspectRatioConstraint.AspectRatio = 1
+UIAspectRatioConstraint.DominantAxis = Enum.DominantAxis.Height
+Glare:SetAttribute("Offset", Vector2.new(-1.42, -1.42))
+Glare:SetAttribute("Transparency", 0.45)
+local RainbowFar = Instance.new("ImageLabel")
+RainbowFar.Name = "RainbowFar"
+RainbowFar.Parent = Frame
+RainbowFar.Size = UDim2.new(0.500000, 0, 0.600000, 0)
+RainbowFar.Position = UDim2.new(0.000000, 0, 0.000000, 1188)
+RainbowFar.AnchorPoint = Vector2.new(0.500000, 0.500000)
+RainbowFar.Rotation = 0
+RainbowFar.ZIndex = 1
+RainbowFar.Visible = true
+RainbowFar.BackgroundColor3 = Color3.new(1.000000, 1.000000, 1.000000)
+RainbowFar.BackgroundTransparency = 1
+RainbowFar.BorderColor3 = Color3.new(0.105882, 0.164706, 0.207843)
+RainbowFar.BorderSizePixel = 0
+RainbowFar.Image = "rbxassetid://2033611536"
+RainbowFar.ImageColor3 = Color3.new(1.000000, 1.000000, 1.000000)
+RainbowFar.ImageTransparency = 1
+RainbowFar.ResampleMode = Enum.ResamplerMode.Default
+RainbowFar.ScaleType = Enum.ScaleType.Stretch
+RainbowFar.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+RainbowFar.SliceScale = 1
+RainbowFar.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+RainbowFar.ImageRectSize = Vector2.new(0.000000, 0.000000)
+RainbowFar.LayoutOrder = 0
+RainbowFar.ClipsDescendants = false
+RainbowFar.AutomaticSize = Enum.AutomaticSize.None
+RainbowFar.SizeConstraint = Enum.SizeConstraint.RelativeXY
+RainbowFar.Selectable = false
+RainbowFar.Active = false
+RainbowFar.ScaleType = Enum.ScaleType.Stretch
+RainbowFar.SliceCenter = Rect.new(Vector2.new(0.000000, 0.000000), Vector2.new(0.000000, 0.000000))
+RainbowFar.SliceScale = 1
+RainbowFar.ImageRectOffset = Vector2.new(0.000000, 0.000000)
+RainbowFar.ImageRectSize = Vector2.new(0.000000, 0.000000)
+local UIAspectRatioConstraint = Instance.new("UIAspectRatioConstraint")
+UIAspectRatioConstraint.Name = "UIAspectRatioConstraint"
+UIAspectRatioConstraint.Parent = RainbowFar
+UIAspectRatioConstraint.AspectRatio = 1
+UIAspectRatioConstraint.DominantAxis = Enum.DominantAxis.Height
+RainbowFar:SetAttribute("Offset", Vector2.new(1.75, 1.75))
+RainbowFar:SetAttribute("Transparency", 0.70)
+local lensFlareTemplate = LensFlareTemplate
+
+local zOffsetValue = Instance.new("NumberValue")
+zOffsetValue.Name = "ZOffset"
+zOffsetValue.Value = -10
+zOffsetValue.Parent = script
+local zOffset = zOffsetValue.Value
+
+-- ===== Core logic =====
+
+-- Keeps the "ignore my own character" raycast tag in sync. Only needs to run
+-- once per frame since it doesn't depend on which flare is currently being processed.
+local function updatePassthroughTag(cameraPosition)
+	local character = LocalPlayer.Character
+	if not character then
+		return
+	end
+	if LocalPlayer:DistanceFromCharacter(cameraPosition) <= CHARACTER_PASSTHROUGH_DISTANCE then
+		CollectionService:AddTag(character, PASSTHROUGH_TAG)
+	else
+		CollectionService:RemoveTag(character, PASSTHROUGH_TAG)
+	end
+end
+
+-- Returns (isVisible, screenPosition). screenPosition is nil when the source
+-- is off-screen / behind the camera, in which case isVisible is also false.
+local function testFlareVisibility(cameraPosition, worldPosition, flareSource, passthroughList)
+	local viewportPoint, isOnScreen = Camera:WorldToViewportPoint(worldPosition)
+	if not isOnScreen then
+		return false, nil
+	end
+
+	-- WorldToViewportPoint returns a Vector3 (screen X, screen Y, depth). Only
+	-- the screen-space X/Y matter from here on, so drop the depth component.
+	local screenPosition = Vector2.new(viewportPoint.X, viewportPoint.Y)
+
+	local raycastParams = RaycastParams.new()
+	raycastParams.IgnoreWater = true
+
+	local filterList = table.clone(passthroughList)
+	table.insert(filterList, flareSource)
+	raycastParams.FilterDescendantsInstances = filterList
+
+	local rayDirection = worldPosition - cameraPosition
+	local isOccluded = workspace:Raycast(cameraPosition, rayDirection, raycastParams) ~= nil
+
+	return not isOccluded, screenPosition
+end
+
+-- Resizes flarePart so it exactly covers the camera viewport at zOffset studs away.
+-- Returns the current viewport size.
+local function updateFlarePartSize()
+	zOffset = zOffsetValue.Value
+	local viewportSize = Camera.ViewportSize
+	local worldWidth = screenWidthToWorldWidth(viewportSize.X, zOffset)
+	local worldHeight = screenHeightToWorldHeight(viewportSize.Y, zOffset)
+	flarePart.Size = Vector3.new(worldWidth, worldHeight, 0.001)
+	return viewportSize
+end
+
+local function hideFlareImages(frame)
+	for _, image in ipairs(frame:GetChildren()) do
+		if image:IsA("ImageLabel") then
+			image.Visible = false
+			image.ImageTransparency = 1
+		end
+	end
+end
+
+local function rememberBaseAppearance(image)
+	if image:GetAttribute("BaseImageColor3") == nil then
+		image:SetAttribute("BaseImageColor3", image.ImageColor3)
+	end
+	if image:GetAttribute("BaseImageTransparency") == nil then
+		image:SetAttribute("BaseImageTransparency", image.ImageTransparency)
+	end
+end
+
+local function getPseudoAdditiveAppearance(image, targetTransparency)
+	rememberBaseAppearance(image)
+	local baseColor = image:GetAttribute("BaseImageColor3") or Color3.new(1, 1, 1)
+	local alpha = 1 - math.clamp(targetTransparency, 0, 1)
+	local bloom = math.clamp(alpha ^ 1.35, 0, 1)
+	local whiten = math.clamp(PSEUDO_BLEND_WHITENING + bloom * PSEUDO_BLEND_BOOST, 0, 1)
+	local blendedColor = baseColor:Lerp(Color3.new(1, 1, 1), whiten)
+	local blendedTransparency = math.clamp(targetTransparency * (1 - bloom * 0.12), 0, 1)
+	return blendedColor, blendedTransparency
+end
+
+local function updateLensFlares()
+	local sunDirection = Lighting:GetSunDirection()
+	sunFlarePart.Position = Camera.CFrame.Position + sunDirection * SUN_DISTANCE
+
+	local viewportSize = updateFlarePartSize()
+	flarePart.CFrame = Camera.CFrame * CFrame.new(0, 0, zOffset)
+
+	local aspectRatio = viewportSize.X / viewportSize.Y
+	local viewportCenter = viewportSize * 0.5
+	local cameraPosition = Camera.CFrame.Position
+
+	updatePassthroughTag(cameraPosition)
+	local passthroughList = CollectionService:GetTagged(PASSTHROUGH_TAG)
+
+	for _, flareSource in ipairs(CollectionService:GetTagged(FLARE_TAG)) do
+		local flareUI = flareSource:FindFirstChild("FlareUI")
+		if not flareUI then
+			flareUI = lensFlareTemplate:Clone()
+			flareUI.Name = "FlareUI"
+			flareUI.Parent = flareSource
+		end
+
+		local frame = flareUI:FindFirstChild("Frame")
+		if not frame then
+			continue
+		end
+
+		flareUI.Adornee = flarePart
+		flareUI.Enabled = true
+		flareUI.CanvasSize = viewportSize
+
+		local sourcePosition = flareSource.Position
+		local isVisible, screenPosition =
+			testFlareVisibility(cameraPosition, sourcePosition, flareSource, passthroughList)
+
+		if not screenPosition then
+			hideFlareImages(frame)
+			continue
+		end
+
+		local screenOffsetFromCenter = viewportCenter - screenPosition
+
+		for _, image in ipairs(frame:GetChildren()) do
+			if not image:IsA("ImageLabel") then
+				continue
+			end
+
+			image.Visible = true
+
+			-- Position this element along the line from screen center through the flare source.
+			-- NOTE: falls back to (0, 0) / 0 because the current LensFlareTemplate's ImageLabels
+			-- don't have these attributes set yet — every element will sit on top of the flare
+			-- source until real Offset/BaseRotation/Transparency values are authored per image.
+			local elementOffset = image:GetAttribute("Offset") or Vector2.new(0, 0)
+			local elementPosition = screenPosition + screenOffsetFromCenter * 0.05 + screenOffsetFromCenter * elementOffset
+			image.Position = UDim2.new(0, elementPosition.X, 0, elementPosition.Y)
+
+			if image:GetAttribute("CanRotate") then
+				local baseRotation = image:GetAttribute("BaseRotation") or 0
+				local directionFromCenter = elementPosition - screenPosition
+				local angle = math.atan2(directionFromCenter.Y, directionFromCenter.X)
+				image.Rotation = math.deg(angle) - 90 + baseRotation
+			end
+
+
+			local edgeDistance = Vector2.new(math.abs(screenOffsetFromCenter.X), math.abs(screenOffsetFromCenter.Y))
+			local flareRange = flareSource:GetAttribute("LensFlareRange") or 0
+			local flareStrength = flareSource:GetAttribute("LensFlareStrength") or 1
+			local baseTransparency = image:GetAttribute("Transparency") or 0
+			local distanceFalloff = (flareRange <= 0) and 0 or (cameraPosition - sourcePosition).Magnitude / flareRange
+
+			local targetTransparency
+			if isVisible then
+				local edgeFade = (edgeDistance / viewportCenter).Magnitude / aspectRatio / flareStrength
+				targetTransparency = math.clamp(baseTransparency + edgeFade + distanceFalloff, baseTransparency, 1)
+			else
+				targetTransparency = 1
+			end
+
+			if PSEUDO_ADDITIVE_BLENDING then
+				local blendedColor, blendedTransparency = getPseudoAdditiveAppearance(image, targetTransparency)
+				image.ImageColor3 = blendedColor
+				TweenService:Create(image, FADE_TWEEN_INFO, { ImageTransparency = blendedTransparency }):Play()
+			else
+				TweenService:Create(image, FADE_TWEEN_INFO, { ImageTransparency = targetTransparency }):Play()
+			end
+		end
+	end
+end
+
+RunService:BindToRenderStep("LensFlareIterate", Enum.RenderPriority.Camera.Value + 1, updateLensFlares)
