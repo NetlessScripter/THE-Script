@@ -595,13 +595,196 @@ local ssjOnlyAnimIds = {
 local faceDecal = headPart:FindFirstChildWhichIsA("Decal")
 if faceDecal then faceDecal.Texture = ssjFaceId end
 
+-- SSJ Blue emote color
+local ssjbColor = Color3.new(0.05, 0.45, 1.0)
+
+-- Triggered when specialFaceAnimId (12447707844) plays
+local function TriggerSSJBEmote()
+    local v9 = {}
+    local a = Instance.new("Animation")
+    a.AnimationId = "rbxassetid://96993907314948"
+    local b = humanoid:LoadAnimation(a)
+    b:Play()
+    b.Stopped:Connect(function()
+        local a2 = Instance.new("Animation")
+        a2.AnimationId = "rbxassetid://127234845846317"
+        humanoid:LoadAnimation(a2):Play()
+    end)
+    local l_Accessory_4 = Instance.new("Accessory")
+    l_Accessory_4.Name = "#EmoteHolder_" .. math.random(1, 100000)
+    l_Accessory_4.Parent = character
+    game:GetService("CollectionService"):AddTag(l_Accessory_4, "emoteendstuff" .. character.Name)
+    require(ReplicatedStorage.Emotes.VFX):MainFunction({
+        Character = character,
+        vfxName = "Energy Explosion",
+        AnimSent = 96993907314948,
+        RealBind = l_Accessory_4,
+        NoInsertion = true,
+        Colour = ssjbColor
+    })
+    local v3191 = {}
+    local v3192 = {}
+    local v3193 = {}
+    task.delay(1.3, function()
+        if l_Accessory_4 and l_Accessory_4.Parent then
+            -- Swap current SSJ hair to SSJ Blue
+            local oldHair = character:FindFirstChild("GokuSSJHair")
+            if oldHair then
+                local oldLight = oldHair:FindFirstChildOfClass("PointLight")
+                oldHair:Destroy()
+                local gokuHairForms = Workspace:FindFirstChild("GokuHairForms")
+                local ssbSource = gokuHairForms and gokuHairForms["Super saiyan Blue"] and gokuHairForms["Super saiyan Blue"]["Ssj blue (Original)"]
+                if ssbSource then
+                    local newHair = ssbSource:Clone()
+                    newHair.Name       = "GokuSSJHair"
+                    newHair.Anchored   = false
+                    newHair.CanCollide = false
+                    newHair.CFrame     = headPart.CFrame * CFrame.new(0, 1.1, 0.5) * CFrame.Angles(0, math.rad(180), 0)
+                    newHair.Parent     = character
+                    local weld = Instance.new("WeldConstraint")
+                    weld.Part0 = headPart
+                    weld.Part1 = newHair
+                    weld.Parent = newHair
+                    if oldLight then
+                        oldLight.Color  = Color3.fromRGB(100, 180, 255)
+                        oldLight.Parent = newHair
+                    end
+                end
+            end
+            (function()
+                for _, v3195 in pairs(character.FakeHead:GetChildren()) do
+                    if v3195:IsA("Accessory") and v3195:FindFirstChild("Handle") and v3195:FindFirstChild("Handle"):FindFirstChild("HairAttachment") then
+                        local l_Handle_50 = v3195:FindFirstChild("Handle")
+                        table.insert(v3192, l_Handle_50)
+                        for _, v3198 in pairs(l_Handle_50:GetChildren()) do
+                            if v3198:IsA("SpecialMesh") then
+                                v3198:SetAttribute("basetext", v3198.TextureId)
+                            end
+                        end
+                    end
+                end
+                for _, v3200 in pairs(v3192) do
+                    local v3201 = v3200:Clone()
+                    table.insert(v3191, v3201)
+                    local l_Weld_23 = Instance.new("Weld")
+                    l_Weld_23.Part0 = v3201
+                    l_Weld_23.Part1 = v3200
+                    l_Weld_23.Parent = v3201
+                    v3201.Parent = Workspace.Thrown
+                    v3200.Transparency = 1
+                    TweenService:Create(v3200, TweenInfo.new(0.25, Enum.EasingStyle.Sine), {
+                        Transparency = 0
+                    }):Play()
+                    local l_SpecialMesh_0 = v3200:FindFirstChildOfClass("SpecialMesh")
+                    if l_SpecialMesh_0 then
+                        l_SpecialMesh_0.TextureId = ""
+                        local v3204 = ReplicatedStorage.Resources.DeathEffect.Template:Clone()
+                        v3204.Color3 = Color3.new(0.25, 0.75, 1.0)
+                        v3204.Parent = v3201
+                    end
+                end
+                v9[character] = {
+                    hairs = v3192,
+                    destroy = v3191
+                }
+            end)()
+            task.delay(200, function()
+                for _, v3206 in pairs(v3191) do
+                    TweenService:Create(v3206, TweenInfo.new(0.1), {
+                        Transparency = 1
+                    }):Play()
+                    Debris:AddItem(v3206, 0.5)
+                end
+                for _, v3208 in pairs(v3192) do
+                    if not character:GetAttribute("InMech") then
+                        TweenService:Create(v3208, TweenInfo.new(0.1), {
+                            Transparency = 0
+                        }):Play()
+                    end
+                    for _, v3210 in pairs(v3208:GetChildren()) do
+                        if v3210:IsA("SpecialMesh") or v3210:IsA("MeshPart") then
+                            v3210.TextureId = v3210:GetAttribute("basetext")
+                        end
+                    end
+                end
+            end)
+            local l_Folder_0 = Instance.new("Folder")
+            l_Folder_0.Name = "AuraHolder"
+            l_Folder_0:SetAttribute("LimAura", true)
+            l_Folder_0:SetAttribute("EmoteEffect", true)
+            l_Folder_0.Parent = character
+            task.delay(203, function()
+                if l_Folder_0 then l_Folder_0:Destroy() end
+            end)
+            local v3212 = {}
+            for _, v3214 in pairs(ReplicatedStorage.Emotes.AuraReal:GetChildren()) do
+                local v3215 = v3214:Clone()
+                v3215:SetAttribute("LimAura", true)
+                table.insert(v3212, v3215)
+                task.delay(203, function()
+                    if v3215 then v3215:Destroy() end
+                end)
+                if v3215:IsA("Attachment") or v3215:IsA("PointLight") then
+                    v3215.Parent = character.PrimaryPart
+                else
+                    local l_Weld_24 = Instance.new("Weld")
+                    l_Weld_24.Part0 = character.PrimaryPart
+                    l_Weld_24.Part1 = v3215
+                    l_Weld_24.Parent = v3215
+                end
+                for _, v3218 in pairs(v3215:GetDescendants()) do
+                    if v3218:IsA("ParticleEmitter") or v3218:IsA("PointLight") then
+                        v3218.Enabled = false
+                        table.insert(v3193, v3218)
+                        v3218:SetAttribute("LimitedAura", true)
+                        v3218:SetAttribute("InnerRageAura", true)
+                        if v3218:IsA("ParticleEmitter") or v3218:IsA("Beam") then
+                            v3218.Color = ColorSequence.new({
+                                ColorSequenceKeypoint.new(0,   Color3.new(0.0,  0.2,  0.85)),
+                                ColorSequenceKeypoint.new(0.3, Color3.new(0.05, 0.45, 1.0)),
+                                ColorSequenceKeypoint.new(0.7, Color3.new(0.2,  0.7,  1.0)),
+                                ColorSequenceKeypoint.new(1,   Color3.new(0.6,  0.9,  1.0)),
+                            })
+                        end
+                        if v3218:IsA("PointLight") or v3218:IsA("SpotLight") or v3218:IsA("SurfaceLight") then
+                            v3218.Brightness = v3218.Brightness * 1.3
+                            v3218.Color = Color3.new(0.1, 0.55, 1.0)
+                        end
+                        task.delay(200, function()
+                            v3218.Enabled = false
+                        end)
+                    end
+                end
+            end
+        end
+    end)
+    task.delay(5.3, function()
+        if l_Accessory_4 and l_Accessory_4.Parent then
+            for _, v3220 in pairs(v3193) do
+                v3220.Enabled = true
+            end
+            task.wait(0.05)
+            for _, v3222 in pairs(humanoid:GetPlayingAnimationTracks()) do
+                if v3222.Animation.AnimationId == "rbxassetid://127234845846317" then
+                    v3222:Stop()
+                    local a3 = Instance.new("Animation")
+                    a3.AnimationId = "rbxassetid://117177504280717"
+                    humanoid:LoadAnimation(a3):Play()
+                end
+            end
+        end
+    end)
+end
+
 humanoid.AnimationPlayed:Connect(function(track)
     if not faceDecal then return end
     local animId = track.Animation.AnimationId
     if animId == specialFaceAnimId then
+        track:Stop() -- immediately cancel the trigger anim
         faceDecal.Texture = ""
         task.wait()
         faceDecal.Texture = specialFaceId
+        TriggerSSJBEmote()
     elseif ssjOnlyAnimIds[animId] then
         faceDecal.Texture = ""
         task.wait()
