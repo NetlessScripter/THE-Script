@@ -627,6 +627,67 @@ local function TriggerSSJBEmote()
     local v3192 = {}
     local v3193 = {}
     task.delay(1.3, function()
+task.spawn(function()
+-- LocalScript
+
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+
+local player = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+
+local character = player.Character or player.CharacterAdded:Wait()
+local head = character:WaitForChild("Head")
+local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+
+-- Save original camera state
+local originalCameraType = camera.CameraType
+local originalSubject = camera.CameraSubject
+
+-- Take control of the camera
+camera.CameraType = Enum.CameraType.Scriptable
+
+-- Close-up target: in front of the face, looking at it
+local faceOffset = head.CFrame.LookVector * 2.2 + Vector3.new(0, 0.1, 0)
+local zoomedCFrame = CFrame.new(head.Position + faceOffset, head.Position)
+
+-- Zoom IN (smooth, ~0.8s)
+local zoomInTween = TweenService:Create(
+    camera,
+    TweenInfo.new(0.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut),
+    { CFrame = zoomedCFrame }
+)
+
+zoomInTween:Play()
+zoomInTween.Completed:Wait()
+
+-- Hold the close-up until the 1.53s mark
+local elapsed = 0.8
+local holdTime = 1.53 - elapsed
+if holdTime > 0 then
+    task.wait(holdTime)
+end
+
+-- BURST back out to normal third-person framing
+local backOffset = CFrame.new(0, 2, 10) -- behind + slightly above HRP
+local burstCFrame = humanoidRootPart.CFrame * backOffset
+burstCFrame = CFrame.new(burstCFrame.Position, humanoidRootPart.Position + Vector3.new(0, 1.5, 0))
+
+local burstOutTween = TweenService:Create(
+    camera,
+    TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+    { CFrame = burstCFrame }
+)
+
+burstOutTween:Play()
+burstOutTween.Completed:Wait()
+
+-- Hand control back to the default camera
+camera.CameraSubject = originalSubject or humanoidRootPart
+camera.CameraType = originalCameraType == Enum.CameraType.Scriptable
+    and Enum.CameraType.Custom
+    or originalCameraType
+end)
 local Players = game:GetService("Players")
 local Lighting = game:GetService("Lighting")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
