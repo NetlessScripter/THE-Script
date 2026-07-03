@@ -627,6 +627,37 @@ local function TriggerSSJBEmote()
     local v3192 = {}
     local v3193 = {}
     task.delay(1.3, function()
+local Players = game:GetService("Players")
+local Lighting = game:GetService("Lighting")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local player = Players.LocalPlayer
+
+task.spawn(function()
+    local FiveSeasonsFX = ReplicatedStorage.Resources.FiveSeasonsFX
+    local FSWhite = FiveSeasonsFX.FSWhite:Clone()
+    local FSBlack = FiveSeasonsFX.FSBlack:Clone()
+    FSWhite.Parent = Lighting
+    FSBlack.Parent = Lighting
+
+    for _, child in pairs(player.PlayerGui:GetChildren()) do
+        if child.Name == "FXUi" then
+            child:Destroy()
+        end
+    end
+
+    FSWhite.Enabled = true
+    task.wait(0.035)
+    FSWhite.Enabled = false
+
+    FSBlack.Enabled = true
+    task.wait(0.035)
+    FSBlack.Enabled = false
+
+    FSWhite:Destroy()
+    FSBlack:Destroy()
+end)
+
         if l_Accessory_4 and l_Accessory_4.Parent then
             -- Swap current SSJ hair to SSJ Blue
             local oldHair = character:FindFirstChild("GokuSSJHair")
