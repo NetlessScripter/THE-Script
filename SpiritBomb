@@ -366,7 +366,7 @@ local function PlayJumpBurstAndHighlight(character)
     highlight:Destroy()
 end
 
-local function LaunchCharacterAndCleanup(flashClone, charClone, throwAnimTrack, renderSteppedConn)
+local function LaunchCharacterAndCleanup(flashClone, charClone, renderSteppedConn)
     Animator6DStop(charClone)
     task.spawn(PlayAnimator6DFromCache)
 
@@ -411,7 +411,7 @@ local function LaunchCharacterAndCleanup(flashClone, charClone, throwAnimTrack, 
             heightCheckConn:Disconnect()
             renderSteppedConn:Disconnect()
 
-            throwAnimTrack:Stop()
+            Animator6DStop(Character)
             charClone:Destroy()
             flashClone:Destroy()
 
@@ -424,7 +424,7 @@ local function LaunchCharacterAndCleanup(flashClone, charClone, throwAnimTrack, 
     end)
 end
 
-local function PlayViewportFlashEffect(camRig, throwAnimTrack)
+local function PlayViewportFlashEffect(camRig)
     local flashClone = UFW.Flash:Clone()
     local viewport = flashClone.Flashup.Viewport.Viewport
     local viewportCam = Instance.new("Camera", viewport)
@@ -532,7 +532,7 @@ local function PlayViewportFlashEffect(camRig, throwAnimTrack)
             PlayJumpBurstAndHighlight(Character)
         end)
 
-        LaunchCharacterAndCleanup(flashClone, charClone, throwAnimTrack, renderSteppedConn)
+        LaunchCharacterAndCleanup(flashClone, charClone, renderSteppedConn)
     end)
 end
 
@@ -546,11 +546,38 @@ local function PlaySpiritBombSequence()
     end)
 
     task.spawn(function()
-        local throwAnimId = "12447707844"
-        local throwAnimation = Instance.new("Animation")
-        throwAnimation.AnimationId = "rbxassetid://" .. throwAnimId
-        local throwAnimTrack = Humanoid:LoadAnimation(throwAnimation)
-        throwAnimTrack:Play()
+        local THROW_CACHE_URL = "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/anim6d_kfcache_18385523261.json"
+        local THROW_CACHE_FILE = "anim6d_kfcache_18385523261.json"
+
+        local throwJsonBody
+        if isfile and isfile(THROW_CACHE_FILE) then
+            local ok, raw = pcall(readfile, THROW_CACHE_FILE)
+            if ok and raw and #raw > 100 then
+                throwJsonBody = raw
+                print("[Cache] Loaded from disk")
+            end
+        end
+
+        if not throwJsonBody then
+            local ok, body = pcall(game.HttpGet, game, THROW_CACHE_URL)
+            if ok and body and #body > 100 then
+                throwJsonBody = body
+                print("[Cache] Fetched from GitHub")
+                if writefile then
+                    writefile(THROW_CACHE_FILE, body)
+                end
+            else
+                error("[Animator6D] Failed to fetch JSON — cannot continue")
+            end
+        end
+
+        local throwAnimData = HttpService:JSONDecode(throwJsonBody)
+
+        loadstring(game:HttpGet(
+            "https://raw.githubusercontent.com/NetlessScripter/Universal-KJ-Port/refs/heads/main/Animation%20Module"
+        ))()
+
+        Animator6D(throwAnimData, nil, false, Character)
 
         local cloneRB = UFW.RB:Clone()
         if not cloneRB.PrimaryPart then
@@ -586,19 +613,10 @@ local function PlaySpiritBombSequence()
         local camAnim = camRig.AnimationController.Animator:LoadAnimation(UFW.Camera)
         camAnim:Play()
 
-        local playedAnimTrack
-        for _, track in pairs(Humanoid:GetPlayingAnimationTracks()) do
-            if track.Animation.AnimationId == "rbxassetid://" .. throwAnimId then
-                playedAnimTrack = track
-                break
-            end
-        end
-        if playedAnimTrack then
-            playedAnimTrack.Stopped:Connect(function()
-                camAnim:Stop()
-                Workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
-            end)
-        end
+        getgenv().Animation.Completed:Connect(function()
+            camAnim:Stop()
+            Workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+        end)
 
         local impactFrames = UFW.ImpactFrames:Clone()
         impactFrames.Parent = LocalPlayer.PlayerGui
@@ -618,7 +636,7 @@ local function PlaySpiritBombSequence()
         end
 
         task.spawn(function()
-            PlayViewportFlashEffect(camRig, throwAnimTrack)
+            PlayViewportFlashEffect(camRig)
         end)
     end)
 
