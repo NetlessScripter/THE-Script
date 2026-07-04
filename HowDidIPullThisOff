@@ -1,5 +1,4 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
 
 local ok, objs = pcall(function()
 	return game:GetObjects("rbxassetid://6812562887")
@@ -94,12 +93,6 @@ function CloudClass:SpawnClouds()
 
 			darkness += 10
 			lastCloud = cl
-
-			RunService.Heartbeat:Connect(function()
-				if cl.Parent then
-					cl.CFrame = cl.CFrame * CFrame.new(0, 0, self.Speed / 10)
-				end
-			end)
 		end
 	end)
 end
