@@ -6,6 +6,17 @@ local TweenService   = game:GetService("TweenService")
 local Lighting       = game:GetService("Lighting")
 local Workspace      = game:GetService("Workspace")
 
+-- Toggles: set _G.Rain / _G.Music to true or false BEFORE running this script to force
+-- a setting. If left unset, both default to on (their regular behavior).
+if _G.Rain == nil then _G.Rain = true end
+if _G.Music == nil then _G.Music = true end
+
+-- Optional: set _G.StartingSong to a song name (case-insensitive, matches the "name"
+-- field in musicSongs below) to force that song to play first. Requires _G.Music to be
+-- true - if music is disabled nothing plays regardless of this. If unset, empty (""),
+-- or the name doesn't match any song, a random song plays first like normal.
+-- Example: _G.StartingSong = "Lucy~"
+
 local localPlayer    = Players.LocalPlayer
 local character      = localPlayer.Character or localPlayer.CharacterAdded:Wait()
 local humanoid       = character:WaitForChild("Humanoid")
@@ -183,8 +194,9 @@ RunService.Heartbeat:Connect(function()
 end)
 
 local musicVolume        = 1.75
-local musicFadeInTime    = 1
-local musicFadeOutWindow = 3
+local musicLoadTimeout   = 15   -- was 10; some of these files are big enough that TimeLength
+                                 -- doesn't populate in time on a slower load, which used to get
+                                 -- misread as "failed to load" and skipped for no reason
 
 local musicSongs = {
     { name = "Asleep In Space 2", file = "AsleepInSpace2.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Goku-Version-2/refs/heads/main/Asleep%20In%20Space%202.mp3" },
@@ -219,12 +231,22 @@ end
 
 local musicSound = Instance.new("Sound")
 musicSound.Name   = "MusicLoop"
-musicSound.Volume = 0
+musicSound.Volume = musicVolume
 musicSound.Looped = false
 musicSound.Parent = Workspace
 
 local musicActive      = true
 local currentSongIndex = nil
+local musicMaxAttempts = #musicSongs
+
+local function FindSongIndexByName(name)
+    for i, song in ipairs(musicSongs) do
+        if song.name:lower() == name:lower() then
+            return i
+        end
+    end
+    return nil
+end
 
 local function PickNextSongIndex()
     if #musicSongs == 1 then return 1 end
@@ -237,13 +259,14 @@ end
 
 local function WaitForSoundLength(sound, timeout)
     local startClock = os.clock()
-    while sound.TimeLength <= 0 and os.clock() - startClock < (timeout or 10) do
+    while sound.TimeLength <= 0 and os.clock() - startClock < (timeout or musicLoadTimeout) do
         task.wait()
     end
     return sound.TimeLength
 end
 
-local musicPlayToken = 0
+local musicPlayToken   = 0
+local usedStartingSong = false
 
 local function PlayNextSong()
     if not musicActive then return end
@@ -251,41 +274,75 @@ local function PlayNextSong()
     musicPlayToken = musicPlayToken + 1
     local myToken = musicPlayToken
 
-    currentSongIndex = PickNextSongIndex()
-    local entry = musicSongs[currentSongIndex]
+    -- Loop instead of recursing on failure. Bounded by musicMaxAttempts so a bad run
+    -- (dead download link, executor asset error, etc.) can't recurse forever or blow the stack.
+    for attempt = 1, musicMaxAttempts do
+        if musicPlayToken ~= myToken or not musicActive then return end
 
-    musicSound:Stop()
+        if not usedStartingSong then
+            usedStartingSong = true
+            local startIndex = (typeof(_G.StartingSong) == "string" and _G.StartingSong ~= "") and FindSongIndexByName(_G.StartingSong)
+            currentSongIndex = startIndex or PickNextSongIndex()
+        else
+            currentSongIndex = PickNextSongIndex()
+        end
+        local entry = musicSongs[currentSongIndex]
 
-    if not CacheSong(entry) then
+        musicSound:Stop()
+
+        -- THE MAIN BUG: Sound.TimePosition does NOT reset itself when you change SoundId or
+        -- call Stop(). A song that just played to completion leaves TimePosition sitting at
+        -- (roughly) its own TimeLength. If the next song picked happens to be SHORTER than
+        -- that leftover TimePosition, Play() starts already past the "end" of the new clip,
+        -- so it immediately fires Ended again before you ever hear a sample of it. That reads
+        -- exactly like "sometimes it just doesn't pick a new song" when really it's picking
+        -- one and instantly skipping it.
+        musicSound.TimePosition = 0
+
+        if not CacheSong(entry) then
+            continue
+        end
+
+        local getAsset = getcustomasset or getsynasset
+        local ok, soundIdOrErr = pcall(getAsset, entry.file)
+        if not ok or not soundIdOrErr then
+            -- Executors cap how many custom assets can be registered at once; once that cap is
+            -- hit (or the call errors for any other reason) this would previously throw all the
+            -- way out of the Ended connection with no retry, silently killing that playback
+            -- cycle. Now it's caught and just tries the next song instead.
+            warn("[Music] getcustomasset failed for " .. entry.name .. ": " .. tostring(soundIdOrErr))
+            continue
+        end
+
+        musicSound.SoundId = soundIdOrErr
+        musicSound.TimePosition = 0 -- belt-and-suspenders: reset again after the new id is assigned
+
+        local playOk, playErr = pcall(function() musicSound:Play() end)
+        if not playOk then
+            warn("[Music] Play() failed for " .. entry.name .. ": " .. tostring(playErr))
+            continue
+        end
+
+        local length = WaitForSoundLength(musicSound)
+
+        if musicPlayToken ~= myToken then return end
+
+        if length <= 0 then
+            warn("[Music] " .. entry.name .. " failed to load within " .. musicLoadTimeout .. "s, skipping")
+            continue
+        end
+
+        print("[Music] Now playing: " .. entry.name)
+
+        return -- success, we're done for this call
+    end
+
+    -- Every song in the list failed this round. Don't spin forever - back off and try again
+    -- in a few seconds (covers a temporary network blip taking out every download at once).
+    warn("[Music] All songs failed to play this round, retrying in 3s")
+    task.delay(3, function()
         if musicPlayToken == myToken and musicActive then
             PlayNextSong()
-        end
-        return
-    end
-
-    musicSound.Volume  = 0
-    musicSound.SoundId = (getcustomasset or getsynasset)(entry.file)
-    musicSound:Play()
-
-    local playingId = musicSound.SoundId
-
-    local length = WaitForSoundLength(musicSound)
-
-    if musicPlayToken ~= myToken then return end
-
-    if length <= 0 then
-        warn("[Music] " .. entry.name .. " failed to load, skipping")
-        if musicActive then
-            PlayNextSong()
-        end
-        return
-    end
-
-    TweenService:Create(musicSound, TweenInfo.new(musicFadeInTime, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { Volume = musicVolume }):Play()
-
-    task.delay(math.max(length - musicFadeOutWindow, 0), function()
-        if musicActive and musicPlayToken == myToken and musicSound.SoundId == playingId and musicSound.IsPlaying then
-            TweenService:Create(musicSound, TweenInfo.new(musicFadeOutWindow, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { Volume = 0 }):Play()
         end
     end)
 end
@@ -296,24 +353,28 @@ musicSound.Ended:Connect(function()
     end
 end)
 
-task.spawn(PlayNextSong)
+if _G.Music then
+    task.spawn(PlayNextSong)
+end
 
 humanoid.Died:Connect(function()
     musicActive = false
-    local tween = TweenService:Create(musicSound, TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { Volume = 0 })
-    tween:Play()
-    tween.Completed:Connect(function()
-        musicSound:Stop()
-        musicSound:Destroy()
-    end)
+    musicSound:Stop()
+    musicSound:Destroy()
 end)
 
 task.delay(1, function()
 loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/Miles-Morales/refs/heads/main/Revamped%20Lighting%20System"))()
-loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/GOKU/refs/heads/main/RAIN%20MODULE"))()
 loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/Vegito-/refs/heads/main/Lock%20On"))()
 loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/HowDidIPullThisOff"))()
 loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/SpiritBomb"))()
+end)
+
+-- Rain module can tank FPS on some setups; controlled by _G.Rain (see top of script).
+task.delay(1, function()
+    if _G.Rain then
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/GOKU/refs/heads/main/RAIN%20MODULE"))()
+    end
 end)
 
 local function EmitVFX(vfxTemplate, emitCount, keepEnabled)
