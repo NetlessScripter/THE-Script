@@ -189,7 +189,7 @@ local musicFadeOutWindow = 3
 local musicSongs = {
     { name = "Asleep In Space 2", file = "AsleepInSpace2.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Goku-Version-2/refs/heads/main/Asleep%20In%20Space%202.mp3" },
     { name = "9 - Dean Blunt (Slowed)", file = "DeanBluntSlowed.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/9%20-%20Dean%20Blunt%20(Slowed).mp3" },
-    { name = "It's like i'm not even here.", file = "NotEvenHere.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/It’s%20like%20i’m%20not%20even%20here..mp3" },
+    { name = "It's like i'm not even here.", file = "NotEvenHere.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/It’s%20like%20im%20not%20even%20here..mp3" },
     { name = "do i clench my fists?", file = "ClenchMyFists.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/do%20i%20clench%20my%20fists%3F.mp3" },
     { name = "lucy~", file = "Lucy.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/lucy%7E.mp3" },
     { name = "mistake", file = "Mistake.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/mistake.mp3.mp3" },
@@ -197,9 +197,24 @@ local musicSongs = {
 }
 
 local function CacheSong(entry)
-    if not isfile(entry.file) then
-        writefile(entry.file, game:HttpGet(entry.url))
+    local needsDownload = not isfile(entry.file)
+    if not needsDownload then
+        local ok, size = pcall(function() return #readfile(entry.file) end)
+        if not ok or size < 10000 then
+            needsDownload = true
+        end
     end
+    if needsDownload then
+        local ok, data = pcall(game.HttpGet, game, entry.url)
+        if ok and data and #data > 10000 then
+            writefile(entry.file, data)
+            return true
+        else
+            warn("[Music] Failed to download " .. entry.name)
+            return false
+        end
+    end
+    return true
 end
 
 local musicSound = Instance.new("Sound")
@@ -228,26 +243,51 @@ local function WaitForSoundLength(sound, timeout)
     return sound.TimeLength
 end
 
+local musicPlayToken = 0
+
 local function PlayNextSong()
+    if not musicActive then return end
+
+    musicPlayToken = musicPlayToken + 1
+    local myToken = musicPlayToken
+
     currentSongIndex = PickNextSongIndex()
     local entry = musicSongs[currentSongIndex]
-    CacheSong(entry)
+
+    musicSound:Stop()
+
+    if not CacheSong(entry) then
+        if musicPlayToken == myToken and musicActive then
+            PlayNextSong()
+        end
+        return
+    end
 
     musicSound.Volume  = 0
     musicSound.SoundId = (getcustomasset or getsynasset)(entry.file)
     musicSound:Play()
 
     local playingId = musicSound.SoundId
-    TweenService:Create(musicSound, TweenInfo.new(musicFadeInTime, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { Volume = musicVolume }):Play()
 
     local length = WaitForSoundLength(musicSound)
-    if length > 0 and musicSound.SoundId == playingId then
-        task.delay(math.max(length - musicFadeOutWindow, 0), function()
-            if musicActive and musicSound.SoundId == playingId and musicSound.IsPlaying then
-                TweenService:Create(musicSound, TweenInfo.new(musicFadeOutWindow, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { Volume = 0 }):Play()
-            end
-        end)
+
+    if musicPlayToken ~= myToken then return end
+
+    if length <= 0 then
+        warn("[Music] " .. entry.name .. " failed to load, skipping")
+        if musicActive then
+            PlayNextSong()
+        end
+        return
     end
+
+    TweenService:Create(musicSound, TweenInfo.new(musicFadeInTime, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { Volume = musicVolume }):Play()
+
+    task.delay(math.max(length - musicFadeOutWindow, 0), function()
+        if musicActive and musicPlayToken == myToken and musicSound.SoundId == playingId and musicSound.IsPlaying then
+            TweenService:Create(musicSound, TweenInfo.new(musicFadeOutWindow, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { Volume = 0 }):Play()
+        end
+    end)
 end
 
 musicSound.Ended:Connect(function()
