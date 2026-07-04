@@ -600,8 +600,14 @@ if faceDecal then faceDecal.Texture = ssjFaceId end
 -- SSJ Blue emote color
 local ssjbColor = Color3.new(0.05, 0.45, 1.0)
 
+-- Tracks whether an SSJB transform is still current; a revert anim clears this
+-- so any transform steps still delayed in-flight (aura creation/enable) bail out
+-- instead of showing the aura back up after the player already reverted.
+local ssjbActive = false
+
 -- Triggered when specialFaceAnimId (12447707844) plays
 local function TriggerSSJBEmote()
+    ssjbActive = true
     local v9 = {}
     local a = Instance.new("Animation")
     a.AnimationId = "rbxassetid://96993907314948"
@@ -628,38 +634,32 @@ local function TriggerSSJBEmote()
     local v3192 = {}
     local v3193 = {}
     task.delay(1.3, function()
-local Players = game:GetService("Players")
-local Lighting = game:GetService("Lighting")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
+        task.spawn(function()
+            local FiveSeasonsFX = ReplicatedStorage.Resources.FiveSeasonsFX
+            local FSWhite = FiveSeasonsFX.FSWhite:Clone()
+            local FSBlack = FiveSeasonsFX.FSBlack:Clone()
+            FSWhite.Parent = Lighting
+            FSBlack.Parent = Lighting
 
-local player = Players.LocalPlayer
+            for _, child in pairs(localPlayer.PlayerGui:GetChildren()) do
+                if child.Name == "FXUi" then
+                    child:Destroy()
+                end
+            end
 
-task.spawn(function()
-    local FiveSeasonsFX = ReplicatedStorage.Resources.FiveSeasonsFX
-    local FSWhite = FiveSeasonsFX.FSWhite:Clone()
-    local FSBlack = FiveSeasonsFX.FSBlack:Clone()
-    FSWhite.Parent = Lighting
-    FSBlack.Parent = Lighting
+            FSWhite.Enabled = true
+            task.wait(0.035)
+            FSWhite.Enabled = false
 
-    for _, child in pairs(player.PlayerGui:GetChildren()) do
-        if child.Name == "FXUi" then
-            child:Destroy()
-        end
-    end
+            FSBlack.Enabled = true
+            task.wait(0.035)
+            FSBlack.Enabled = false
 
-    FSWhite.Enabled = true
-    task.wait(0.035)
-    FSWhite.Enabled = false
+            FSWhite:Destroy()
+            FSBlack:Destroy()
+        end)
 
-    FSBlack.Enabled = true
-    task.wait(0.035)
-    FSBlack.Enabled = false
-
-    FSWhite:Destroy()
-    FSBlack:Destroy()
-end)
-
-        if l_Accessory_4 and l_Accessory_4.Parent then
+        if ssjbActive and l_Accessory_4 and l_Accessory_4.Parent then
             -- Swap current SSJ hair to SSJ Blue
             local oldHair = character:FindFirstChild("GokuSSJHair")
             if oldHair then
@@ -674,6 +674,7 @@ end)
                     newHair.CanCollide = false
                     newHair.CFrame     = headPart.CFrame * CFrame.new(0, 1.1, 0.5) * CFrame.Angles(0, math.rad(180), 0)
                     newHair.Parent     = character
+                    newHair:SetAttribute("IsSSJB", true)
                     local weld = Instance.new("WeldConstraint")
                     weld.Part0 = headPart
                     weld.Part1 = newHair
@@ -792,7 +793,7 @@ end)
         end
     end)
     task.delay(5.3, function()
-        if l_Accessory_4 and l_Accessory_4.Parent then
+        if ssjbActive and l_Accessory_4 and l_Accessory_4.Parent then
             for _, v3220 in pairs(v3193) do
                 v3220.Enabled = true
             end
@@ -857,6 +858,64 @@ hairLight.Enabled    = true
 
 AddSSJHair()
 if ssjHair then hairLight.Parent = ssjHair end
+
+local ssjbRevertAnimIds = {
+    ["rbxassetid://11365563255"] = true,
+    ["rbxassetid://12983333733"] = true,
+    ["rbxassetid://13927612951"] = true,
+}
+
+local function RevertSSJBHairToSSJ()
+    local oldHair = character:FindFirstChild("GokuSSJHair")
+    if not oldHair or not oldHair:GetAttribute("IsSSJB") then return end
+
+    local oldLight = oldHair:FindFirstChildOfClass("PointLight")
+    oldHair:Destroy()
+
+    local gokuHairForms = Workspace:FindFirstChild("GokuHairForms")
+    local ssjSource = gokuHairForms and gokuHairForms["Super saiyan 1"] and gokuHairForms["Super saiyan 1"]["Ssj dominated (Original)"]
+    if not ssjSource then return end
+
+    local newHair      = ssjSource:Clone()
+    newHair.Name        = "GokuSSJHair"
+    newHair.Anchored    = false
+    newHair.CanCollide  = false
+    newHair.CFrame      = headPart.CFrame * CFrame.new(0, 1.1, 0.5) * CFrame.Angles(0, math.rad(180), 0)
+    newHair.Parent      = character
+    WeldToHead(newHair)
+    ssjHair = newHair
+
+    if oldLight then
+        oldLight.Color  = Color3.fromRGB(255, 255, 150)
+        oldLight.Parent = newHair
+    end
+end
+
+local function DisableSSJBAura()
+    for _, obj in ipairs(character:GetDescendants()) do
+        if obj:IsA("ParticleEmitter") or obj:IsA("Beam") or obj:IsA("PointLight") or obj:IsA("SpotLight") or obj:IsA("SurfaceLight") then
+            if obj:GetAttribute("LimitedAura") or obj:GetAttribute("InnerRageAura") or obj:GetAttribute("LimAura") then
+                obj.Enabled = false
+            end
+        end
+    end
+
+    task.delay(2, function()
+        for _, obj in ipairs(character:GetDescendants()) do
+            if obj:GetAttribute("LimAura") then
+                obj:Destroy()
+            end
+        end
+    end)
+end
+
+humanoid.AnimationPlayed:Connect(function(track)
+    if ssjbRevertAnimIds[track.Animation.AnimationId] then
+        ssjbActive = false
+        RevertSSJBHairToSSJ()
+        DisableSSJBAura()
+    end
+end)
 
 for _, accessory in ipairs(character:GetChildren()) do
     if accessory:IsA("Accessory") or accessory:IsA("Hat") then
