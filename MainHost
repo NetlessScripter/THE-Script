@@ -220,6 +220,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/Miles
 loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/GOKU/refs/heads/main/RAIN%20MODULE"))()
 loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/Vegito-/refs/heads/main/Lock%20On"))()
 loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/HowDidIPullThisOff"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/SpiritBomb"))()
 end)
 
 local function EmitVFX(vfxTemplate, emitCount, keepEnabled)
