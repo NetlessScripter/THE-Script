@@ -39,8 +39,6 @@ local spiritBombSound = GetGitSound(
     "https://github.com/NetlessScripter/Miles-Morales/blob/4ca3a065ba01d5725c25b60b124db5e45011d7dc/copy_ED540659-F7C4-479E-8DCD-51A711BF4CF5.mp3?raw=true",
     "theactualspiritbomb"
 )
-spiritBombSound:Play()
-
 local function PlayImpactScreenFlash()
     local fxUI = FiveSeasonsFX.FXUi
 
@@ -154,12 +152,6 @@ local function PlaySpiritBombOrb()
         task.spawn(PlayImpactScreenFlash)
     end)
 end
-
-task.spawn(function()
-    task.wait(3.1)
-    print("Spirit Bomb VFX here")
-    task.spawn(PlaySpiritBombOrb)
-end)
 
 local function StreamPillarTextures(targetPart)
     local textures = {}
@@ -297,6 +289,42 @@ local function PlayJumpMeshTrails(character)
 
     task.wait(5)
     jumpMeshes:Destroy()
+end
+
+local function PlayAnimator6DFromCache()
+    local CACHE_URL = "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/anim6d_kfcache_18878778259.json"
+    local CACHE_FILE = "anim6d_kfcache_18878778259.json"
+
+    local jsonBody
+
+    if isfile and isfile(CACHE_FILE) then
+        local ok, raw = pcall(readfile, CACHE_FILE)
+        if ok and raw and #raw > 100 then
+            jsonBody = raw
+            print("[Cache] Loaded from disk")
+        end
+    end
+
+    if not jsonBody then
+        local ok, body = pcall(game.HttpGet, game, CACHE_URL)
+        if ok and body and #body > 100 then
+            jsonBody = body
+            print("[Cache] Fetched from GitHub")
+            if writefile then
+                writefile(CACHE_FILE, body)
+            end
+        else
+            error("[Animator6D] Failed to fetch JSON — cannot continue")
+        end
+    end
+
+    local animatorData = HttpService:JSONDecode(jsonBody)
+
+    loadstring(game:HttpGet(
+        "https://raw.githubusercontent.com/NetlessScripter/Universal-KJ-Port/refs/heads/main/Animation%20Module"
+    ))()
+
+    Animator6D(animatorData)
 end
 
 local function PlayJumpBurstAndHighlight(character)
@@ -459,42 +487,6 @@ local function PlayViewportFlashEffect(camRig, throwAnimTrack)
 
     task.wait(1.2)
 
-    do
-        local CACHE_URL = "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/anim6d_kfcache_18878778259.json"
-        local CACHE_FILE = "anim6d_kfcache_18878778259.json"
-
-        local jsonBody
-
-        if isfile and isfile(CACHE_FILE) then
-            local ok, raw = pcall(readfile, CACHE_FILE)
-            if ok and raw and #raw > 100 then
-                jsonBody = raw
-                print("[Cache] Loaded from disk")
-            end
-        end
-
-        if not jsonBody then
-            local ok, body = pcall(game.HttpGet, game, CACHE_URL)
-            if ok and body and #body > 100 then
-                jsonBody = body
-                print("[Cache] Fetched from GitHub")
-                if writefile then
-                    writefile(CACHE_FILE, body)
-                end
-            else
-                error("[Animator6D] Failed to fetch JSON — cannot continue")
-            end
-        end
-
-        local animatorData = HttpService:JSONDecode(jsonBody)
-
-        loadstring(game:HttpGet(
-            "https://raw.githubusercontent.com/NetlessScripter/Universal-KJ-Port/refs/heads/main/Animation%20Module"
-        ))()
-
-        Animator6D(animatorData)
-    end
-
     task.spawn(function()
         task.wait(0.2)
 
@@ -504,6 +496,7 @@ local function PlayViewportFlashEffect(camRig, throwAnimTrack)
             task.spawn(function()
                 PlayJumpMeshTrails(Character)
             end)
+            task.spawn(PlayAnimator6DFromCache)
             PlayJumpBurstAndHighlight(Character)
         end)
 
@@ -511,87 +504,105 @@ local function PlayViewportFlashEffect(camRig, throwAnimTrack)
     end)
 end
 
-task.spawn(function()
-    local throwAnimId = "12447707844"
-    local throwAnimation = Instance.new("Animation")
-    throwAnimation.AnimationId = "rbxassetid://" .. throwAnimId
-    local throwAnimTrack = Humanoid:LoadAnimation(throwAnimation)
-    throwAnimTrack:Play()
-
-    local cloneRB = UFW.RB:Clone()
-    if not cloneRB.PrimaryPart then
-        cloneRB:GetPropertyChangedSignal("PrimaryPart"):Wait()
-    end
-    cloneRB:SetPrimaryPartCFrame(CFrame.new(1e6, 1e6, 1e6))
-    cloneRB.Parent = Thrown
-    cloneRB:ScaleTo(2)
-
-    local animController = cloneRB:WaitForChild("AnimationController")
-    local animTrack = animController:LoadAnimation(UFW.lastthing)
-    animTrack:Play()
-    animTrack.TimePosition = 1.4
-    Debris:AddItem(cloneRB, 3)
-
-    local invisiblePart = Instance.new("Part")
-    invisiblePart.Anchored = true
-    invisiblePart.Transparency = 1
-    invisiblePart.CanCollide = false
-    invisiblePart.CanQuery = false
-    invisiblePart.CanTouch = false
-    invisiblePart.CFrame = CFrame.new(40000, 40000, 40000)
-    invisiblePart.Parent = Thrown
-    Debris:AddItem(invisiblePart, 10)
+local function PlaySpiritBombSequence()
+    spiritBombSound:Play()
 
     task.spawn(function()
-        StreamPillarTextures(invisiblePart)
+        task.wait(3.1)
+        print("Spirit Bomb VFX here")
+        task.spawn(PlaySpiritBombOrb)
     end)
 
-    local camRig = UFW.CamRigWithLetterBox:Clone()
-    camRig.RootPart.CFrame = camRig.RootPart.CFrame * CFrame.new(0, 0, 1e6)
-    camRig.Parent = Workspace
-    local camAnim = camRig.AnimationController.Animator:LoadAnimation(UFW.Camera)
-    camAnim:Play()
+    task.spawn(function()
+        local throwAnimId = "12447707844"
+        local throwAnimation = Instance.new("Animation")
+        throwAnimation.AnimationId = "rbxassetid://" .. throwAnimId
+        local throwAnimTrack = Humanoid:LoadAnimation(throwAnimation)
+        throwAnimTrack:Play()
 
-    local playedAnimTrack
-    for _, track in pairs(Humanoid:GetPlayingAnimationTracks()) do
-        if track.Animation.AnimationId == "rbxassetid://" .. throwAnimId then
-            playedAnimTrack = track
-            break
+        local cloneRB = UFW.RB:Clone()
+        if not cloneRB.PrimaryPart then
+            cloneRB:GetPropertyChangedSignal("PrimaryPart"):Wait()
         end
-    end
-    if playedAnimTrack then
-        playedAnimTrack.Stopped:Connect(function()
-            camAnim:Stop()
-            Workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
-        end)
-    end
+        cloneRB:SetPrimaryPartCFrame(CFrame.new(1e6, 1e6, 1e6))
+        cloneRB.Parent = Thrown
+        cloneRB:ScaleTo(2)
 
-    local impactFrames = UFW.ImpactFrames:Clone()
-    impactFrames.Parent = LocalPlayer.PlayerGui
-    for _, frame in pairs(impactFrames:GetChildren()) do
-        frame.Size = UDim2.new(0, 0, 0, 1)
-        frame.ImageTransparency = 0
-    end
+        local animController = cloneRB:WaitForChild("AnimationController")
+        local animTrack = animController:LoadAnimation(UFW.lastthing)
+        animTrack:Play()
+        animTrack.TimePosition = 1.4
+        Debris:AddItem(cloneRB, 3)
 
-    for _, flexwork in pairs(UFW.Flexworks:GetChildren()) do
-        local cloneFlex = flexwork:Clone()
-        cloneFlex.Size = UDim2.new(0, 0, 0, 1)
-        cloneFlex.Position = UDim2.new(0, 0, 0, 0)
-        cloneFlex.Parent = impactFrames
-        task.delay(2, function()
-            cloneFlex:Destroy()
+        local invisiblePart = Instance.new("Part")
+        invisiblePart.Anchored = true
+        invisiblePart.Transparency = 1
+        invisiblePart.CanCollide = false
+        invisiblePart.CanQuery = false
+        invisiblePart.CanTouch = false
+        invisiblePart.CFrame = CFrame.new(40000, 40000, 40000)
+        invisiblePart.Parent = Thrown
+        Debris:AddItem(invisiblePart, 10)
+
+        task.spawn(function()
+            StreamPillarTextures(invisiblePart)
         end)
-    end
+
+        local camRig = UFW.CamRigWithLetterBox:Clone()
+        camRig.RootPart.CFrame = camRig.RootPart.CFrame * CFrame.new(0, 0, 1e6)
+        camRig.Parent = Workspace
+        local camAnim = camRig.AnimationController.Animator:LoadAnimation(UFW.Camera)
+        camAnim:Play()
+
+        local playedAnimTrack
+        for _, track in pairs(Humanoid:GetPlayingAnimationTracks()) do
+            if track.Animation.AnimationId == "rbxassetid://" .. throwAnimId then
+                playedAnimTrack = track
+                break
+            end
+        end
+        if playedAnimTrack then
+            playedAnimTrack.Stopped:Connect(function()
+                camAnim:Stop()
+                Workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+            end)
+        end
+
+        local impactFrames = UFW.ImpactFrames:Clone()
+        impactFrames.Parent = LocalPlayer.PlayerGui
+        for _, frame in pairs(impactFrames:GetChildren()) do
+            frame.Size = UDim2.new(0, 0, 0, 1)
+            frame.ImageTransparency = 0
+        end
+
+        for _, flexwork in pairs(UFW.Flexworks:GetChildren()) do
+            local cloneFlex = flexwork:Clone()
+            cloneFlex.Size = UDim2.new(0, 0, 0, 1)
+            cloneFlex.Position = UDim2.new(0, 0, 0, 0)
+            cloneFlex.Parent = impactFrames
+            task.delay(2, function()
+                cloneFlex:Destroy()
+            end)
+        end
+
+        task.spawn(function()
+            PlayViewportFlashEffect(camRig, throwAnimTrack)
+        end)
+    end)
 
     task.spawn(function()
-        PlayViewportFlashEffect(camRig, throwAnimTrack)
+        task.wait(0.5)
+        FireReplicationEvent({
+            Intensity = 5,
+            Effect = "Camshake"
+        })
     end)
-end)
+end
 
-task.spawn(function()
-    task.wait(0.5)
-    FireReplicationEvent({
-        Intensity = 5,
-        Effect = "Camshake"
-    })
+local TARGET_ANIMATION_ID = "rbxassetid://11365563255"
+
+Humanoid.AnimationPlayed:Connect(function(animationTrack)
+    if animationTrack.Animation.AnimationId == TARGET_ANIMATION_ID then
+        PlaySpiritBombSequence()
+    end
 end)
