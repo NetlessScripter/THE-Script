@@ -1,0 +1,1128 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players        = game:GetService("Players")
+local Debris         = game:GetService("Debris")
+local RunService     = game:GetService("RunService")
+local TweenService   = game:GetService("TweenService")
+local Lighting       = game:GetService("Lighting")
+local Workspace      = game:GetService("Workspace")
+
+-- Toggles: set _G.Rain / _G.Music to true or false BEFORE running this script to force
+-- a setting. If left unset, both default to on (their regular behavior).
+if _G.Rain == nil then _G.Rain = true end
+if _G.Music == nil then _G.Music = true end
+
+-- Optional: set _G.StartingSong to a song name (case-insensitive, matches the "name"
+-- field in musicSongs below) to force that song to play first. Requires _G.Music to be
+-- true - if music is disabled nothing plays regardless of this. If unset, empty (""),
+-- or the name doesn't match any song, a random song plays first like normal.
+-- Example: _G.StartingSong = "Lucy~"
+
+local localPlayer    = Players.LocalPlayer
+local character      = localPlayer.Character or localPlayer.CharacterAdded:Wait()
+local humanoid       = character:WaitForChild("Humanoid")
+local animator       = humanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator", humanoid)
+local rootPart       = character:WaitForChild("HumanoidRootPart")
+local headPart       = character:WaitForChild("Head")
+local hotbar         = localPlayer.PlayerGui:WaitForChild("Hotbar"):WaitForChild("Backpack"):WaitForChild("Hotbar")
+
+local marketShirtId  = 102058923729170
+local marketPantsId  = 18456843948
+
+local function PlayAnimation(id, startPos, stopDelay, speed)
+    local anim = Instance.new("Animation")
+    anim.AnimationId = "rbxassetid://" .. id
+    local track = humanoid:LoadAnimation(anim)
+    track:Play()
+    track.TimePosition = startPos or 0
+    track:AdjustSpeed(speed or 1)
+    if stopDelay then
+        task.spawn(function()
+            task.wait(stopDelay)
+            track:Stop()
+        end)
+    end
+    return track
+end
+
+local dodgeAnimIds = {
+    "rbxassetid://133094662049155",
+    "rbxassetid://109088632860488",
+    "rbxassetid://134711731729986",
+    "rbxassetid://78339272602733",
+    "rbxassetid://92546791251633",
+    "rbxassetid://76963965406296",
+    "rbxassetid://128188725134114",
+    "rbxassetid://127015697036075"
+}
+
+for i, id in ipairs(dodgeAnimIds) do
+    local anim = Instance.new("Animation")
+    anim.AnimationId = id
+    anim.Name = "PreloadedDodgeAnim_" .. i
+    anim.Parent = Workspace
+end
+
+local dodgeSoundUrls = {
+    "https://github.com/NetlessScripter/Vegeta/blob/8eda2b32c4f1b22f5e22c2243008523448bacb6c/copy_32992566-D00B-4561-826A-F80FA843E766.mp3?raw=true",
+    "https://github.com/NetlessScripter/GOKU/blob/dbe43657340ebbc6df8c47e8efa8cd49c1e62871/copy_D3E7C9B0-2ACD-4F3E-9AB0-B2FE634BD986.mp3?raw=true",
+    "https://github.com/NetlessScripter/GOKU/blob/3b2984c8c6e8d473045061dbe4dbe9a5a8301b87/copy_19543B24-E936-40B1-8969-EF7F7E6DBC54.mp3?raw=true"
+}
+
+local impactSoundIds = {
+    "rbxassetid://115523592797254",
+    "rbxassetid://106887649554725",
+    "rbxassetid://129561737395908",
+    "rbxassetid://75787837073401"
+}
+
+local preloadedDodgeSounds = {}
+for i, url in ipairs(dodgeSoundUrls) do
+    local filename = url:match("[^/]+%.mp3") or tostring(i)
+    filename = filename:gsub("%.mp3", "")
+    if not isfile(filename .. ".mp3") then
+        writefile(filename .. ".mp3", game:HttpGet(url))
+    end
+    local snd = Instance.new("Sound")
+    snd.SoundId = (getcustomasset or getsynasset)(filename .. ".mp3")
+    snd.Volume = 1
+    snd.Name = "DodgeSFX_" .. i
+    snd.Parent = Workspace
+    preloadedDodgeSounds[i] = snd
+end
+
+local preloadedImpactSounds = {}
+for i, id in ipairs(impactSoundIds) do
+    local snd = Instance.new("Sound")
+    snd.SoundId = id
+    snd.Volume = 1
+    snd.Name = "ImpactSFX_" .. i
+    snd.Parent = Workspace
+    preloadedImpactSounds[i] = snd
+end
+
+local nextImpactIndex = 1
+
+local function PlayRandomDodgeSound()
+    local snd = preloadedDodgeSounds[math.random(#preloadedDodgeSounds)]
+    if snd.IsPlaying then snd:Stop() end
+    snd:Play()
+end
+
+local function PlayNextImpactSound()
+    local snd = preloadedImpactSounds[nextImpactIndex]
+    if snd.IsPlaying then snd:Stop() end
+    snd:Play()
+    nextImpactIndex = nextImpactIndex + 1
+    if nextImpactIndex > #preloadedImpactSounds then nextImpactIndex = 1 end
+end
+
+local lastDodgeAnimId = nil
+local blockAnimId = "rbxassetid://10470389827"
+local blockLoopActive = false
+
+local function PickRandomDodgeAnim()
+    if #dodgeAnimIds == 1 then return dodgeAnimIds[1] end
+    local picked
+    repeat
+        picked = dodgeAnimIds[math.random(#dodgeAnimIds)]
+    until picked ~= lastDodgeAnimId
+    lastDodgeAnimId = picked
+    return picked
+end
+
+local function PlayDodgeAnimation()
+    local anim = Instance.new("Animation")
+    anim.AnimationId = PickRandomDodgeAnim()
+    for _, track in animator:GetPlayingAnimationTracks() do
+        if table.find(dodgeAnimIds, track.Animation.AnimationId) or track.Animation.AnimationId == blockAnimId then
+            track:Stop()
+        end
+    end
+    local track = animator:LoadAnimation(anim)
+    track.Priority = Enum.AnimationPriority.Action4
+    track:Play()
+    track:AdjustSpeed(Random.new():NextNumber(1, 1.5))
+    PlayRandomDodgeSound()
+    PlayNextImpactSound()
+end
+
+character:SetAttribute("Blocking", false)
+character:SetAttribute("BlockReact", 0)
+
+local prevBlockReact = character:GetAttribute("BlockReact")
+
+local function CheckBlockReact()
+    local isBlocking = character:GetAttribute("Blocking")
+    local blockReact  = character:GetAttribute("BlockReact")
+    if not blockReact then return end
+    if isBlocking then
+        if math.abs(math.abs(blockReact) - math.abs(prevBlockReact)) > 1 then
+            PlayDodgeAnimation()
+        elseif math.abs(blockReact) < 1 and not blockLoopActive then
+            local anim = Instance.new("Animation")
+            anim.AnimationId = blockAnimId
+            local track = animator:LoadAnimation(anim)
+            track.Looped = true
+            track:Play()
+            blockLoopActive = true
+        end
+    end
+    prevBlockReact = blockReact
+end
+
+character:GetAttributeChangedSignal("Blocking"):Connect(function()
+    if not character:GetAttribute("Blocking") then
+        for _, track in animator:GetPlayingAnimationTracks() do
+            if table.find(dodgeAnimIds, track.Animation.AnimationId) or track.Animation.AnimationId == blockAnimId then
+                track:Stop()
+                blockLoopActive = false
+            end
+        end
+    end
+end)
+
+character:GetAttributeChangedSignal("BlockReact"):Connect(CheckBlockReact)
+
+RunService.Heartbeat:Connect(function()
+    humanoid.WalkSpeed = 25
+    for _, track in animator:GetPlayingAnimationTracks() do
+        if track.Animation.AnimationId == blockAnimId then
+            track:Stop()
+            track:Destroy()
+        end
+    end
+end)
+
+local musicVolume        = 1.75
+
+local musicSongs = {
+    { name = "Asleep In Space 2", file = "AsleepInSpace2.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Goku-Version-2/refs/heads/main/Asleep%20In%20Space%202.mp3" },
+    { name = "9 - Dean Blunt (Slowed)", file = "DeanBluntSlowed.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/9%20-%20Dean%20Blunt%20(Slowed).mp3" },
+    { name = "It's like i'm not even here.", file = "NotEvenHere.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/It’s%20like%20im%20not%20even%20here..mp3" },
+    { name = "do i clench my fists?", file = "ClenchMyFists.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/do%20i%20clench%20my%20fists%3F.mp3" },
+    { name = "lucy~", file = "Lucy.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/lucy%7E.mp3" },
+    { name = "mistake", file = "Mistake.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/mistake.mp3.mp3" },
+    { name = "resonance - home (slowed & reverb)", file = "ResonanceHome.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/resonance%20-%20home%20(slowed%20%26%20reverb).mp3" },
+}
+
+local function GetGitSound(url, filename)
+    if not isfile(filename) then
+        writefile(filename, game:HttpGet(url))
+    end
+    local getAsset = getcustomasset or getsynasset
+    local sound = Instance.new("Sound")
+    sound.SoundId = getAsset(filename)
+    sound.Parent  = Workspace
+    return sound
+end
+
+local musicActive       = true
+local currentSongIndex  = nil
+local usedStartingSong  = false
+local currentMusicSound = nil
+
+local function FindSongIndexByName(name)
+    for i, song in ipairs(musicSongs) do
+        if song.name:lower() == name:lower() then
+            return i
+        end
+    end
+    return nil
+end
+
+local function PickNextSongIndex()
+    if #musicSongs == 1 then return 1 end
+    local index
+    repeat
+        index = math.random(#musicSongs)
+    until index ~= currentSongIndex
+    return index
+end
+
+local function PlaySoundCycle()
+    if not musicActive then return end
+
+    if not usedStartingSong then
+        usedStartingSong = true
+        local startIndex = (typeof(_G.StartingSong) == "string" and _G.StartingSong ~= "") and FindSongIndexByName(_G.StartingSong)
+        currentSongIndex = startIndex or PickNextSongIndex()
+    else
+        currentSongIndex = PickNextSongIndex()
+    end
+
+    local entry = musicSongs[currentSongIndex]
+    print("[Music] Now playing: " .. entry.name)
+
+    local sound = GetGitSound(entry.url, entry.file)
+    sound.Name   = entry.name
+    sound.Volume = musicVolume
+    currentMusicSound = sound
+    sound:Play()
+
+    sound.Ended:Connect(function()
+        sound:Destroy()
+        if musicActive then
+            PlaySoundCycle()
+        end
+    end)
+end
+
+if _G.Music then
+    task.spawn(PlaySoundCycle)
+end
+
+humanoid.Died:Connect(function()
+    musicActive = false
+    if currentMusicSound then
+        currentMusicSound:Stop()
+        currentMusicSound:Destroy()
+    end
+end)
+
+task.delay(1, function()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/Miles-Morales/refs/heads/main/Revamped%20Lighting%20System"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/Vegito-/refs/heads/main/Lock%20On"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/HowDidIPullThisOff"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/SpiritBomb"))()
+end)
+
+-- Rain module can tank FPS on some setups; controlled by _G.Rain (see top of script).
+task.delay(1, function()
+    if _G.Rain then
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/GOKU/refs/heads/main/RAIN%20MODULE"))()
+    end
+end)
+
+local function EmitVFX(vfxTemplate, emitCount, keepEnabled)
+    local part = vfxTemplate:Clone()
+    part.Parent = rootPart
+    for _, v in ipairs(part:GetChildren()) do
+        if v:IsA("ParticleEmitter") then
+            v:Emit(emitCount or 15)
+            v.Enabled = keepEnabled or false
+        end
+    end
+end
+
+local isMobile = game:GetService("UserInputService").TouchEnabled and not game:GetService("UserInputService").KeyboardEnabled
+
+local mobileGui = Instance.new("ScreenGui")
+mobileGui.Name            = "MobileGui"
+mobileGui.ZIndexBehavior  = Enum.ZIndexBehavior.Global
+mobileGui.Parent          = localPlayer.PlayerGui
+
+local afterImageBtn = Instance.new("ImageButton")
+afterImageBtn.Name                = "AfterImageButton"
+afterImageBtn.Size                = UDim2.new(0.097836, 0, 0.201353, 0)
+afterImageBtn.Position            = UDim2.new(0.109656, 0, 0.600591, 0)
+afterImageBtn.AnchorPoint         = Vector2.new(1, 1)
+afterImageBtn.BackgroundTransparency = 1
+afterImageBtn.Image               = "rbxassetid://9581732620"
+afterImageBtn.ImageTransparency   = 0.5
+afterImageBtn.ScaleType           = Enum.ScaleType.Fit
+afterImageBtn.Visible             = isMobile
+afterImageBtn.Parent              = mobileGui
+
+local afterImageAspect = Instance.new("UIAspectRatioConstraint")
+afterImageAspect.AspectRatio  = 0.9943867921829224
+afterImageAspect.DominantAxis = Enum.DominantAxis.Width
+afterImageAspect.Parent       = afterImageBtn
+
+local afterImageIcon = Instance.new("ImageLabel")
+afterImageIcon.Size                 = UDim2.new(0.432996, 0, 0.430565, 0)
+afterImageIcon.Position             = UDim2.new(0.275543, 0, 0.283782, 0)
+afterImageIcon.BackgroundTransparency = 1
+afterImageIcon.Image                = "rbxassetid://13630346552"
+afterImageIcon.ScaleType            = Enum.ScaleType.Fit
+afterImageIcon.Parent               = afterImageBtn
+
+local function DoTeleport()
+    local char = localPlayer.Character or localPlayer.CharacterAdded:Wait()
+    local hrp  = char:WaitForChild("HumanoidRootPart")
+
+    local allTargets = {}
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= localPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+            table.insert(allTargets, plr.Character.HumanoidRootPart)
+        end
+    end
+
+    local liveFolder = Workspace:FindFirstChild("Live")
+    if liveFolder then
+        for _, obj in ipairs(liveFolder:GetChildren()) do
+            if obj.Name == "Weakest Dummy" and obj:FindFirstChild("HumanoidRootPart") then
+                table.insert(allTargets, obj.HumanoidRootPart)
+            end
+        end
+    end
+
+    local nearestTarget = nil
+    local closestDist   = math.huge
+    for _, target in ipairs(allTargets) do
+        local dist = (target.Position - hrp.Position).Magnitude
+        if dist < closestDist then
+            closestDist   = dist
+            nearestTarget = target
+        end
+    end
+
+    local originalTransparency = {}
+    local function StoreTransparency(obj)
+        if obj:IsA("BasePart") or obj:IsA("Decal") or obj:IsA("Texture") then
+            originalTransparency[obj] = obj.Transparency
+        end
+        for _, child in ipairs(obj:GetChildren()) do
+            StoreTransparency(child)
+        end
+    end
+    StoreTransparency(char)
+
+    local function SetVisibility(hide)
+        for obj, trans in pairs(originalTransparency) do
+            if trans < 1 then
+                obj.Transparency = hide and 1 or trans
+            end
+        end
+    end
+
+    PlayAnimation("120577018823573", 0, 0.5, 2)
+    task.wait(0.5)
+
+    EmitVFX(ReplicatedStorage.Resources.NinjaUlt.Start_Effects.Particles.Low)
+    EmitVFX(ReplicatedStorage.Resources.NinjaUlt.Start_Effects.Particles.Center_Tilted)
+    EmitVFX(ReplicatedStorage.Resources.NinjaUlt.Start_Effects.Particles.Ground)
+
+    local teleportSfx = Instance.new("Sound")
+    teleportSfx.SoundId = "rbxassetid://3339374157"
+    teleportSfx.Volume  = 1
+    teleportSfx.Parent  = hrp
+    teleportSfx:Play()
+
+    if nearestTarget then
+        local dir = (nearestTarget.Position - hrp.Position).Unit
+        hrp.CFrame = CFrame.new(nearestTarget.Position - dir * -3, nearestTarget.Position)
+    end
+
+    SetVisibility(true)  task.wait(0.01)
+    SetVisibility(false) task.wait(0.01)
+    SetVisibility(true)  task.wait(0.01)
+    SetVisibility(false)
+end
+
+-- Mobile: tap button to teleport
+afterImageBtn.MouseButton1Click:Connect(DoTeleport)
+
+-- PC: press R to teleport
+local UserInputService = game:GetService("UserInputService")
+if not isMobile then
+    UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed then return end
+        if input.KeyCode == Enum.KeyCode.R then
+            DoTeleport()
+        end
+    end)
+end
+
+local comboAnimMap = {
+    ["rbxassetid://10469493270"] = { hitSfxId = "rbxassetid://13064223399", hitVfxId = "rbxassetid://17889458563", swingUrl = "https://github.com/NetlessScripter/Vegeta/blob/456e46fc178620c7a2b1a43ba5a049b41fb15c35/copy_28A5F52E-2133-4E5C-8F0B-AC83081AA11F.mp3?raw=true", key = "S1" },
+    ["rbxassetid://10469630950"] = { hitSfxId = "rbxassetid://13064223291", hitVfxId = "rbxassetid://17889461810", swingUrl = "https://github.com/NetlessScripter/Vegeta/blob/6ce2afd080fd9ec1f56f570176a6240d01719e89/copy_255931B6-ED5C-4EE7-8F3B-06CC09518682.mp3?raw=true", key = "S2" },
+    ["rbxassetid://10469639222"] = { hitSfxId = "rbxassetid://13064223483", hitVfxId = "rbxassetid://17889471098", swingUrl = "https://github.com/NetlessScripter/Vegeta/blob/cd098461253a02b5c887aecd4b5d0c13a914305e/copy_049D600C-99F5-4E09-9B74-9460ED59A507.mp3?raw=true", key = "S3" },
+    ["rbxassetid://10469643643"] = { hitSfxId = "rbxassetid://13064442279", hitVfxId = "rbxassetid://17889290569", swingUrl = "https://github.com/NetlessScripter/Vegeta/blob/5b3a1acabbc5b52fcbc4fb1c6b6eda1c18787b2f/copy_049D600C-99F5-4E09-9B74-9460ED59A507.mp3?raw=true", key = "S4" }
+}
+
+local blockedSoundIds = {
+    ["rbxassetid://3755636825"] = true,
+    ["rbxassetid://3755636438"] = true,
+    ["rbxassetid://10472822874"] = true,
+    ["swoosh-long3"]            = true,
+    ["swoosh-long1"]            = true,
+    ["Audio/kickswing"]         = true,
+}
+
+local comboAssets = Instance.new("Folder")
+comboAssets.Name   = "ComboAssets"
+comboAssets.Parent = Workspace
+
+local comboAnimations = {}
+local comboHitSounds  = {}
+local comboSwingSounds = {}
+
+for _, data in pairs(comboAnimMap) do
+    local anim = Instance.new("Animation")
+    anim.AnimationId = data.hitVfxId
+    anim.Name        = data.key .. "_Anim"
+    anim.Parent      = comboAssets
+    comboAnimations[data.key] = anim
+
+    local hitSfx = Instance.new("Sound")
+    hitSfx.SoundId = data.hitSfxId
+    hitSfx.Volume  = 1
+    hitSfx.Name    = data.key .. "_HitSFX"
+    hitSfx.Parent  = comboAssets
+    comboHitSounds[data.key] = hitSfx
+
+    if not isfile(data.key .. ".mp3") then
+        writefile(data.key .. ".mp3", game:HttpGet(data.swingUrl))
+    end
+    local swingSfx = Instance.new("Sound")
+    swingSfx.SoundId = (getcustomasset or getsynasset)(data.key .. ".mp3")
+    swingSfx.Volume  = 1
+    swingSfx.Name    = data.key .. "_SwingSFX"
+    swingSfx.Parent  = comboAssets
+    comboSwingSounds[data.key] = swingSfx
+end
+
+local function SpawnHitbox(onHit)
+    local hitbox = Instance.new("Part")
+    hitbox.Name        = "Hitbox"
+    hitbox.Size        = Vector3.new(10, 8, 10)
+    hitbox.Anchored    = true
+    hitbox.CanCollide  = false
+    hitbox.Transparency = 1
+    hitbox.CFrame      = rootPart.CFrame * CFrame.new(0, 0, -5)
+    hitbox.Parent      = Workspace
+
+    local hitHandled = false
+
+    hitbox.Touched:Connect(function(touchedPart)
+        if hitHandled then return end
+        local model = touchedPart:FindFirstAncestorOfClass("Model")
+        if not model or model == character then return end
+        local targetHumanoid = model:FindFirstChild("Humanoid")
+        if not targetHumanoid then return end
+
+        hitHandled = true
+        hitbox:Destroy()
+        onHit(model)
+    end)
+
+    Debris:AddItem(hitbox, 0.15)
+end
+
+local function PlayHitVFX(targetModel)
+    local targetRoot = targetModel:FindFirstChild("HumanoidRootPart") or targetModel
+    local attachment = ReplicatedStorage.Emotes.VFX.RealAssets["Dragon Combo"].Punch.Attachment:Clone()
+    attachment.Parent = targetRoot
+    for _, emitter in next, attachment:GetChildren() do
+        if emitter:IsA("ParticleEmitter") then
+            emitter:Emit(15)
+        end
+    end
+end
+
+local function PlayWindVFX()
+    local windPart = Instance.new("Part")
+    windPart.Anchored    = true
+    windPart.CanCollide  = false
+    windPart.Transparency = 1
+    windPart.CFrame      = rootPart.CFrame * CFrame.new(0, 0, -5)
+    windPart.Parent      = Workspace
+    Debris:AddItem(windPart, 1)
+    local attachment = ReplicatedStorage.Resources.KJEffects.DropkickExtra.firstHit:GetChildren()[3]
+    local windEmitter = attachment and attachment:FindFirstChild("Wind")
+    if windEmitter then
+        windEmitter = windEmitter:Clone()
+        windEmitter.Parent = windPart
+        windEmitter:Emit(10)
+    end
+end
+
+local function PlayHitSound(key, targetModel)
+    local sfx = comboHitSounds[key]
+    if sfx then
+        local targetRoot = targetModel:FindFirstChild("HumanoidRootPart") or targetModel
+        local clone = sfx:Clone()
+        clone.Parent = targetRoot
+        clone:Play()
+        Debris:AddItem(clone, 2)
+    end
+end
+
+local function PlaySwingSound(key)
+    local sfx = comboSwingSounds[key]
+    if sfx then
+        local clone = sfx:Clone()
+        clone.Parent = Workspace
+        clone:Play()
+    end
+end
+
+local activeComboTrack = nil
+
+local function PlayComboAnimation(key)
+    local anim = comboAnimations[key]
+    if anim then
+        if activeComboTrack then
+            activeComboTrack:Stop()
+            activeComboTrack:Destroy()
+        end
+        activeComboTrack = animator:LoadAnimation(anim)
+        activeComboTrack:Play()
+    end
+end
+
+task.spawn(function()
+    while true do
+        for _, desc in next, character:GetDescendants() do
+            if desc:IsA("Sound") and (blockedSoundIds[desc.SoundId] or blockedSoundIds[desc.Name]) then
+                desc.Volume = 0
+                desc:Stop()
+            end
+        end
+        task.wait()
+    end
+end)
+
+humanoid.AnimationPlayed:Connect(function(track)
+    local data = comboAnimMap[track.Animation.AnimationId]
+    if not data then return end
+    track:Stop()
+
+    PlayWindVFX()
+    PlaySwingSound(data.key)
+    PlayComboAnimation(data.key)
+
+    SpawnHitbox(function(hitModel)
+        PlayHitVFX(hitModel)
+        PlayHitSound(data.key, hitModel)
+    end)
+end)
+
+loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/23"))()
+
+Workspace:SetAttribute("EffectAffects", 1)
+Workspace:SetAttribute("NoDashCooldown", true)
+
+localPlayer.Character.ChildAdded:Connect(function(child)
+    if child.Name == "Freeze" or child.Name == "ComboStun" then
+        task.wait()
+        child:Destroy()
+    end
+end)
+
+humanoid.Died:Connect(function()
+    local playerGui = localPlayer:WaitForChild("PlayerGui")
+    local screenGui = playerGui:FindFirstChild("ScreenGui")
+    if screenGui then screenGui:Destroy() end
+end)
+
+task.spawn(function()
+    while task.wait() do
+        local bind = character:FindFirstChild("BarrageBind")
+        if bind then bind:Destroy() end
+    end
+end)
+
+local toolNameMap = {
+    ["Normal Punch"]           = "Kamehameha",
+    ["Consecutive Punches"]    = "Wrenching Ki Blasts",
+    ["Shove"]                  = "Spirit Crusher",
+    ["Uppercut"]               = "Sky Breaker",
+    ["Serious Punch"]          = "?",
+    ["Omni Directional Punch"] = "?",
+    ["Death Counter"]          = "Divine Counter",
+    ["Table Flip"]             = "Spirit Bomb",
+}
+
+local function updateToolNames()
+    for _, slot in ipairs(hotbar:GetChildren()) do
+        if slot:FindFirstChild("Base") and slot.Base:FindFirstChild("ToolName") then
+            local toolName = slot.Base.ToolName
+            local newName  = toolNameMap[toolName.Text]
+            if newName then
+                if not slot:FindFirstChild("CustomName") then
+                    toolName.Visible = false
+                    local clone = toolName:Clone()
+                    clone.Name    = "CustomName"
+                    clone.Parent  = slot
+                    clone.Text    = newName
+                    clone.Visible = true
+                elseif slot.CustomName.Text ~= newName then
+                    toolName.Visible     = false
+                    slot.CustomName.Text = newName
+                end
+            end
+        end
+    end
+end
+
+task.spawn(function()
+    while true do
+        updateToolNames()
+        task.wait(1)
+    end
+end)
+
+local ssjFaceId     = "rbxassetid://12876975875"
+local specialFaceId = "rbxassetid://12928673086"
+local specialFaceAnimId = "rbxassetid://12447707844"
+
+local ssjOnlyAnimIds = {
+    ["rbxassetid://11343318134"] = true,
+    ["rbxassetid://11365563255"] = true,
+    ["rbxassetid://12983333733"] = true,
+    ["rbxassetid://13927612951"] = true,
+}
+
+local faceDecal = headPart:FindFirstChildWhichIsA("Decal")
+if faceDecal then faceDecal.Texture = ssjFaceId end
+
+-- SSJ Blue emote color
+local ssjbColor = Color3.new(0.05, 0.45, 1.0)
+
+-- Tracks whether an SSJB transform is still current; a revert anim clears this
+-- so any transform steps still delayed in-flight (aura creation/enable) bail out
+-- instead of showing the aura back up after the player already reverted.
+local ssjbActive = false
+
+-- Triggered when specialFaceAnimId (12447707844) plays
+local function TriggerSSJBEmote()
+    ssjbActive = true
+    local v9 = {}
+    local a = Instance.new("Animation")
+    a.AnimationId = "rbxassetid://96993907314948"
+    local b = humanoid:LoadAnimation(a)
+    b:Play()
+    b.Stopped:Connect(function()
+        local a2 = Instance.new("Animation")
+        a2.AnimationId = "rbxassetid://127234845846317"
+        humanoid:LoadAnimation(a2):Play()
+    end)
+    local l_Accessory_4 = Instance.new("Accessory")
+    l_Accessory_4.Name = "#EmoteHolder_" .. math.random(1, 100000)
+    l_Accessory_4.Parent = character
+    game:GetService("CollectionService"):AddTag(l_Accessory_4, "emoteendstuff" .. character.Name)
+    require(ReplicatedStorage.Emotes.VFX):MainFunction({
+        Character = character,
+        vfxName = "Energy Explosion",
+        AnimSent = 96993907314948,
+        RealBind = l_Accessory_4,
+        NoInsertion = true,
+        Colour = ssjbColor
+    })
+    local v3191 = {}
+    local v3192 = {}
+    local v3193 = {}
+    task.delay(1.3, function()
+        task.spawn(function()
+            local FiveSeasonsFX = ReplicatedStorage.Resources.FiveSeasonsFX
+            local FSWhite = FiveSeasonsFX.FSWhite:Clone()
+            local FSBlack = FiveSeasonsFX.FSBlack:Clone()
+            FSWhite.Parent = Lighting
+            FSBlack.Parent = Lighting
+
+            for _, child in pairs(localPlayer.PlayerGui:GetChildren()) do
+                if child.Name == "FXUi" then
+                    child:Destroy()
+                end
+            end
+
+            FSWhite.Enabled = true
+            task.wait(0.035)
+            FSWhite.Enabled = false
+
+            FSBlack.Enabled = true
+            task.wait(0.035)
+            FSBlack.Enabled = false
+
+            FSWhite:Destroy()
+            FSBlack:Destroy()
+        end)
+
+        if ssjbActive and l_Accessory_4 and l_Accessory_4.Parent then
+            -- Swap current SSJ hair to SSJ Blue
+            local oldHair = character:FindFirstChild("GokuSSJHair")
+            if oldHair then
+                local oldLight = oldHair:FindFirstChildOfClass("PointLight")
+                oldHair:Destroy()
+                local gokuHairForms = Workspace:FindFirstChild("GokuHairForms")
+                local ssbSource = gokuHairForms and gokuHairForms["Super saiyan Blue"] and gokuHairForms["Super saiyan Blue"]["Ssj blue (Original)"]
+                if ssbSource then
+                    local newHair = ssbSource:Clone()
+                    newHair.Name       = "GokuSSJHair"
+                    newHair.Anchored   = false
+                    newHair.CanCollide = false
+                    newHair.CFrame     = headPart.CFrame * CFrame.new(0, 1.1, 0.5) * CFrame.Angles(0, math.rad(180), 0)
+                    newHair.Parent     = character
+                    newHair:SetAttribute("IsSSJB", true)
+                    local weld = Instance.new("WeldConstraint")
+                    weld.Part0 = headPart
+                    weld.Part1 = newHair
+                    weld.Parent = newHair
+                    if oldLight then
+                        oldLight.Color  = Color3.fromRGB(100, 180, 255)
+                        oldLight.Parent = newHair
+                    end
+                end
+            end
+            (function()
+                for _, v3195 in pairs(character.FakeHead:GetChildren()) do
+                    if v3195:IsA("Accessory") and v3195:FindFirstChild("Handle") and v3195:FindFirstChild("Handle"):FindFirstChild("HairAttachment") then
+                        local l_Handle_50 = v3195:FindFirstChild("Handle")
+                        table.insert(v3192, l_Handle_50)
+                        for _, v3198 in pairs(l_Handle_50:GetChildren()) do
+                            if v3198:IsA("SpecialMesh") then
+                                v3198:SetAttribute("basetext", v3198.TextureId)
+                            end
+                        end
+                    end
+                end
+                for _, v3200 in pairs(v3192) do
+                    local v3201 = v3200:Clone()
+                    table.insert(v3191, v3201)
+                    local l_Weld_23 = Instance.new("Weld")
+                    l_Weld_23.Part0 = v3201
+                    l_Weld_23.Part1 = v3200
+                    l_Weld_23.Parent = v3201
+                    v3201.Parent = Workspace.Thrown
+                    v3200.Transparency = 1
+                    TweenService:Create(v3200, TweenInfo.new(0.25, Enum.EasingStyle.Sine), {
+                        Transparency = 0
+                    }):Play()
+                    local l_SpecialMesh_0 = v3200:FindFirstChildOfClass("SpecialMesh")
+                    if l_SpecialMesh_0 then
+                        l_SpecialMesh_0.TextureId = ""
+                        local v3204 = ReplicatedStorage.Resources.DeathEffect.Template:Clone()
+                        v3204.Color3 = Color3.new(0.25, 0.75, 1.0)
+                        v3204.Parent = v3201
+                    end
+                end
+                v9[character] = {
+                    hairs = v3192,
+                    destroy = v3191
+                }
+            end)()
+            task.delay(200, function()
+                for _, v3206 in pairs(v3191) do
+                    TweenService:Create(v3206, TweenInfo.new(0.1), {
+                        Transparency = 1
+                    }):Play()
+                    Debris:AddItem(v3206, 0.5)
+                end
+                for _, v3208 in pairs(v3192) do
+                    if not character:GetAttribute("InMech") then
+                        TweenService:Create(v3208, TweenInfo.new(0.1), {
+                            Transparency = 0
+                        }):Play()
+                    end
+                    for _, v3210 in pairs(v3208:GetChildren()) do
+                        if v3210:IsA("SpecialMesh") or v3210:IsA("MeshPart") then
+                            v3210.TextureId = v3210:GetAttribute("basetext")
+                        end
+                    end
+                end
+            end)
+            local l_Folder_0 = Instance.new("Folder")
+            l_Folder_0.Name = "AuraHolder"
+            l_Folder_0:SetAttribute("LimAura", true)
+            l_Folder_0:SetAttribute("EmoteEffect", true)
+            l_Folder_0.Parent = character
+            task.delay(203, function()
+                if l_Folder_0 then l_Folder_0:Destroy() end
+            end)
+            local v3212 = {}
+            for _, v3214 in pairs(ReplicatedStorage.Emotes.AuraReal:GetChildren()) do
+                local v3215 = v3214:Clone()
+                v3215:SetAttribute("LimAura", true)
+                table.insert(v3212, v3215)
+                task.delay(203, function()
+                    if v3215 then v3215:Destroy() end
+                end)
+                if v3215:IsA("Attachment") or v3215:IsA("PointLight") then
+                    v3215.Parent = character.PrimaryPart
+                else
+                    local l_Weld_24 = Instance.new("Weld")
+                    l_Weld_24.Part0 = character.PrimaryPart
+                    l_Weld_24.Part1 = v3215
+                    l_Weld_24.Parent = v3215
+                end
+                for _, v3218 in pairs(v3215:GetDescendants()) do
+                    if v3218:IsA("ParticleEmitter") or v3218:IsA("PointLight") then
+                        v3218.Enabled = false
+                        table.insert(v3193, v3218)
+                        v3218:SetAttribute("LimitedAura", true)
+                        v3218:SetAttribute("InnerRageAura", true)
+                        if v3218:IsA("ParticleEmitter") or v3218:IsA("Beam") then
+                            v3218.Color = ColorSequence.new({
+                                ColorSequenceKeypoint.new(0,   Color3.new(0.0,  0.2,  0.85)),
+                                ColorSequenceKeypoint.new(0.3, Color3.new(0.05, 0.45, 1.0)),
+                                ColorSequenceKeypoint.new(0.7, Color3.new(0.2,  0.7,  1.0)),
+                                ColorSequenceKeypoint.new(1,   Color3.new(0.6,  0.9,  1.0)),
+                            })
+                        end
+                        if v3218:IsA("PointLight") or v3218:IsA("SpotLight") or v3218:IsA("SurfaceLight") then
+                            v3218.Brightness = v3218.Brightness * 1.3
+                            v3218.Color = Color3.new(0.1, 0.55, 1.0)
+                        end
+                        task.delay(200, function()
+                            v3218.Enabled = false
+                        end)
+                    end
+                end
+            end
+        end
+    end)
+    task.delay(5.3, function()
+        if ssjbActive and l_Accessory_4 and l_Accessory_4.Parent then
+            for _, v3220 in pairs(v3193) do
+                v3220.Enabled = true
+            end
+            task.wait(0.05)
+            for _, v3222 in pairs(humanoid:GetPlayingAnimationTracks()) do
+                if v3222.Animation.AnimationId == "rbxassetid://127234845846317" then
+                    v3222:Stop()
+                    local a3 = Instance.new("Animation")
+                    a3.AnimationId = "rbxassetid://117177504280717"
+                    humanoid:LoadAnimation(a3):Play()
+                end
+            end
+        end
+    end)
+end
+
+humanoid.AnimationPlayed:Connect(function(track)
+    if not faceDecal then return end
+    local animId = track.Animation.AnimationId
+    if animId == specialFaceAnimId then
+        track:Stop() -- immediately cancel the trigger anim
+        faceDecal.Texture = ""
+        task.wait()
+        faceDecal.Texture = specialFaceId
+        TriggerSSJBEmote()
+    elseif ssjOnlyAnimIds[animId] then
+        faceDecal.Texture = ""
+        task.wait()
+        faceDecal.Texture = ssjFaceId
+    end
+end)
+
+local hairModel = game:GetObjects("rbxassetid://8724964030")[1]
+hairModel.Name   = "GokuHairForms"
+hairModel.Parent = Workspace
+
+local ssjHair = nil
+
+local function WeldToHead(hairPart)
+    local weld   = Instance.new("WeldConstraint")
+    weld.Part0   = headPart
+    weld.Part1   = hairPart
+    weld.Parent  = hairPart
+end
+
+local function AddSSJHair()
+    if ssjHair and ssjHair.Parent then return end
+    ssjHair              = hairModel["Super saiyan 1"]["Ssj dominated (Original)"]:Clone()
+    ssjHair.Name         = "GokuSSJHair"
+    ssjHair.Anchored     = false
+    ssjHair.CanCollide   = false
+    ssjHair.CFrame       = headPart.CFrame * CFrame.new(0, 1.1, 0.5) * CFrame.Angles(0, math.rad(180), 0)
+    ssjHair.Parent       = character
+    WeldToHead(ssjHair)
+end
+
+local hairLight = Instance.new("PointLight")
+hairLight.Color      = Color3.fromRGB(255, 255, 150)
+hairLight.Range      = 8
+hairLight.Brightness = 1
+hairLight.Enabled    = true
+
+AddSSJHair()
+if ssjHair then hairLight.Parent = ssjHair end
+
+local ssjbRevertAnimIds = {
+    ["rbxassetid://11365563255"] = true,
+    ["rbxassetid://12983333733"] = true,
+    ["rbxassetid://13927612951"] = true,
+}
+
+local function RevertSSJBHairToSSJ()
+    local oldHair = character:FindFirstChild("GokuSSJHair")
+    if not oldHair or not oldHair:GetAttribute("IsSSJB") then return end
+
+    local oldLight = oldHair:FindFirstChildOfClass("PointLight")
+    oldHair:Destroy()
+
+    local gokuHairForms = Workspace:FindFirstChild("GokuHairForms")
+    local ssjSource = gokuHairForms and gokuHairForms["Super saiyan 1"] and gokuHairForms["Super saiyan 1"]["Ssj dominated (Original)"]
+    if not ssjSource then return end
+
+    local newHair      = ssjSource:Clone()
+    newHair.Name        = "GokuSSJHair"
+    newHair.Anchored    = false
+    newHair.CanCollide  = false
+    newHair.CFrame      = headPart.CFrame * CFrame.new(0, 1.1, 0.5) * CFrame.Angles(0, math.rad(180), 0)
+    newHair.Parent      = character
+    WeldToHead(newHair)
+    ssjHair = newHair
+
+    if oldLight then
+        oldLight.Color  = Color3.fromRGB(255, 255, 150)
+        oldLight.Parent = newHair
+    end
+end
+
+local function DisableSSJBAura()
+    for _, obj in ipairs(character:GetDescendants()) do
+        if obj:IsA("ParticleEmitter") or obj:IsA("Beam") or obj:IsA("PointLight") or obj:IsA("SpotLight") or obj:IsA("SurfaceLight") then
+            if obj:GetAttribute("LimitedAura") or obj:GetAttribute("InnerRageAura") or obj:GetAttribute("LimAura") then
+                obj.Enabled = false
+            end
+        end
+    end
+
+    task.delay(2, function()
+        for _, obj in ipairs(character:GetDescendants()) do
+            if obj:GetAttribute("LimAura") then
+                obj:Destroy()
+            end
+        end
+    end)
+end
+
+humanoid.AnimationPlayed:Connect(function(track)
+    if ssjbRevertAnimIds[track.Animation.AnimationId] then
+        ssjbActive = false
+        RevertSSJBHairToSSJ()
+        DisableSSJBAura()
+    end
+end)
+
+for _, accessory in ipairs(character:GetChildren()) do
+    if accessory:IsA("Accessory") or accessory:IsA("Hat") then
+        accessory:Destroy()
+    end
+end
+
+local liveFolder = Workspace:FindFirstChild("Live")
+if liveFolder then
+    local fakeHead = liveFolder:FindFirstChild(localPlayer.Name) and liveFolder[localPlayer.Name]:FindFirstChild("FakeHead")
+    if fakeHead then
+        for _, item in ipairs(fakeHead:GetChildren()) do
+            if item:IsA("Accessory") or item:IsA("Hat") then item:Destroy() end
+        end
+        local fakeHeadFace = fakeHead:FindFirstChildWhichIsA("Decal")
+        if fakeHeadFace then fakeHeadFace.Texture = ssjFaceId end
+    end
+end
+
+for _, item in ipairs(character:GetChildren()) do
+    if item:IsA("Shirt") or item:IsA("Pants") then item:Destroy() end
+end
+
+local shirt = Instance.new("Shirt")
+shirt.ShirtTemplate = "rbxassetid://102058923729170"
+shirt.Parent        = character
+
+local pants = Instance.new("Pants")
+pants.PantsTemplate = "rbxassetid://18456843948"
+pants.Parent        = character
+
+local function ApplyMarketplaceClothing(assetId, clothingType)
+    local ok, objects = pcall(game.GetObjects, game, "rbxassetid://" .. assetId)
+    if not ok or not objects then return end
+    for _, obj in ipairs(objects) do
+        local clothing = obj:IsA(clothingType) and obj or obj:FindFirstChildWhichIsA(clothingType)
+        if clothing then
+            local existing = character:FindFirstChildOfClass(clothingType)
+            if existing then existing:Destroy() end
+            local newCloth = Instance.new(clothingType)
+            if clothingType == "Shirt" then
+                newCloth.ShirtTemplate = clothing.ShirtTemplate
+            else
+                newCloth.PantsTemplate = clothing.PantsTemplate
+            end
+            newCloth.Parent = character
+            break
+        end
+    end
+end
+
+task.spawn(function()
+    ApplyMarketplaceClothing(marketShirtId, "Shirt")
+    ApplyMarketplaceClothing(marketPantsId, "Pants")
+end)
+
+local ssjSkinColor = Color3.fromRGB(241, 194, 154)
+for _, part in pairs(character:GetDescendants()) do
+    if part:IsA("BasePart") then
+        part.Color = ssjSkinColor
+    end
+end
+
+task.spawn(function()
+    local p = game.Players.LocalPlayer
+    local h = p:WaitForChild("PlayerGui"):WaitForChild("Bar"):WaitForChild("MagicHealth")
+    local label = h.TextLabel
+
+    label.Visible = true
+    label.Position = label.Position + UDim2.new(0, 0, -0.5, 0)
+
+    local health = h:FindFirstChild("Health")
+    if health then
+        if health:FindFirstChild("Bar") then
+            health.Bar.Image = "rbxassetid://15248647876"
+            health.Bar.ImageTransparency = 1
+            health.Bar.ImageColor3 = Color3.new(0, 0, 0)
+
+            if health.Bar:FindFirstChild("Bar") then
+                health.Bar.Bar.Image = "rbxassetid://15248647876"
+
+                if health.Bar.Bar:FindFirstChild("Bar") then
+                    health.Bar.Bar.Bar.Image = "rbxassetid://15248647876"
+                end
+            end
+        end
+
+        if health:FindFirstChild("Glow") then
+            health.Glow.Image = "rbxassetid://15247550681"
+            health.Glow.ImageTransparency = 0
+            health.Glow.ImageColor3 = Color3.new(0, 0, 0)
+        end
+    end
+
+    local b = Font.new("rbxasset://fonts/families/Balthazar.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
+    local s = Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+
+    label.FontFace = b
+    h.Ult.FontFace = b
+    h.Ult.TextLabel.FontFace = b
+
+    local strokeMain = Instance.new("UIStroke")
+    strokeMain.LineJoinMode = Enum.LineJoinMode.Round
+    strokeMain.Color = Color3.new(0, 0, 0)
+    strokeMain.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
+    strokeMain.Thickness = 2
+    strokeMain.Parent = label
+
+    local hot = p.PlayerGui:WaitForChild("Hotbar"):WaitForChild("Backpack"):WaitForChild("Hotbar")
+    for _, v in pairs(hot:GetDescendants()) do
+        if v:IsA("TextButton") then
+            v.FontFace = b
+        end
+    end
+
+    local texts = {
+        "SAIYAN RAGE",
+        "LEGENDARY SUPER SAIYAN",
+        "SAIYAN INSTINCT",
+    }
+
+    local function typeText(text, duration)
+        label.Text = ""
+        local length = #text
+        local step = duration / math.max(length, 1)
+
+        for i = 1, length do
+            label.Text = text:sub(1, i)
+            task.wait(step)
+        end
+    end
+
+    while true do
+        for _, text in ipairs(texts) do
+            typeText(text, 1.45)
+            task.wait(38.55) -- 40 seconds total including typing
+        end
+    end
+end)
