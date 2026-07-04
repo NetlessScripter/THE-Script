@@ -6,16 +6,14 @@ local TweenService   = game:GetService("TweenService")
 local Lighting       = game:GetService("Lighting")
 local Workspace      = game:GetService("Workspace")
 
--- Toggles: set _G.Rain / _G.Music to true or false BEFORE running this script to force
--- a setting. If left unset, both default to on (their regular behavior).
 if _G.Rain == nil then _G.Rain = true end
 if _G.Music == nil then _G.Music = true end
 
--- Optional: set _G.StartingSong to a song name (case-insensitive, matches the "name"
--- field in musicSongs below) to force that song to play first. Requires _G.Music to be
--- true - if music is disabled nothing plays regardless of this. If unset, empty (""),
--- or the name doesn't match any song, a random song plays first like normal.
--- Example: _G.StartingSong = "Lucy~"
+
+
+
+
+
 
 local localPlayer    = Players.LocalPlayer
 local character      = localPlayer.Character or localPlayer.CharacterAdded:Wait()
