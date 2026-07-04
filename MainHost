@@ -182,37 +182,90 @@ RunService.Heartbeat:Connect(function()
     end
 end)
 
-local musicLoop = nil
+local musicVolume        = 1.75
+local musicFadeInTime    = 1
+local musicFadeOutWindow = 3
 
-local function StartMusic()
-    local url      = "https://raw.githubusercontent.com/NetlessScripter/Goku-Version-2/refs/heads/main/Asleep%20In%20Space%202.mp3"
-    local filename = "Asleep In Space 2.mp3"
-    if not isfile(filename) then
-        writefile(filename, game:HttpGet(url))
+local musicSongs = {
+    { name = "Asleep In Space 2", file = "AsleepInSpace2.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Goku-Version-2/refs/heads/main/Asleep%20In%20Space%202.mp3" },
+    { name = "9 - Dean Blunt (Slowed)", file = "DeanBluntSlowed.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/9%20-%20Dean%20Blunt%20(Slowed).mp3" },
+    { name = "It's like i'm not even here.", file = "NotEvenHere.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/It’s%20like%20i’m%20not%20even%20here..mp3" },
+    { name = "do i clench my fists?", file = "ClenchMyFists.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/do%20i%20clench%20my%20fists%3F.mp3" },
+    { name = "lucy~", file = "Lucy.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/lucy%7E.mp3" },
+    { name = "mistake", file = "Mistake.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/mistake.mp3.mp3" },
+    { name = "resonance - home (slowed & reverb)", file = "ResonanceHome.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/resonance%20-%20home%20(slowed%20%26%20reverb).mp3" },
+}
+
+local function CacheSong(entry)
+    if not isfile(entry.file) then
+        writefile(entry.file, game:HttpGet(entry.url))
     end
-    if musicLoop then musicLoop:Destroy() end
-    local snd = Instance.new("Sound")
-    snd.Name    = "MusicLoop"
-    snd.SoundId = (getcustomasset or getsynasset)(filename)
-    snd.Volume  = 1.75
-    snd.Looped  = true
-    snd.Parent  = Workspace
-    snd:Play()
-    musicLoop = snd
-    return snd
 end
 
-StartMusic()
+local musicSound = Instance.new("Sound")
+musicSound.Name   = "MusicLoop"
+musicSound.Volume = 0
+musicSound.Looped = false
+musicSound.Parent = Workspace
 
-humanoid.Died:Connect(function()
-    if musicLoop then
-        local tween = TweenService:Create(musicLoop, TweenInfo.new(1), { Volume = 0 })
-        tween:Play()
-        tween.Completed:Connect(function()
-            musicLoop:Stop()
-            musicLoop:Destroy()
+local musicActive      = true
+local currentSongIndex = nil
+
+local function PickNextSongIndex()
+    if #musicSongs == 1 then return 1 end
+    local index
+    repeat
+        index = math.random(#musicSongs)
+    until index ~= currentSongIndex
+    return index
+end
+
+local function WaitForSoundLength(sound, timeout)
+    local startClock = os.clock()
+    while sound.TimeLength <= 0 and os.clock() - startClock < (timeout or 10) do
+        task.wait()
+    end
+    return sound.TimeLength
+end
+
+local function PlayNextSong()
+    currentSongIndex = PickNextSongIndex()
+    local entry = musicSongs[currentSongIndex]
+    CacheSong(entry)
+
+    musicSound.Volume  = 0
+    musicSound.SoundId = (getcustomasset or getsynasset)(entry.file)
+    musicSound:Play()
+
+    local playingId = musicSound.SoundId
+    TweenService:Create(musicSound, TweenInfo.new(musicFadeInTime, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { Volume = musicVolume }):Play()
+
+    local length = WaitForSoundLength(musicSound)
+    if length > 0 and musicSound.SoundId == playingId then
+        task.delay(math.max(length - musicFadeOutWindow, 0), function()
+            if musicActive and musicSound.SoundId == playingId and musicSound.IsPlaying then
+                TweenService:Create(musicSound, TweenInfo.new(musicFadeOutWindow, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { Volume = 0 }):Play()
+            end
         end)
     end
+end
+
+musicSound.Ended:Connect(function()
+    if musicActive then
+        PlayNextSong()
+    end
+end)
+
+task.spawn(PlayNextSong)
+
+humanoid.Died:Connect(function()
+    musicActive = false
+    local tween = TweenService:Create(musicSound, TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { Volume = 0 })
+    tween:Play()
+    tween.Completed:Connect(function()
+        musicSound:Stop()
+        musicSound:Destroy()
+    end)
 end)
 
 task.delay(1, function()
