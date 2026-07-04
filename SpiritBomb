@@ -366,7 +366,10 @@ local function PlayJumpBurstAndHighlight(character)
     highlight:Destroy()
 end
 
-local function LaunchCharacterAndCleanup(flashClone, charClone, throwAnimTrack, viewportAnimTrack, renderSteppedConn)
+local function LaunchCharacterAndCleanup(flashClone, charClone, throwAnimTrack, renderSteppedConn)
+    Animator6DStop(charClone)
+    task.spawn(PlayAnimator6DFromCache)
+
     local goalCFrame = HumanoidRootPart.CFrame + Vector3.new(0, 126, 0)
     local tween = TweenService:Create(
         HumanoidRootPart,
@@ -409,7 +412,6 @@ local function LaunchCharacterAndCleanup(flashClone, charClone, throwAnimTrack, 
             renderSteppedConn:Disconnect()
 
             throwAnimTrack:Stop()
-            viewportAnimTrack:Stop()
             charClone:Destroy()
             flashClone:Destroy()
 
@@ -450,8 +452,39 @@ local function PlayViewportFlashEffect(camRig, throwAnimTrack)
     end
 
     charClone.Parent = viewport.Body
-    local viewportAnimTrack = charClone.Humanoid:LoadAnimation(UFW.User)
-    viewportAnimTrack:Play()
+
+    local VIEWPORT_CACHE_URL = "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/anim6d_kfcache_18385523261.json"
+    local VIEWPORT_CACHE_FILE = "anim6d_kfcache_18385523261.json"
+
+    local viewportJsonBody
+    if isfile and isfile(VIEWPORT_CACHE_FILE) then
+        local ok, raw = pcall(readfile, VIEWPORT_CACHE_FILE)
+        if ok and raw and #raw > 100 then
+            viewportJsonBody = raw
+            print("[Cache] Loaded from disk")
+        end
+    end
+
+    if not viewportJsonBody then
+        local ok, body = pcall(game.HttpGet, game, VIEWPORT_CACHE_URL)
+        if ok and body and #body > 100 then
+            viewportJsonBody = body
+            print("[Cache] Fetched from GitHub")
+            if writefile then
+                writefile(VIEWPORT_CACHE_FILE, body)
+            end
+        else
+            error("[Animator6D] Failed to fetch JSON — cannot continue")
+        end
+    end
+
+    local viewportAnimData = HttpService:JSONDecode(viewportJsonBody)
+
+    loadstring(game:HttpGet(
+        "https://raw.githubusercontent.com/NetlessScripter/Universal-KJ-Port/refs/heads/main/Animation%20Module"
+    ))()
+
+    Animator6D(viewportAnimData, nil, nil, charClone)
 
     local renderSteppedConn = RunService.RenderStepped:Connect(function()
         camRig.RootPart.CFrame = Character.HumanoidRootPart.CFrame * CFrame.new(0, -3, 0) * CFrame.Angles(0, math.pi, 0)
@@ -496,11 +529,10 @@ local function PlayViewportFlashEffect(camRig, throwAnimTrack)
             task.spawn(function()
                 PlayJumpMeshTrails(Character)
             end)
-            task.spawn(PlayAnimator6DFromCache)
             PlayJumpBurstAndHighlight(Character)
         end)
 
-        LaunchCharacterAndCleanup(flashClone, charClone, throwAnimTrack, viewportAnimTrack, renderSteppedConn)
+        LaunchCharacterAndCleanup(flashClone, charClone, throwAnimTrack, renderSteppedConn)
     end)
 end
 
@@ -590,13 +622,10 @@ local function PlaySpiritBombSequence()
         end)
     end)
 
-    task.spawn(function()
-        task.wait(0.5)
-        FireReplicationEvent({
-            Intensity = 5,
-            Effect = "Camshake"
-        })
-    end)
+    FireReplicationEvent({
+        Intensity = 5,
+        Effect = "Camshake"
+    })
 end
 
 local TARGET_ANIMATION_ID = "rbxassetid://11365563255"
