@@ -193,7 +193,9 @@ RunService.Heartbeat:Connect(function()
     end
 end)
 
-local musicVolume        = 1.75
+local musicVolume            = 1.75
+local minValidSongFileBytes  = 10240
+local maxPrematureEndRetries = 3
 
 local musicSongs = {
     { name = "Asleep In Space 2", file = "AsleepInSpace2.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Goku-Version-2/refs/heads/main/Asleep%20In%20Space%202.mp3" },
@@ -205,10 +207,19 @@ local musicSongs = {
     { name = "resonance - home (slowed & reverb)", file = "ResonanceHome.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/resonance%20-%20home%20(slowed%20%26%20reverb).mp3" },
 }
 
-local function GetGitSound(url, filename)
+local function DownloadSongFile(url, filename)
     if not isfile(filename) then
         writefile(filename, game:HttpGet(url))
     end
+
+    local readOk, contents = pcall(readfile, filename)
+    if not readOk or #contents < minValidSongFileBytes then
+        writefile(filename, game:HttpGet(url))
+    end
+end
+
+local function GetGitSound(url, filename)
+    DownloadSongFile(url, filename)
     local getAsset = getcustomasset or getsynasset
     local sound = Instance.new("Sound")
     sound.SoundId = getAsset(filename)
@@ -216,10 +227,26 @@ local function GetGitSound(url, filename)
     return sound
 end
 
-local musicActive       = true
-local currentSongIndex  = nil
-local usedStartingSong  = false
-local currentMusicSound = nil
+local function WaitForSoundToLoad(sound, timeoutSeconds)
+    if sound.IsLoaded then return end
+    local isLoaded = false
+    local loadedConnection
+    loadedConnection = sound.Loaded:Connect(function()
+        isLoaded = true
+    end)
+    local elapsedSeconds = 0
+    while not isLoaded and not sound.IsLoaded and elapsedSeconds < timeoutSeconds do
+        task.wait(0.1)
+        elapsedSeconds = elapsedSeconds + 0.1
+    end
+    loadedConnection:Disconnect()
+end
+
+local musicActive            = true
+local currentSongIndex       = nil
+local usedStartingSong       = false
+local currentMusicSound      = nil
+local prematureEndRetryCount = 0
 
 local function FindSongIndexByName(name)
     for i, song in ipairs(musicSongs) do
@@ -239,15 +266,20 @@ local function PickNextSongIndex()
     return index
 end
 
-local function PlaySoundCycle()
+local function PlaySoundCycle(isRetryingCurrentSong)
     if not musicActive then return end
 
-    if not usedStartingSong then
-        usedStartingSong = true
-        local startIndex = (typeof(_G.StartingSong) == "string" and _G.StartingSong ~= "") and FindSongIndexByName(_G.StartingSong)
-        currentSongIndex = startIndex or PickNextSongIndex()
+    if isRetryingCurrentSong then
+        prematureEndRetryCount = prematureEndRetryCount + 1
     else
-        currentSongIndex = PickNextSongIndex()
+        prematureEndRetryCount = 0
+        if not usedStartingSong then
+            usedStartingSong = true
+            local startIndex = (typeof(_G.StartingSong) == "string" and _G.StartingSong ~= "") and FindSongIndexByName(_G.StartingSong)
+            currentSongIndex = startIndex or PickNextSongIndex()
+        else
+            currentSongIndex = PickNextSongIndex()
+        end
     end
 
     local entry = musicSongs[currentSongIndex]
@@ -257,12 +289,25 @@ local function PlaySoundCycle()
     sound.Name   = entry.name
     sound.Volume = musicVolume
     currentMusicSound = sound
+
+    WaitForSoundToLoad(sound, 5)
+    if not musicActive then
+        sound:Destroy()
+        return
+    end
+
     sound:Play()
 
     sound.Ended:Connect(function()
+        local reachedEnd = sound.TimeLength <= 0 or sound.TimePosition >= sound.TimeLength - 1
         sound:Destroy()
-        if musicActive then
+
+        if not musicActive then return end
+
+        if reachedEnd or prematureEndRetryCount >= maxPrematureEndRetries then
             PlaySoundCycle()
+        else
+            PlaySoundCycle(true)
         end
     end)
 end
