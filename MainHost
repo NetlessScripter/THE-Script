@@ -219,6 +219,7 @@ task.delay(1, function()
 loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/Miles-Morales/refs/heads/main/Revamped%20Lighting%20System"))()
 loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/GOKU/refs/heads/main/RAIN%20MODULE"))()
 loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/Vegito-/refs/heads/main/Lock%20On"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/HowDidIPullThisOff"))()
 end)
 
 local function EmitVFX(vfxTemplate, emitCount, keepEnabled)
