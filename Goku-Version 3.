@@ -196,14 +196,16 @@ end)
 local musicVolume            = 1.75
 local minValidSongFileBytes  = 10240
 local maxPrematureEndRetries = 3
+local LucySongCap            = 66 -- 1:06 (1 minute, 6 seconds) — "lucy~" is cut off here instead of playing to its natural end
+local LucyFadeOutStart       = 60 -- 1:00 — "lucy~" starts fading out here so the cutoff at LucySongCap feels intentional, not abrupt
 
 local musicSongs = {
     { name = "Asleep In Space 2", file = "AsleepInSpace2.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Goku-Version-2/refs/heads/main/Asleep%20In%20Space%202.mp3" },
     { name = "9 - Dean Blunt (Slowed)", file = "DeanBluntSlowed.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/9%20-%20Dean%20Blunt%20(Slowed).mp3" },
-    { name = "Its like i'm not even here.", file = "NotEvenHere.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/It’s%20like%20im%20not%20even%20here..mp3" },
+    { name = "Waiting for You~", file = "WaitingForYou.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/Waiting%20for%20You%7E.mp3" },
     { name = "do i clench my fists?", file = "ClenchMyFists.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/do%20i%20clench%20my%20fists%3F.mp3" },
     { name = "lucy~", file = "Lucy.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/lucy%7E.mp3" },
-    { name = "mistake", file = "Mistake.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/mistake.mp3.mp3" },
+    { name = "im a mistake", file = "ImAMistake.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/Im%20a%20mistake.mp3" },
     { name = "resonance - home (slowed & reverb)", file = "ResonanceHome.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/resonance%20-%20home%20(slowed%20%26%20reverb).mp3" },
 }
 
@@ -301,8 +303,10 @@ local function PlaySoundCycle(isRetryingCurrentSong)
     local fadeInTween = TweenService:Create(sound, TweenInfo.new(5, Enum.EasingStyle.Linear), { Volume = musicVolume })
     fadeInTween:Play()
 
-    sound.Ended:Connect(function()
-        local reachedEnd = sound.TimeLength <= 0 or sound.TimePosition >= sound.TimeLength - 1
+    local songFinished = false
+    local function FinishSong(reachedEnd)
+        if songFinished then return end
+        songFinished = true
         sound:Destroy()
 
         if not musicActive then return end
@@ -312,7 +316,35 @@ local function PlaySoundCycle(isRetryingCurrentSong)
         else
             PlaySoundCycle(true)
         end
+    end
+
+    sound.Ended:Connect(function()
+        local reachedEnd = sound.TimeLength <= 0 or sound.TimePosition >= sound.TimeLength - 1
+        FinishSong(reachedEnd)
     end)
+
+    -- "lucy~" gets manually cut off at LucySongCap, fading out from LucyFadeOutStart
+    -- so the transition into the next song feels intentional instead of abrupt.
+    if entry.name:lower() == "lucy~" then
+        task.spawn(function()
+            while not songFinished and musicActive and sound.Parent and sound.TimePosition < LucyFadeOutStart do
+                task.wait(0.1)
+            end
+            if songFinished or not musicActive or not sound.Parent then return end
+
+            local fadeOutDuration = math.max(LucySongCap - LucyFadeOutStart, 0.1)
+            local fadeOutTween = TweenService:Create(sound, TweenInfo.new(fadeOutDuration, Enum.EasingStyle.Linear), { Volume = 0 })
+            fadeOutTween:Play()
+
+            while not songFinished and musicActive and sound.Parent and sound.TimePosition < LucySongCap do
+                task.wait(0.1)
+            end
+            if songFinished then return end
+
+            sound:Stop()
+            FinishSong(true)
+        end)
+    end
 end
 
 if _G.Music then
