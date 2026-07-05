@@ -7093,9 +7093,18 @@ RunService.RenderStepped:Connect(function()
 		TweenService:Create(Part, TweenInfo.new(0.05, Enum.EasingStyle.Linear, Enum.EasingDirection.In, 0, false, 0), {Transparency = 0.8}):Play()
 		TweenService:Create(Weld, TweenInfo.new(0.3, Enum.EasingStyle.Linear, Enum.EasingDirection.In, 0, false, 0), {C0 = CFrame.new(cframe.Position.X, cframe.Position.Y, math.floor(Magnitude/100)*4)}):Play()
 
-		wait(0.225)
-
-		TweenService:Create(Part, TweenInfo.new(0.095, Enum.EasingStyle.Linear, Enum.EasingDirection.In, 0, false, 0), {Transparency = 1}):Play()
+		-- Non-blocking: never wait()/task.wait() inside a RenderStepped callback.
+		-- A blocking wait here let a new copy of this whole block spawn every
+		-- frame while the old one was still stalled, stacking up coroutines,
+		-- Parts, Welds, and Tweens faster than Debris could clean them up.
+		-- Part/Weld are reused globals, so grab local refs before scheduling
+		-- the delayed callback or a later frame's reassignment would leak in.
+		local partRef = Part
+		task.delay(0.225, function()
+			if partRef and partRef.Parent then
+				TweenService:Create(partRef, TweenInfo.new(0.095, Enum.EasingStyle.Linear, Enum.EasingDirection.In, 0, false, 0), {Transparency = 1}):Play()
+			end
+		end)
 	else
 		for _, v in pairs(wndAttachment:GetChildren()) do
 			if v:IsA("ParticleEmitter") then
