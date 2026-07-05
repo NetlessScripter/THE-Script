@@ -200,7 +200,7 @@ local maxPrematureEndRetries = 3
 local musicSongs = {
     { name = "Asleep In Space 2", file = "AsleepInSpace2.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Goku-Version-2/refs/heads/main/Asleep%20In%20Space%202.mp3" },
     { name = "9 - Dean Blunt (Slowed)", file = "DeanBluntSlowed.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/9%20-%20Dean%20Blunt%20(Slowed).mp3" },
-    { name = "It's like i'm not even here.", file = "NotEvenHere.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/It’s%20like%20im%20not%20even%20here..mp3" },
+    { name = "Its like i'm not even here.", file = "NotEvenHere.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/It’s%20like%20im%20not%20even%20here..mp3" },
     { name = "do i clench my fists?", file = "ClenchMyFists.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/do%20i%20clench%20my%20fists%3F.mp3" },
     { name = "lucy~", file = "Lucy.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/lucy%7E.mp3" },
     { name = "mistake", file = "Mistake.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/mistake.mp3.mp3" },
@@ -298,7 +298,7 @@ local function PlaySoundCycle(isRetryingCurrentSong)
 
     sound:Play()
 
-    local fadeInTween = TweenService:Create(sound, TweenInfo.new(1, Enum.EasingStyle.Linear), { Volume = musicVolume })
+    local fadeInTween = TweenService:Create(sound, TweenInfo.new(5, Enum.EasingStyle.Linear), { Volume = musicVolume })
     fadeInTween:Play()
 
     sound.Ended:Connect(function()
