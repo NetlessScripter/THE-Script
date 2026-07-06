@@ -44,12 +44,9 @@ do
     }
 
     local function ApplyConcreteTexture(part)
-        -- Grab the part's existing color BEFORE we touch anything, since the
-        -- source image is white/grayscale and relies on Texture.Color3 to tint it.
+        -- Leave part.Material as Concrete — outside scripts/raycasts that read
+        -- Material (footstep sounds, other systems) need to keep seeing Concrete.
         local tintColor = part.Color
-
-        -- Plastic renders the custom image cleanly; Concrete's built-in bump/tint would distort it
-        part.Material = Enum.Material.SmoothPlastic
 
         for _, face in ipairs(faceList) do
             local existing = part:FindFirstChild("ConcreteReplace_" .. face.Name)
@@ -109,12 +106,9 @@ do
     }
 
     local function ApplyGrassTexture(part)
-        -- Grab the part's existing color BEFORE we touch anything, since the
-        -- source image is white/grayscale and relies on Texture.Color3 to tint it.
+        -- Leave part.Material as Grass — outside scripts/raycasts that read
+        -- Material (footstep sounds, other systems) need to keep seeing Grass.
         local tintColor = part.Color
-
-        -- Plastic renders the custom image cleanly; Grass's built-in bump/tint would distort it
-        part.Material = Enum.Material.SmoothPlastic
 
         for _, face in ipairs(faceList) do
             local existing = part:FindFirstChild("GrassReplace_" .. face.Name)
