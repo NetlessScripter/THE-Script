@@ -142,6 +142,68 @@ do
     end
 end
 
+-- === Wood Texture Replacer ===
+-- Scans Workspace.Map for any BasePart whose Material is Enum.Material.Wood
+-- and re-skins it with a custom downloaded texture (all 6 faces, tiled to size).
+do
+    local woodTextureUrl  = "https://raw.githubusercontent.com/NetlessScripter/Texture-Reworks/refs/heads/main/IMG_3567.png"
+    local woodTextureFile = "WoodReplace.png"
+
+    if not isfile(woodTextureFile) then
+        writefile(woodTextureFile, game:HttpGet(woodTextureUrl))
+    end
+
+    local getAsset = getcustomasset or getsynasset
+    local woodAssetId = getAsset(woodTextureFile)
+
+    local studsPerTile = 4 -- tile density; raise for smaller/more repeated tiles
+
+    local faceList = {
+        Enum.NormalId.Top,
+        Enum.NormalId.Bottom,
+        Enum.NormalId.Front,
+        Enum.NormalId.Back,
+        Enum.NormalId.Left,
+        Enum.NormalId.Right,
+    }
+
+    local function ApplyWoodTexture(part)
+        -- Leave part.Material as Wood — outside scripts/raycasts that read
+        -- Material (footstep sounds, other systems) need to keep seeing Wood.
+        local tintColor = part.Color
+
+        for _, face in ipairs(faceList) do
+            local existing = part:FindFirstChild("WoodReplace_" .. face.Name)
+            local tex = existing or Instance.new("Texture")
+            tex.Name          = "WoodReplace_" .. face.Name
+            tex.Texture       = woodAssetId
+            tex.Face          = face
+            tex.Color3        = tintColor
+            tex.StudsPerTileU = studsPerTile
+            tex.StudsPerTileV = studsPerTile
+            tex.Parent        = part
+        end
+    end
+
+    local mapFolder = Workspace:FindFirstChild("Map")
+    if mapFolder then
+        for _, obj in ipairs(mapFolder:GetDescendants()) do
+            if obj:IsA("BasePart") and obj.Material == Enum.Material.Wood then
+                ApplyWoodTexture(obj)
+            end
+        end
+
+        -- Catch parts added to the map later (e.g. streamed-in / spawned pieces)
+        mapFolder.DescendantAdded:Connect(function(obj)
+            if obj:IsA("BasePart") and obj.Material == Enum.Material.Wood then
+                ApplyWoodTexture(obj)
+            end
+        end)
+    else
+        warn("[WoodReplacer] Workspace.Map folder not found.")
+    end
+end
+
 if _G.Rain == nil then _G.Rain = true end
 if _G.Music == nil then _G.Music = true end
 
