@@ -18,6 +18,136 @@ do
     end
 end
 
+-- === Concrete Texture Replacer ===
+-- Scans Workspace.Map for any BasePart whose Material is Enum.Material.Concrete
+-- and re-skins it with a custom downloaded texture (all 6 faces, tiled to size).
+do
+    local concreteTextureUrl  = "https://raw.githubusercontent.com/NetlessScripter/Texture-Reworks/refs/heads/main/IMG_3562.png"
+    local concreteTextureFile = "ConcreteReplace.png"
+
+    if not isfile(concreteTextureFile) then
+        writefile(concreteTextureFile, game:HttpGet(concreteTextureUrl))
+    end
+
+    local getAsset = getcustomasset or getsynasset
+    local concreteAssetId = getAsset(concreteTextureFile)
+
+    local studsPerTile = 4 -- tile density; raise for smaller/more repeated tiles
+
+    local faceList = {
+        Enum.NormalId.Top,
+        Enum.NormalId.Bottom,
+        Enum.NormalId.Front,
+        Enum.NormalId.Back,
+        Enum.NormalId.Left,
+        Enum.NormalId.Right,
+    }
+
+    local function ApplyConcreteTexture(part)
+        -- Grab the part's existing color BEFORE we touch anything, since the
+        -- source image is white/grayscale and relies on Texture.Color3 to tint it.
+        local tintColor = part.Color
+
+        -- Plastic renders the custom image cleanly; Concrete's built-in bump/tint would distort it
+        part.Material = Enum.Material.SmoothPlastic
+
+        for _, face in ipairs(faceList) do
+            local existing = part:FindFirstChild("ConcreteReplace_" .. face.Name)
+            local tex = existing or Instance.new("Texture")
+            tex.Name          = "ConcreteReplace_" .. face.Name
+            tex.Texture       = concreteAssetId
+            tex.Face          = face
+            tex.Color3        = tintColor
+            tex.StudsPerTileU = studsPerTile
+            tex.StudsPerTileV = studsPerTile
+            tex.Parent        = part
+        end
+    end
+
+    local mapFolder = Workspace:FindFirstChild("Map")
+    if mapFolder then
+        for _, obj in ipairs(mapFolder:GetDescendants()) do
+            if obj:IsA("BasePart") and obj.Material == Enum.Material.Concrete then
+                ApplyConcreteTexture(obj)
+            end
+        end
+
+        -- Catch parts added to the map later (e.g. streamed-in / spawned pieces)
+        mapFolder.DescendantAdded:Connect(function(obj)
+            if obj:IsA("BasePart") and obj.Material == Enum.Material.Concrete then
+                ApplyConcreteTexture(obj)
+            end
+        end)
+    else
+        warn("[ConcreteReplacer] Workspace.Map folder not found.")
+    end
+end
+
+-- === Grass Texture Replacer ===
+-- Scans Workspace.Map for any BasePart whose Material is Enum.Material.Grass
+-- and re-skins it with a custom downloaded texture (all 6 faces, tiled to size).
+do
+    local grassTextureUrl  = "https://raw.githubusercontent.com/NetlessScripter/Texture-Reworks/refs/heads/main/IMG_3563.png"
+    local grassTextureFile = "GrassReplace.png"
+
+    if not isfile(grassTextureFile) then
+        writefile(grassTextureFile, game:HttpGet(grassTextureUrl))
+    end
+
+    local getAsset = getcustomasset or getsynasset
+    local grassAssetId = getAsset(grassTextureFile)
+
+    local studsPerTile = 4 -- tile density; raise for smaller/more repeated tiles
+
+    local faceList = {
+        Enum.NormalId.Top,
+        Enum.NormalId.Bottom,
+        Enum.NormalId.Front,
+        Enum.NormalId.Back,
+        Enum.NormalId.Left,
+        Enum.NormalId.Right,
+    }
+
+    local function ApplyGrassTexture(part)
+        -- Grab the part's existing color BEFORE we touch anything, since the
+        -- source image is white/grayscale and relies on Texture.Color3 to tint it.
+        local tintColor = part.Color
+
+        -- Plastic renders the custom image cleanly; Grass's built-in bump/tint would distort it
+        part.Material = Enum.Material.SmoothPlastic
+
+        for _, face in ipairs(faceList) do
+            local existing = part:FindFirstChild("GrassReplace_" .. face.Name)
+            local tex = existing or Instance.new("Texture")
+            tex.Name          = "GrassReplace_" .. face.Name
+            tex.Texture       = grassAssetId
+            tex.Face          = face
+            tex.Color3        = tintColor
+            tex.StudsPerTileU = studsPerTile
+            tex.StudsPerTileV = studsPerTile
+            tex.Parent        = part
+        end
+    end
+
+    local mapFolder = Workspace:FindFirstChild("Map")
+    if mapFolder then
+        for _, obj in ipairs(mapFolder:GetDescendants()) do
+            if obj:IsA("BasePart") and obj.Material == Enum.Material.Grass then
+                ApplyGrassTexture(obj)
+            end
+        end
+
+        -- Catch parts added to the map later (e.g. streamed-in / spawned pieces)
+        mapFolder.DescendantAdded:Connect(function(obj)
+            if obj:IsA("BasePart") and obj.Material == Enum.Material.Grass then
+                ApplyGrassTexture(obj)
+            end
+        end)
+    else
+        warn("[GrassReplacer] Workspace.Map folder not found.")
+    end
+end
+
 if _G.Rain == nil then _G.Rain = true end
 if _G.Music == nil then _G.Music = true end
 
