@@ -221,68 +221,6 @@ do
     end
 end
 
--- === Slate Texture Replacer ===
--- Scans Workspace.Map for any BasePart whose Material is Enum.Material.Slate
--- and re-skins it with a custom downloaded texture (all 6 faces, tiled to size).
-do
-    local slateTextureUrl  = "https://raw.githubusercontent.com/NetlessScripter/Texture-Reworks/refs/heads/main/IMG_3574.png"
-    local slateTextureFile = "SlateReplace.png"
-
-    if not isfile(slateTextureFile) then
-        writefile(slateTextureFile, game:HttpGet(slateTextureUrl))
-    end
-
-    local getAsset = getcustomasset or getsynasset
-    local slateAssetId = getAsset(slateTextureFile)
-
-    local studsPerTile = 4 -- tile density; raise for smaller/more repeated tiles
-
-    local faceList = {
-        Enum.NormalId.Top,
-        Enum.NormalId.Bottom,
-        Enum.NormalId.Front,
-        Enum.NormalId.Back,
-        Enum.NormalId.Left,
-        Enum.NormalId.Right,
-    }
-
-    local function ApplySlateTexture(part)
-        -- Leave part.Material as Slate — outside scripts/raycasts that read
-        -- Material (footstep sounds, other systems) need to keep seeing Slate.
-        local tintColor = part.Color
-
-        for _, face in ipairs(faceList) do
-            local existing = part:FindFirstChild("SlateReplace_" .. face.Name)
-            local tex = existing or Instance.new("Texture")
-            tex.Name          = "SlateReplace_" .. face.Name
-            tex.Texture       = slateAssetId
-            tex.Face          = face
-            tex.Color3        = tintColor
-            tex.StudsPerTileU = studsPerTile
-            tex.StudsPerTileV = studsPerTile
-            tex.Parent        = part
-        end
-    end
-
-    local mapFolder = Workspace:FindFirstChild("Map")
-    if mapFolder then
-        for _, obj in ipairs(mapFolder:GetDescendants()) do
-            if obj:IsA("BasePart") and obj.Material == Enum.Material.Slate and not IsCharacterPart(obj) then
-                ApplySlateTexture(obj)
-            end
-        end
-
-        -- Catch parts added to the map later (e.g. streamed-in / spawned pieces)
-        mapFolder.DescendantAdded:Connect(function(obj)
-            if obj:IsA("BasePart") and obj.Material == Enum.Material.Slate and not IsCharacterPart(obj) then
-                ApplySlateTexture(obj)
-            end
-        end)
-    else
-        warn("[SlateReplacer] Workspace.Map folder not found.")
-    end
-end
-
 if _G.Rain == nil then _G.Rain = true end
 if _G.Music == nil then _G.Music = true end
 
