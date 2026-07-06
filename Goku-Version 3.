@@ -5,17 +5,21 @@ local RunService     = game:GetService("RunService")
 local TweenService   = game:GetService("TweenService")
 local Lighting       = game:GetService("Lighting")
 local Workspace      = game:GetService("Workspace")
+local StarterGui     = game:GetService("StarterGui")
 
--- Toggles: set _G.Rain / _G.Music to true or false BEFORE running this script to force
--- a setting. If left unset, both default to on (their regular behavior).
+do
+    local todayDate = os.date("*t")
+    if todayDate.month == 6 and todayDate.day == 6 then
+        StarterGui:SetCore("SendNotification", {
+            Title = "Reminder",
+            Text = "Make sure you tell Cru Happy Birthday!",
+            Duration = 10,
+        })
+    end
+end
+
 if _G.Rain == nil then _G.Rain = true end
 if _G.Music == nil then _G.Music = true end
-
--- Optional: set _G.StartingSong to a song name (case-insensitive, matches the "name"
--- field in musicSongs below) to force that song to play first. Requires _G.Music to be
--- true - if music is disabled nothing plays regardless of this. If unset, empty (""),
--- or the name doesn't match any song, a random song plays first like normal.
--- Example: _G.StartingSong = "Lucy~"
 
 local localPlayer    = Players.LocalPlayer
 local character      = localPlayer.Character or localPlayer.CharacterAdded:Wait()
@@ -196,8 +200,8 @@ end)
 local musicVolume            = 1.75
 local minValidSongFileBytes  = 10240
 local maxPrematureEndRetries = 3
-local LucySongCap            = 66 -- 1:06 (1 minute, 6 seconds) — "lucy~" is cut off here instead of playing to its natural end
-local LucyFadeOutStart       = 60 -- 1:00 — "lucy~" starts fading out here so the cutoff at LucySongCap feels intentional, not abrupt
+local LucySongCap            = 66
+local LucyFadeOutStart       = 60
 
 local musicSongs = {
     { name = "Asleep In Space 2", file = "AsleepInSpace2.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Goku-Version-2/refs/heads/main/Asleep%20In%20Space%202.mp3" },
@@ -323,8 +327,6 @@ local function PlaySoundCycle(isRetryingCurrentSong)
         FinishSong(reachedEnd)
     end)
 
-    -- "lucy~" gets manually cut off at LucySongCap, fading out from LucyFadeOutStart
-    -- so the transition into the next song feels intentional instead of abrupt.
     if entry.name:lower() == "lucy~" then
         task.spawn(function()
             while not songFinished and musicActive and sound.Parent and sound.TimePosition < LucyFadeOutStart do
@@ -366,7 +368,6 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-S
 loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/SpiritBomb"))()
 end)
 
--- Rain module can tank FPS on some setups; controlled by _G.Rain (see top of script).
 task.delay(1, function()
     if _G.Rain then
         loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/GOKU/refs/heads/main/RAIN%20MODULE"))()
@@ -490,10 +491,8 @@ local function DoTeleport()
     SetVisibility(false)
 end
 
--- Mobile: tap button to teleport
 afterImageBtn.MouseButton1Click:Connect(DoTeleport)
 
--- PC: press R to teleport
 local UserInputService = game:GetService("UserInputService")
 if not isMobile then
     UserInputService.InputBegan:Connect(function(input, gameProcessed)
@@ -748,15 +747,10 @@ local ssjOnlyAnimIds = {
 local faceDecal = headPart:FindFirstChildWhichIsA("Decal")
 if faceDecal then faceDecal.Texture = ssjFaceId end
 
--- SSJ Blue emote color
 local ssjbColor = Color3.new(0.05, 0.45, 1.0)
 
--- Tracks whether an SSJB transform is still current; a revert anim clears this
--- so any transform steps still delayed in-flight (aura creation/enable) bail out
--- instead of showing the aura back up after the player already reverted.
 local ssjbActive = false
 
--- Triggered when specialFaceAnimId (12447707844) plays
 local function TriggerSSJBEmote()
     ssjbActive = true
     local v9 = {}
@@ -811,7 +805,7 @@ local function TriggerSSJBEmote()
         end)
 
         if ssjbActive and l_Accessory_4 and l_Accessory_4.Parent then
-            -- Swap current SSJ hair to SSJ Blue
+
             local oldHair = character:FindFirstChild("GokuSSJHair")
             if oldHair then
                 local oldLight = oldHair:FindFirstChildOfClass("PointLight")
@@ -965,7 +959,7 @@ humanoid.AnimationPlayed:Connect(function(track)
     if not faceDecal then return end
     local animId = track.Animation.AnimationId
     if animId == specialFaceAnimId then
-        track:Stop() -- immediately cancel the trigger anim
+        track:Stop()
         faceDecal.Texture = ""
         task.wait()
         faceDecal.Texture = specialFaceId
@@ -1202,7 +1196,7 @@ task.spawn(function()
     while true do
         for _, text in ipairs(texts) do
             typeText(text, 1.45)
-            task.wait(38.55) -- 40 seconds total including typing
+            task.wait(38.55)
         end
     end
 end)
