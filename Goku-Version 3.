@@ -858,7 +858,7 @@ task.spawn(function()
 end)
 
 local ssjFaceId     = "rbxassetid://12876975875"
-local specialFaceId = "rbxassetid://12928673086"
+local specialFaceId = "rbxassetid://74087459345342"
 local specialFaceAnimId = "rbxassetid://12447707844"
 
 local ssjOnlyAnimIds = {
@@ -877,6 +877,17 @@ local ssjbActive = false
 
 local function TriggerSSJBEmote()
     ssjbActive = true
+
+    local torsoPart = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
+    if torsoPart then
+        local ssjbSound = Instance.new("Sound")
+        ssjbSound.SoundId = "rbxassetid://117425361961655"
+        ssjbSound.Volume  = 3
+        ssjbSound.Parent  = torsoPart
+        ssjbSound:Play()
+        Debris:AddItem(ssjbSound, ssjbSound.TimeLength > 0 and ssjbSound.TimeLength or 10)
+    end
+
     local v9 = {}
     local a = Instance.new("Animation")
     a.AnimationId = "rbxassetid://96993907314948"
