@@ -72,8 +72,8 @@ loadstring(game:HttpGet(
 -- Build a KeyframeSequence from the JSON at startup so Animator6D takes the
 -- Instance path (AnimPlayer.new directly) with zero loading delay at call time.
 do
-	local _CACHE_URL  = "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/anim6d_kfcache_15986498343.json"
-	local _CACHE_FILE = "anim6d_kfcache_15986498343.json"
+	local _CACHE_URL  = "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/anim6d_kfcache_17585779478.json"
+	local _CACHE_FILE = "anim6d_kfcache_17585779478.json"
 	local _HttpService = game:GetService("HttpService")
 
 	local _jsonBody
@@ -6284,8 +6284,8 @@ end)
 						end
 					end
 
-					-- After 1 second: disable all particles then fade the whole model out
-					task.delay(1, function()
+					-- After 0.6 seconds: disable all particles then fade the whole model out
+					task.delay(0.6, function()
 						-- Disable particles first so they stop emitting mid-fade
 						for _, desc in ipairs(model:GetDescendants()) do
 							if desc:IsA("ParticleEmitter") or desc:IsA("Trail") or desc:IsA("Beam") then
@@ -6302,7 +6302,7 @@ end)
 						end
 
 						-- Tween transparency from original to 1 over 0.5s
-						local fadeDuration = 0.5
+						local fadeDuration = 0.3
 						local elapsed = 0
 						local fadeConn
 						fadeConn = game:GetService("RunService").Heartbeat:Connect(function(dt)
