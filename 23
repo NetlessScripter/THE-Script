@@ -6293,15 +6293,31 @@ end)
 							end
 						end
 
-						-- Collect all parts and their original transparencies
+						-- Collect all fadeable descendants and their original values
 						local parts = {}
+						local decals = {}
+						local lights = {}
+						local guis = {}
 						for _, desc in ipairs(model:GetDescendants()) do
 							if desc:IsA("BasePart") then
 								table.insert(parts, {part = desc, originalTransparency = desc.Transparency})
+							elseif desc:IsA("Decal") or desc:IsA("Texture") then
+								table.insert(decals, {part = desc, originalTransparency = desc.Transparency})
+							elseif desc:IsA("Light") then
+								table.insert(lights, {part = desc, originalBrightness = desc.Brightness})
+							elseif desc:IsA("GuiObject") then
+								local isImage = desc:IsA("ImageLabel") or desc:IsA("ImageButton")
+								local isText  = desc:IsA("TextLabel") or desc:IsA("TextButton") or desc:IsA("TextBox")
+								table.insert(guis, {
+									part = desc,
+									originalBackground = desc.BackgroundTransparency,
+									originalImage = isImage and desc.ImageTransparency or nil,
+									originalText = isText and desc.TextTransparency or nil,
+								})
 							end
 						end
 
-						-- Tween transparency from original to 1 over 0.5s
+						-- Tween transparency from original to 1 over 0.3s
 						local fadeDuration = 0.3
 						local elapsed = 0
 						local fadeConn
@@ -6311,6 +6327,27 @@ end)
 							for _, entry in ipairs(parts) do
 								if entry.part and entry.part.Parent then
 									entry.part.Transparency = entry.originalTransparency + (1 - entry.originalTransparency) * alpha
+								end
+							end
+							for _, entry in ipairs(decals) do
+								if entry.part and entry.part.Parent then
+									entry.part.Transparency = entry.originalTransparency + (1 - entry.originalTransparency) * alpha
+								end
+							end
+							for _, entry in ipairs(lights) do
+								if entry.part and entry.part.Parent then
+									entry.part.Brightness = entry.originalBrightness * (1 - alpha)
+								end
+							end
+							for _, entry in ipairs(guis) do
+								if entry.part and entry.part.Parent then
+									entry.part.BackgroundTransparency = entry.originalBackground + (1 - entry.originalBackground) * alpha
+									if entry.originalImage then
+										entry.part.ImageTransparency = entry.originalImage + (1 - entry.originalImage) * alpha
+									end
+									if entry.originalText then
+										entry.part.TextTransparency = entry.originalText + (1 - entry.originalText) * alpha
+									end
 								end
 							end
 							if alpha >= 1 then
@@ -6341,7 +6378,7 @@ ContentProvider  = game:GetService("ContentProvider")
 FLY_SPEED    = 110
 BOOST_MULT   = 2
 BANK_ANGLE   = 20
-MAX_FLY_HEIGHT = 350
+MAX_FLY_HEIGHT = 2500
 
 FOV_NORMAL   = nil
 FOV_FLYING   = nil
