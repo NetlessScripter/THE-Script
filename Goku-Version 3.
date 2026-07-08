@@ -20,10 +20,6 @@ do
     end
 end
 
--- Shared helper for the texture replacers below: never re-skin a part that
--- belongs to a character rig (hair/effects sometimes use Grass/Wood/Concrete
--- materials purely for their shader look, and could end up as a descendant
--- of Workspace.Map temporarily during emotes, ragdolls, etc.)
 local function IsCharacterPart(part)
     local ancestor = part.Parent
     while ancestor do
@@ -35,9 +31,6 @@ local function IsCharacterPart(part)
     return false
 end
 
--- === Concrete Texture Replacer ===
--- Scans Workspace.Map for any BasePart whose Material is Enum.Material.Concrete
--- and re-skins it with a custom downloaded texture (all 6 faces, tiled to size).
 do
     local concreteTextureUrl  = "https://raw.githubusercontent.com/NetlessScripter/Texture-Reworks/refs/heads/main/IMG_3562.png"
     local concreteTextureFile = "ConcreteReplace.png"
@@ -49,7 +42,7 @@ do
     local getAsset = getcustomasset or getsynasset
     local concreteAssetId = getAsset(concreteTextureFile)
 
-    local studsPerTile = 4 -- tile density; raise for smaller/more repeated tiles
+    local studsPerTile = 4
 
     local faceList = {
         Enum.NormalId.Top,
@@ -61,8 +54,7 @@ do
     }
 
     local function ApplyConcreteTexture(part)
-        -- Leave part.Material as Concrete — outside scripts/raycasts that read
-        -- Material (footstep sounds, other systems) need to keep seeing Concrete.
+
         local tintColor = part.Color
 
         for _, face in ipairs(faceList) do
@@ -86,7 +78,6 @@ do
             end
         end
 
-        -- Catch parts added to the map later (e.g. streamed-in / spawned pieces)
         mapFolder.DescendantAdded:Connect(function(obj)
             if obj:IsA("BasePart") and obj.Material == Enum.Material.Concrete and not IsCharacterPart(obj) then
                 ApplyConcreteTexture(obj)
@@ -97,9 +88,6 @@ do
     end
 end
 
--- === Grass Texture Replacer ===
--- Scans Workspace.Map for any BasePart whose Material is Enum.Material.Grass
--- and re-skins it with a custom downloaded texture (all 6 faces, tiled to size).
 do
     local grassTextureUrl  = "https://raw.githubusercontent.com/NetlessScripter/Texture-Reworks/refs/heads/main/IMG_3563.png"
     local grassTextureFile = "GrassReplace.png"
@@ -111,7 +99,7 @@ do
     local getAsset = getcustomasset or getsynasset
     local grassAssetId = getAsset(grassTextureFile)
 
-    local studsPerTile = 4 -- tile density; raise for smaller/more repeated tiles
+    local studsPerTile = 4
 
     local faceList = {
         Enum.NormalId.Top,
@@ -123,8 +111,7 @@ do
     }
 
     local function ApplyGrassTexture(part)
-        -- Leave part.Material as Grass — outside scripts/raycasts that read
-        -- Material (footstep sounds, other systems) need to keep seeing Grass.
+
         local tintColor = part.Color
 
         for _, face in ipairs(faceList) do
@@ -148,7 +135,6 @@ do
             end
         end
 
-        -- Catch parts added to the map later (e.g. streamed-in / spawned pieces)
         mapFolder.DescendantAdded:Connect(function(obj)
             if obj:IsA("BasePart") and obj.Material == Enum.Material.Grass and not IsCharacterPart(obj) then
                 ApplyGrassTexture(obj)
@@ -159,9 +145,6 @@ do
     end
 end
 
--- === Wood Texture Replacer ===
--- Scans Workspace.Map for any BasePart whose Material is Enum.Material.Wood
--- and re-skins it with a custom downloaded texture (all 6 faces, tiled to size).
 do
     local woodTextureUrl  = "https://raw.githubusercontent.com/NetlessScripter/Texture-Reworks/refs/heads/main/IMG_3567.png"
     local woodTextureFile = "WoodReplace.png"
@@ -173,7 +156,7 @@ do
     local getAsset = getcustomasset or getsynasset
     local woodAssetId = getAsset(woodTextureFile)
 
-    local studsPerTile = 4 -- tile density; raise for smaller/more repeated tiles
+    local studsPerTile = 4
 
     local faceList = {
         Enum.NormalId.Top,
@@ -185,8 +168,7 @@ do
     }
 
     local function ApplyWoodTexture(part)
-        -- Leave part.Material as Wood — outside scripts/raycasts that read
-        -- Material (footstep sounds, other systems) need to keep seeing Wood.
+
         local tintColor = part.Color
 
         for _, face in ipairs(faceList) do
@@ -210,7 +192,6 @@ do
             end
         end
 
-        -- Catch parts added to the map later (e.g. streamed-in / spawned pieces)
         mapFolder.DescendantAdded:Connect(function(obj)
             if obj:IsA("BasePart") and obj.Material == Enum.Material.Wood and not IsCharacterPart(obj) then
                 ApplyWoodTexture(obj)
@@ -414,6 +395,11 @@ local musicSongs = {
     { name = "lucy~", file = "Lucy.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/lucy%7E.mp3" },
     { name = "im a mistake", file = "ImAMistake.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/Im%20a%20mistake.mp3" },
     { name = "resonance - home (slowed & reverb)", file = "ResonanceHome.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/resonance%20-%20home%20(slowed%20%26%20reverb).mp3" },
+    { name = "Clouds", file = "Clouds.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/Clouds.mp3" },
+    { name = "yves tumor - limerence (instrumental)", file = "YvesTumorLimerence.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/yves%20tumor%20-%20limerence%20(instrumental).mp3" },
+    { name = "Waiting", file = "Waiting.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/Waiting.mp3" },
+    { name = "oh god not this shit again (feat. RIVR PERSN)", file = "OhGodNotThisShitAgain.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/oh%20god%20not%20this%20shit%20again%20(feat.%20RIVR%20PERSN).mp3" },
+    { name = "EYEDRESS - JEALOUS (OFFICIAL VIDEO)", file = "EyedressJealous.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/EYEDRESS%20-%20JEALOUS%20(OFFICIAL%20VIDEO).mp3" },
 }
 
 local function DownloadSongFile(url, filename)
