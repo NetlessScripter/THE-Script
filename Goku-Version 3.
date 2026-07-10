@@ -205,6 +205,7 @@ end
 
 if _G.Rain == nil then _G.Rain = true end
 if _G.Music == nil then _G.Music = true end
+if _G.OldClouds == nil then _G.OldClouds = false end
 
 local localPlayer    = Players.LocalPlayer
 local character      = localPlayer.Character or localPlayer.CharacterAdded:Wait()
@@ -554,7 +555,11 @@ end)
 task.delay(1, function()
 loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/Miles-Morales/refs/heads/main/Revamped%20Lighting%20System"))()
 loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/Vegito-/refs/heads/main/Lock%20On"))()
-loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/HowDidIPullThisOff"))()
+if _G.OldClouds then
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/OldClouds"))()
+else
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/HowDidIPullThisOff"))()
+end
 loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/SpiritBomb"))()
 end)
 
