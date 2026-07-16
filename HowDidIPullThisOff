@@ -288,7 +288,7 @@ end
 
 local Clouds = CloudsModule.Clouds:new({
 	Tallness = 40,
-	Offset = 220, -- was 0: a zero offset stacks every cloud on the same X/Z,
+	Offset = 0, -- was 0: a zero offset stacks every cloud on the same X/Z,
 	-- collapsing the sun-alignment dot product to nearly identical values
 	-- for every cloud (SunTint never leaves the "base" branch). Give the
 	-- formation real horizontal width so there's an actual near-sun/
