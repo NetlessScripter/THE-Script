@@ -267,10 +267,29 @@ function CloudClass:SpawnClouds()
 		end
 		local alignRange = math.max(maxAlign - minAlign, 0.0001)
 
+		-- Real light on a cloud bank isn't a clean gradient - individual
+		-- wisps catch or miss the light almost at random depending on their
+		-- own shape/thickness, so a smooth ramp reads as "one glowing mass"
+		-- instead of the patchy bright-streak/dark-gap look real clouds
+		-- have. Coherent noise (sampled per cloud's world position) nudges
+		-- each cloud's brightness up or down independent of its neighbors,
+		-- breaking the ramp into streaks without looking like pure static -
+		-- it's random, but *spatially* random, so nearby clouds still drift
+		-- together a bit rather than flickering pixel-to-pixel.
+		local noiseScale = 15 -- lower = tighter/more frequent streaks, higher = broader patches
+		local streakStrength = 0.45 -- 0 = pure smooth gradient, 1 = noise fully overrides alignment
+		local streakSeed = rng:NextNumber(0, 1000)
+
 		for _, data in ipairs(spawned) do
 			local cl = data.instance
 			local base = Tone(awaySunColor, data.shade)
+			-- Position.Y is what actually varies between clouds when Offset
+			-- is 0 (they stack straight up) - sampling noise off X/Z here
+			-- would give every cloud the same value and produce no streaking
+			-- at all, since X/Z are identical for the whole stack.
+			local noise = math.noise(cl.Position.Y / noiseScale, streakSeed)
 			local t = (data.alignment - minAlign) / alignRange
+			t = math.clamp(t + noise * streakStrength, 0, 1)
 			local tintedColor = SunTint(t, base, nearSunColor)
 
 			if cl:FindFirstChild("Texture1") then
@@ -288,7 +307,7 @@ end
 
 local Clouds = CloudsModule.Clouds:new({
 	Tallness = 40,
-	Offset = 0, -- was 0: a zero offset stacks every cloud on the same X/Z,
+	Offset = 0, -- a zero offset stacks every cloud on the same X/Z,
 	-- collapsing the sun-alignment dot product to nearly identical values
 	-- for every cloud (SunTint never leaves the "base" branch). Give the
 	-- formation real horizontal width so there's an actual near-sun/
