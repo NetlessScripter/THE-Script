@@ -1,0 +1,410 @@
+--!strict
+
+local Lighting = game:GetService("Lighting")
+local RunService = game:GetService("RunService")
+
+local C3 = Color3.fromRGB
+
+local function kf(t)
+	return {
+		time = t.time,
+		zenith = { color = t.zenith[1], intensity = t.zenith[2] },
+		horizon = { color = t.horizon[1], intensity = t.horizon[2] },
+		sun = { color = t.sun[1], intensity = t.sun[2], size = t.sun[3], glare = t.sun[4] },
+		moon = { color = t.moon[1], size = t.moon[2] },
+		starIntensity = t.starIntensity,
+		cloud = { lit = t.cloud[1], shadow = t.cloud[2], density = t.cloud[3] },
+		fog = { color = t.fog[1], density = t.fog[2], haze = t.fog[3] },
+		lightRay = { intensity = t.lightRay[1], falloff = t.lightRay[2] },
+		dirLightColor = t.dirLightColor,
+		ambientColor = t.ambientColor,
+		hdrExposure = t.hdrExposure,
+	}
+end
+
+local Data = {}
+Data.AnchorHours = { 0, 6, 9, 15, 18, 21 }
+
+Data.Clear = {
+	kf { time = 0, zenith = { C3(4, 7, 18), 0.12 }, horizon = { C3(10, 13, 28), 0.18 },
+		sun = { C3(255, 244, 214), 0.0, 0.55, 0.0 }, moon = { C3(214, 222, 255), 1.0 }, starIntensity = 1.0,
+		cloud = { C3(22, 25, 42), C3(8, 9, 18), 0.10 }, fog = { C3(5, 7, 15), 0.28, 0.05 },
+		lightRay = { 0.0, 0.15 }, dirLightColor = C3(45, 55, 95), ambientColor = C3(14, 15, 26), hdrExposure = -0.35 },
+	kf { time = 6, zenith = { C3(60, 70, 120), 0.55 }, horizon = { C3(255, 150, 90), 0.85 },
+		sun = { C3(255, 170, 100), 0.9, 0.75, 0.85 }, moon = { C3(214, 222, 255), 0.6 }, starIntensity = 0.05,
+		cloud = { C3(255, 190, 150), C3(90, 70, 90), 0.22 }, fog = { C3(200, 130, 100), 0.4, 0.22 },
+		lightRay = { 0.85, 0.4 }, dirLightColor = C3(255, 160, 110), ambientColor = C3(90, 70, 70), hdrExposure = 0.1 },
+	kf { time = 9, zenith = { C3(90, 150, 235), 0.9 }, horizon = { C3(190, 215, 245), 0.95 },
+		sun = { C3(255, 244, 220), 1.15, 0.55, 0.35 }, moon = { C3(214, 222, 255), 0.0 }, starIntensity = 0.0,
+		cloud = { C3(255, 255, 255), C3(150, 160, 180), 0.18 }, fog = { C3(180, 200, 220), 0.12, 0.08 },
+		lightRay = { 0.15, 0.2 }, dirLightColor = C3(255, 244, 224), ambientColor = C3(140, 155, 175), hdrExposure = 0.25 },
+	kf { time = 15, zenith = { C3(80, 145, 232), 0.92 }, horizon = { C3(200, 220, 245), 0.95 },
+		sun = { C3(255, 248, 226), 1.2, 0.55, 0.3 }, moon = { C3(214, 222, 255), 0.0 }, starIntensity = 0.0,
+		cloud = { C3(255, 255, 255), C3(155, 165, 185), 0.16 }, fog = { C3(185, 205, 225), 0.1, 0.07 },
+		lightRay = { 0.1, 0.2 }, dirLightColor = C3(255, 248, 230), ambientColor = C3(145, 160, 180), hdrExposure = 0.3 },
+	kf { time = 18, zenith = { C3(45, 55, 110), 0.5 }, horizon = { C3(255, 120, 60), 0.9 },
+		sun = { C3(255, 120, 60), 0.85, 0.8, 0.95 }, moon = { C3(214, 222, 255), 0.5 }, starIntensity = 0.15,
+		cloud = { C3(255, 150, 110), C3(70, 50, 80), 0.24 }, fog = { C3(180, 90, 70), 0.42, 0.25 },
+		lightRay = { 0.95, 0.45 }, dirLightColor = C3(255, 130, 80), ambientColor = C3(80, 60, 70), hdrExposure = 0.0 },
+	kf { time = 21, zenith = { C3(8, 10, 24), 0.2 }, horizon = { C3(20, 18, 38), 0.28 },
+		sun = { C3(255, 244, 214), 0.0, 0.55, 0.0 }, moon = { C3(214, 222, 255), 0.95 }, starIntensity = 0.85,
+		cloud = { C3(30, 30, 48), C3(10, 10, 20), 0.12 }, fog = { C3(8, 9, 18), 0.3, 0.08 },
+		lightRay = { 0.0, 0.15 }, dirLightColor = C3(55, 60, 100), ambientColor = C3(16, 17, 28), hdrExposure = -0.25 },
+}
+
+Data.Clouds = {
+	kf { time = 0, zenith = { C3(6, 8, 18), 0.12 }, horizon = { C3(12, 13, 24), 0.16 },
+		sun = { C3(255, 244, 214), 0.0, 0.55, 0.0 }, moon = { C3(200, 208, 235), 0.55 }, starIntensity = 0.5,
+		cloud = { C3(30, 32, 46), C3(10, 10, 18), 0.45 }, fog = { C3(9, 10, 18), 0.32, 0.12 },
+		lightRay = { 0.0, 0.2 }, dirLightColor = C3(40, 48, 80), ambientColor = C3(16, 16, 25), hdrExposure = -0.35 },
+	kf { time = 6, zenith = { C3(75, 85, 120), 0.5 }, horizon = { C3(235, 150, 110), 0.75 },
+		sun = { C3(255, 175, 120), 0.6, 0.8, 0.5 }, moon = { C3(200, 208, 235), 0.3 }, starIntensity = 0.03,
+		cloud = { C3(240, 190, 165), C3(95, 80, 100), 0.55 }, fog = { C3(190, 140, 120), 0.45, 0.3 },
+		lightRay = { 0.55, 0.5 }, dirLightColor = C3(240, 165, 120), ambientColor = C3(95, 82, 82), hdrExposure = 0.0 },
+	kf { time = 9, zenith = { C3(110, 140, 190), 0.75 }, horizon = { C3(200, 210, 225), 0.85 },
+		sun = { C3(255, 240, 210), 0.75, 0.6, 0.2 }, moon = { C3(200, 208, 235), 0.0 }, starIntensity = 0.0,
+		cloud = { C3(235, 238, 242), C3(120, 128, 145), 0.55 }, fog = { C3(180, 190, 205), 0.16, 0.15 },
+		lightRay = { 0.2, 0.3 }, dirLightColor = C3(240, 232, 210), ambientColor = C3(150, 158, 172), hdrExposure = 0.1 },
+	kf { time = 15, zenith = { C3(105, 135, 185), 0.75 }, horizon = { C3(205, 212, 226), 0.85 },
+		sun = { C3(255, 242, 214), 0.8, 0.6, 0.2 }, moon = { C3(200, 208, 235), 0.0 }, starIntensity = 0.0,
+		cloud = { C3(238, 240, 244), C3(122, 130, 148), 0.5 }, fog = { C3(182, 192, 206), 0.15, 0.14 },
+		lightRay = { 0.18, 0.3 }, dirLightColor = C3(242, 234, 214), ambientColor = C3(152, 160, 174), hdrExposure = 0.12 },
+	kf { time = 18, zenith = { C3(55, 60, 100), 0.45 }, horizon = { C3(230, 110, 65), 0.8 },
+		sun = { C3(240, 110, 60), 0.6, 0.85, 0.6 }, moon = { C3(200, 208, 235), 0.25 }, starIntensity = 0.1,
+		cloud = { C3(230, 145, 120), C3(75, 55, 85), 0.55 }, fog = { C3(170, 95, 80), 0.48, 0.32 },
+		lightRay = { 0.6, 0.55 }, dirLightColor = C3(230, 120, 90), ambientColor = C3(85, 68, 75), hdrExposure = -0.05 },
+	kf { time = 21, zenith = { C3(10, 12, 22), 0.18 }, horizon = { C3(22, 20, 34), 0.24 },
+		sun = { C3(255, 244, 214), 0.0, 0.55, 0.0 }, moon = { C3(200, 208, 235), 0.5 }, starIntensity = 0.4,
+		cloud = { C3(38, 36, 50), C3(12, 12, 20), 0.5 }, fog = { C3(10, 11, 20), 0.34, 0.15 },
+		lightRay = { 0.0, 0.2 }, dirLightColor = C3(50, 55, 90), ambientColor = C3(18, 18, 28), hdrExposure = -0.3 },
+}
+
+Data.Overcast = {
+	kf { time = 0, zenith = { C3(10, 11, 16), 0.1 }, horizon = { C3(14, 14, 18), 0.12 },
+		sun = { C3(255, 244, 214), 0.0, 0.55, 0.0 }, moon = { C3(160, 165, 180), 0.15 }, starIntensity = 0.05,
+		cloud = { C3(40, 41, 46), C3(14, 14, 17), 0.92 }, fog = { C3(12, 12, 16), 0.4, 0.35 },
+		lightRay = { 0.0, 0.25 }, dirLightColor = C3(35, 36, 45), ambientColor = C3(20, 20, 24), hdrExposure = -0.4 },
+	kf { time = 6, zenith = { C3(70, 72, 78), 0.35 }, horizon = { C3(150, 130, 120), 0.5 },
+		sun = { C3(210, 170, 140), 0.15, 0.9, 0.05 }, moon = { C3(160, 165, 180), 0.0 }, starIntensity = 0.0,
+		cloud = { C3(160, 145, 140), C3(70, 65, 68), 0.95 }, fog = { C3(140, 125, 118), 0.55, 0.5 },
+		lightRay = { 0.05, 0.3 }, dirLightColor = C3(190, 170, 155), ambientColor = C3(90, 85, 85), hdrExposure = -0.15 },
+	kf { time = 9, zenith = { C3(120, 125, 132), 0.55 }, horizon = { C3(170, 172, 176), 0.6 },
+		sun = { C3(235, 230, 220), 0.35, 0.7, 0.02 }, moon = { C3(160, 165, 180), 0.0 }, starIntensity = 0.0,
+		cloud = { C3(185, 188, 192), C3(95, 98, 104), 0.95 }, fog = { C3(160, 163, 168), 0.28, 0.4 },
+		lightRay = { 0.02, 0.25 }, dirLightColor = C3(210, 208, 200), ambientColor = C3(130, 132, 136), hdrExposure = -0.05 },
+	kf { time = 15, zenith = { C3(118, 122, 130), 0.55 }, horizon = { C3(168, 170, 175), 0.6 },
+		sun = { C3(232, 226, 216), 0.35, 0.7, 0.02 }, moon = { C3(160, 165, 180), 0.0 }, starIntensity = 0.0,
+		cloud = { C3(182, 185, 190), C3(93, 96, 102), 0.95 }, fog = { C3(158, 161, 166), 0.28, 0.4 },
+		lightRay = { 0.02, 0.25 }, dirLightColor = C3(208, 206, 198), ambientColor = C3(128, 130, 134), hdrExposure = -0.05 },
+	kf { time = 18, zenith = { C3(65, 65, 72), 0.32 }, horizon = { C3(140, 105, 95), 0.45 },
+		sun = { C3(200, 140, 115), 0.1, 0.9, 0.05 }, moon = { C3(160, 165, 180), 0.1 }, starIntensity = 0.02,
+		cloud = { C3(150, 120, 115), C3(60, 52, 58), 0.95 }, fog = { C3(130, 100, 92), 0.55, 0.5 },
+		lightRay = { 0.05, 0.3 }, dirLightColor = C3(175, 140, 125), ambientColor = C3(78, 68, 70), hdrExposure = -0.2 },
+	kf { time = 21, zenith = { C3(12, 13, 18), 0.14 }, horizon = { C3(16, 16, 20), 0.16 },
+		sun = { C3(255, 244, 214), 0.0, 0.55, 0.0 }, moon = { C3(160, 165, 180), 0.1 }, starIntensity = 0.05,
+		cloud = { C3(42, 43, 48), C3(15, 15, 18), 0.92 }, fog = { C3(13, 13, 17), 0.4, 0.35 },
+		lightRay = { 0.0, 0.25 }, dirLightColor = C3(38, 39, 48), ambientColor = C3(22, 22, 26), hdrExposure = -0.35 },
+}
+
+Data.Rain = {
+	kf { time = 0, zenith = { C3(6, 7, 10), 0.08 }, horizon = { C3(9, 9, 12), 0.1 },
+		sun = { C3(255, 244, 214), 0.0, 0.55, 0.0 }, moon = { C3(120, 125, 140), 0.0 }, starIntensity = 0.0,
+		cloud = { C3(24, 25, 28), C3(6, 6, 8), 1.0 }, fog = { C3(8, 8, 11), 0.55, 0.55 },
+		lightRay = { 0.0, 0.3 }, dirLightColor = C3(22, 23, 30), ambientColor = C3(14, 14, 17), hdrExposure = -0.5 },
+	kf { time = 6, zenith = { C3(45, 48, 55), 0.22 }, horizon = { C3(95, 90, 92), 0.32 },
+		sun = { C3(180, 160, 150), 0.0, 1.0, 0.0 }, moon = { C3(120, 125, 140), 0.0 }, starIntensity = 0.0,
+		cloud = { C3(110, 108, 108), C3(45, 44, 46), 1.0 }, fog = { C3(95, 92, 92), 0.7, 0.65 },
+		lightRay = { 0.0, 0.3 }, dirLightColor = C3(120, 115, 112), ambientColor = C3(65, 63, 63), hdrExposure = -0.35 },
+	kf { time = 9, zenith = { C3(75, 80, 88), 0.4 }, horizon = { C3(120, 122, 126), 0.45 },
+		sun = { C3(200, 195, 190), 0.05, 1.0, 0.0 }, moon = { C3(120, 125, 140), 0.0 }, starIntensity = 0.0,
+		cloud = { C3(140, 142, 145), C3(60, 61, 64), 1.0 }, fog = { C3(118, 120, 124), 0.5, 0.6 },
+		lightRay = { 0.0, 0.3 }, dirLightColor = C3(150, 150, 150), ambientColor = C3(95, 96, 99), hdrExposure = -0.2 },
+	kf { time = 15, zenith = { C3(73, 78, 86), 0.4 }, horizon = { C3(118, 120, 124), 0.45 },
+		sun = { C3(198, 193, 188), 0.05, 1.0, 0.0 }, moon = { C3(120, 125, 140), 0.0 }, starIntensity = 0.0,
+		cloud = { C3(138, 140, 143), C3(59, 60, 63), 1.0 }, fog = { C3(116, 118, 122), 0.5, 0.6 },
+		lightRay = { 0.0, 0.3 }, dirLightColor = C3(148, 148, 148), ambientColor = C3(94, 95, 98), hdrExposure = -0.2 },
+	kf { time = 18, zenith = { C3(40, 42, 50), 0.2 }, horizon = { C3(80, 72, 75), 0.3 },
+		sun = { C3(170, 145, 135), 0.0, 1.0, 0.0 }, moon = { C3(120, 125, 140), 0.0 }, starIntensity = 0.0,
+		cloud = { C3(95, 90, 92), C3(38, 36, 40), 1.0 }, fog = { C3(85, 78, 78), 0.7, 0.65 },
+		lightRay = { 0.0, 0.3 }, dirLightColor = C3(105, 98, 96), ambientColor = C3(58, 55, 56), hdrExposure = -0.35 },
+	kf { time = 21, zenith = { C3(7, 8, 11), 0.1 }, horizon = { C3(10, 10, 13), 0.12 },
+		sun = { C3(255, 244, 214), 0.0, 0.55, 0.0 }, moon = { C3(120, 125, 140), 0.0 }, starIntensity = 0.0,
+		cloud = { C3(26, 27, 30), C3(7, 7, 9), 1.0 }, fog = { C3(9, 9, 12), 0.55, 0.55 },
+		lightRay = { 0.0, 0.3 }, dirLightColor = C3(24, 25, 32), ambientColor = C3(15, 15, 18), hdrExposure = -0.48 },
+}
+
+Data.Thunderstorm = {
+	kf { time = 0, zenith = { C3(3, 3, 5), 0.05 }, horizon = { C3(5, 5, 7), 0.06 },
+		sun = { C3(255, 244, 214), 0.0, 0.55, 0.0 }, moon = { C3(90, 92, 100), 0.0 }, starIntensity = 0.0,
+		cloud = { C3(14, 14, 16), C3(3, 3, 4), 1.0 }, fog = { C3(5, 5, 7), 0.65, 0.7 },
+		lightRay = { 0.0, 0.35 }, dirLightColor = C3(14, 14, 18), ambientColor = C3(9, 9, 11), hdrExposure = -0.65 },
+	kf { time = 6, zenith = { C3(30, 31, 36), 0.15 }, horizon = { C3(55, 52, 55), 0.2 },
+		sun = { C3(150, 140, 140), 0.0, 1.1, 0.0 }, moon = { C3(90, 92, 100), 0.0 }, starIntensity = 0.0,
+		cloud = { C3(65, 63, 65), C3(20, 19, 21), 1.0 }, fog = { C3(60, 58, 60), 0.8, 0.8 },
+		lightRay = { 0.0, 0.35 }, dirLightColor = C3(80, 78, 80), ambientColor = C3(40, 39, 41), hdrExposure = -0.55 },
+	kf { time = 9, zenith = { C3(48, 50, 58), 0.25 }, horizon = { C3(75, 76, 80), 0.3 },
+		sun = { C3(170, 168, 168), 0.0, 1.1, 0.0 }, moon = { C3(90, 92, 100), 0.0 }, starIntensity = 0.0,
+		cloud = { C3(85, 86, 90), C3(28, 28, 31), 1.0 }, fog = { C3(78, 79, 83), 0.65, 0.75 },
+		lightRay = { 0.0, 0.35 }, dirLightColor = C3(100, 100, 100), ambientColor = C3(55, 56, 59), hdrExposure = -0.45 },
+	kf { time = 15, zenith = { C3(47, 49, 57), 0.25 }, horizon = { C3(74, 75, 79), 0.3 },
+		sun = { C3(168, 166, 166), 0.0, 1.1, 0.0 }, moon = { C3(90, 92, 100), 0.0 }, starIntensity = 0.0,
+		cloud = { C3(84, 85, 89), C3(27, 27, 30), 1.0 }, fog = { C3(77, 78, 82), 0.65, 0.75 },
+		lightRay = { 0.0, 0.35 }, dirLightColor = C3(98, 98, 98), ambientColor = C3(54, 55, 58), hdrExposure = -0.45 },
+	kf { time = 18, zenith = { C3(28, 28, 34), 0.13 }, horizon = { C3(48, 44, 47), 0.18 },
+		sun = { C3(140, 128, 128), 0.0, 1.1, 0.0 }, moon = { C3(90, 92, 100), 0.0 }, starIntensity = 0.0,
+		cloud = { C3(58, 55, 57), C3(18, 17, 19), 1.0 }, fog = { C3(52, 49, 51), 0.8, 0.8 },
+		lightRay = { 0.0, 0.35 }, dirLightColor = C3(70, 66, 67), ambientColor = C3(36, 35, 37), hdrExposure = -0.58 },
+	kf { time = 21, zenith = { C3(3, 3, 5), 0.06 }, horizon = { C3(6, 6, 8), 0.07 },
+		sun = { C3(255, 244, 214), 0.0, 0.55, 0.0 }, moon = { C3(90, 92, 100), 0.0 }, starIntensity = 0.0,
+		cloud = { C3(15, 15, 17), C3(4, 4, 5), 1.0 }, fog = { C3(6, 6, 8), 0.65, 0.7 },
+		lightRay = { 0.0, 0.35 }, dirLightColor = C3(16, 16, 20), ambientColor = C3(10, 10, 12), hdrExposure = -0.62 },
+}
+
+Data.WeatherFlags = {
+	Clear = { lightning = false, windSpeed = 0.15, cloudScroll = 0.02 },
+	Clouds = { lightning = false, windSpeed = 0.25, cloudScroll = 0.05 },
+	Overcast = { lightning = false, windSpeed = 0.35, cloudScroll = 0.08 },
+	Rain = { lightning = false, windSpeed = 0.55, cloudScroll = 0.14 },
+	Thunderstorm = { lightning = true, windSpeed = 0.7, cloudScroll = 0.18 },
+}
+
+local function lerpNumber(a, b, t)
+	return a + (b - a) * t
+end
+
+local function smoothstep(t)
+	t = math.clamp(t, 0, 1)
+	return t * t * (3 - 2 * t)
+end
+
+local function lerpValue(a, b, t)
+	if typeof(a) == "Color3" and typeof(b) == "Color3" then
+		return a:Lerp(b, t)
+	elseif typeof(a) == "number" and typeof(b) == "number" then
+		return lerpNumber(a, b, t)
+	elseif typeof(a) == "table" and typeof(b) == "table" then
+		local out = {}
+		for k, v in pairs(a) do
+			out[k] = lerpValue(v, b[k], t)
+		end
+		return out
+	else
+		return a
+	end
+end
+
+local function interpolateWeather(weatherTable, hour)
+	local count = #weatherTable
+	local lo, hi = weatherTable[count], weatherTable[1]
+	local loTime, hiTime = lo.time - 24, hi.time
+
+	for i = 1, count do
+		local a = weatherTable[i]
+		local b = weatherTable[i + 1] or weatherTable[1]
+		local aTime = a.time
+		local bTime = (b.time <= aTime) and (b.time + 24) or b.time
+		if hour >= aTime and hour <= bTime then
+			lo, hi = a, b
+			loTime, hiTime = aTime, bTime
+			break
+		end
+	end
+
+	local span = hiTime - loTime
+	local t = span > 0 and smoothstep((hour - loTime) / span) or 0
+	return lerpValue(lo, hi, t)
+end
+
+local hour = 17.25
+local secondsPerGameDay = 24 * 60
+local paused = true
+
+local weatherName = "Clear"
+local targetWeatherName = "Clear"
+local blendAlpha = 1
+local blendDuration = 0
+local blendTime = 0
+
+local state = nil
+local twilightAmount = 0
+
+local UP = Vector3.new(0, 1, 0)
+
+Lighting.GeographicLatitude = 15
+
+local sky = Lighting:FindFirstChildOfClass("Sky")
+if not sky then
+	sky = Instance.new("Sky")
+	sky.Parent = Lighting
+end
+sky.CelestialBodiesShown = false
+
+local atmosphere = Lighting:FindFirstChildOfClass("Atmosphere")
+if not atmosphere then
+	atmosphere = Instance.new("Atmosphere")
+	atmosphere.Parent = Lighting
+end
+
+local bloom = Lighting:FindFirstChildOfClass("BloomEffect")
+if not bloom then
+	bloom = Instance.new("BloomEffect")
+	bloom.Parent = Lighting
+end
+bloom.Intensity = 0.55
+bloom.Size = 24
+bloom.Threshold = 1.4
+
+local colorCorrection = Lighting:FindFirstChildOfClass("ColorCorrectionEffect")
+if not colorCorrection then
+	colorCorrection = Instance.new("ColorCorrectionEffect")
+	colorCorrection.Parent = Lighting
+end
+colorCorrection.Saturation = 0.18
+colorCorrection.Contrast = 0
+colorCorrection.Brightness = 0
+colorCorrection.TintColor = C3(255, 250, 245)
+
+
+local function applySkyFill(s)
+	local sunElevation = Lighting:GetSunDirection():Dot(UP)
+	twilightAmount = 1 - math.clamp((sunElevation + 0.05) / 0.25, 0, 1)
+
+	local minBrightness = 1.3 + 0.35 * twilightAmount
+	if (1 + s.zenith.intensity) < minBrightness then
+		s.zenith.intensity = minBrightness - 1
+	end
+
+	local skyFill = C3(70, 82, 108)
+	s.ambientColor = s.ambientColor:Lerp(skyFill, 0.55 * twilightAmount)
+
+	s.hdrExposure = math.max(s.hdrExposure, -0.1)
+	return s
+end
+
+local function resolve()
+	Lighting.ClockTime = hour
+
+	local fromState = interpolateWeather(Data[weatherName], hour)
+	if blendAlpha < 1 then
+		local toState = interpolateWeather(Data[targetWeatherName], hour)
+		state = lerpValue(fromState, toState, smoothstep(blendAlpha))
+	else
+		state = fromState
+	end
+	state = applySkyFill(state)
+end
+
+local function apply()
+	local s = state
+	if not s then
+		return
+	end
+
+	Lighting.ClockTime = hour
+	Lighting.Brightness = 1 + s.zenith.intensity
+	Lighting.ExposureCompensation = s.hdrExposure
+	Lighting.OutdoorAmbient = s.ambientColor
+	Lighting.Ambient = s.ambientColor
+	Lighting.ColorShift_Top = s.zenith.color
+	Lighting.ColorShift_Bottom = s.horizon.color
+
+	Lighting.FogColor = s.fog.color
+	local farClip = math.clamp(6000 * (1 - s.fog.density), 250, 6000)
+	Lighting.FogStart = farClip * 0.05
+	Lighting.FogEnd = farClip
+
+	sky.SunAngularSize = 15 * math.clamp(s.sun.size, 0.1, 2)
+	sky.MoonAngularSize = 15 * math.clamp(s.moon.size, 0.1, 2)
+	sky.StarCount = math.floor(3000 * s.starIntensity)
+
+	atmosphere.Color = s.fog.color
+	atmosphere.Decay = s.horizon.color
+	atmosphere.Density = math.clamp(s.fog.density * 0.4, 0, 1)
+	atmosphere.Haze = math.clamp(s.fog.haze * 7, 0, 10)
+	atmosphere.Glare = math.clamp(s.sun.glare, 0, 1)
+
+	colorCorrection.Contrast = 0.15 * (1 - twilightAmount)
+	colorCorrection.Brightness = 0.12 * twilightAmount
+end
+
+local function getSunDirection()
+	return Lighting:GetSunDirection()
+end
+
+local function getMoonDirection()
+	return Lighting:GetMoonDirection()
+end
+
+local function getSunPosition(distance)
+	distance = distance or 4500
+	local direction = Lighting:GetSunDirection()
+	local camera = workspace.CurrentCamera
+	local origin = camera and camera.CFrame.Position or Vector3.new(0, 0, 0)
+	return origin + direction * distance
+end
+
+local function setWeather(name, blendSeconds)
+	if not Data[name] then
+		warn("[RageSkybox] Unknown weather preset: " .. tostring(name))
+		return
+	end
+	if name == targetWeatherName and blendAlpha >= 1 then
+		return
+	end
+
+	if blendAlpha < 1 then
+		weatherName = targetWeatherName
+	end
+
+	targetWeatherName = name
+	blendDuration = math.max(blendSeconds or 8, 0.01)
+	blendTime = 0
+	blendAlpha = 0
+end
+
+local function update(dt)
+	if not paused then
+		hour = (hour + (dt / secondsPerGameDay) * 24) % 24
+	end
+
+	if blendAlpha < 1 then
+		blendTime += dt
+		blendAlpha = math.clamp(blendTime / blendDuration, 0, 1)
+		if blendAlpha >= 1 then
+			weatherName = targetWeatherName
+		end
+	end
+
+	resolve()
+	apply()
+end
+
+resolve()
+apply()
+
+_G.RageSkybox = {
+	SetWeather = setWeather,
+	SetTime = function(h)
+		hour = h % 24
+	end,
+	SetPaused = function(p)
+		paused = p
+	end,
+	SetDayLength = function(realMinutesPerDay)
+		secondsPerGameDay = math.max(realMinutesPerDay, 0.001) * 60
+	end,
+	GetHour = function()
+		return hour
+	end,
+	GetWeather = function()
+		return targetWeatherName
+	end,
+	GetState = function()
+		return state
+	end,
+	GetSunDirection = getSunDirection,
+	GetMoonDirection = getMoonDirection,
+	GetSunPosition = getSunPosition,
+}
+
+RunService.Heartbeat:Connect(update)
