@@ -96,13 +96,29 @@ local function KelvinToColor3(kelvin)
 	)
 end
 
--- Blends a cloud's tint by how aligned it is with the sun, t=0..1, where 1 is
--- the most sun-aligned cloud in the current batch. Real clouds are colorless
--- (Mie scattering hits every wavelength equally) - what we're actually
--- mimicking is: near the sun the forward-scattered light dominates and gives
--- a bright glow, just off-axis you're mostly seeing the cloud's shadowed
--- side (dark silhouette band), and everywhere else it's just the ambient
--- "away from the sun" color.
+-- Real Mie scattering (what light does hitting droplets much bigger than its
+-- wavelength) is heavily forward-peaked - most photons keep going roughly the
+-- direction they were already headed, just deflected slightly. The Henyey-
+-- Greenstein phase function is the standard cheap approximation of that: a
+-- single "asymmetry" parameter g controls how tightly the glow hugs the exact
+-- sun direction. g=0 would be flat/uniform in every direction (wrong - real
+-- clouds aren't); g near 1 is a tight, fast-falloff spike right at the sun -
+-- cloud droplets sit around g=0.85-0.90, which is why the silver-lining halo
+-- in real photos is a narrow bright rim, not a broad soft glow.
+local function HenyeyGreenstein(cosTheta, g)
+	local g2 = g * g
+	local denom = (1 + g2 - 2 * g * cosTheta) ^ 1.5
+	local hg = (1 - g2) / math.max(denom, 1e-4)
+	-- hg's own peak value at cosTheta=1 depends on g, so divide it out to
+	-- land the curve in a clean 0..1 range regardless of which g we pick.
+	local hgPeak = (1 + g) / ((1 - g) ^ 2)
+	return math.clamp(hg / hgPeak, 0, 1)
+end
+
+-- Blends a cloud's tint by t=0..1, where 1 is "fully catching direct forward-
+-- scattered sunlight" and 0 is "fully shadowed." t itself already folds in
+-- both the phase function above and the self-shadow term below - this just
+-- turns that single number into a color.
 local function SunTint(t, base, nearColor)
 	local dark = Shadow(base, 0.7)
 
@@ -113,6 +129,23 @@ local function SunTint(t, base, nearColor)
 	else
 		return base
 	end
+end
+
+-- Fractal Brownian motion: sums several octaves of noise at increasing
+-- frequency/decreasing amplitude. A single math.noise call gives one clean
+-- wavelength of variation, which looks like a sine wave once you see it move
+-- - real cloud structure is turbulent and self-similar at multiple scales
+-- (big lumps built out of medium lumps built out of small ones), so layering
+-- octaves is what actually gets rid of the "obviously one wave" look.
+local function FBM(x, seed, octaves)
+	local total, amplitude, frequency, maxValue = 0, 1, 1, 0
+	for i = 1, octaves do
+		total += math.noise(x * frequency, seed + i * 37.219) * amplitude
+		maxValue += amplitude
+		amplitude *= 0.5
+		frequency *= 2.17 -- non-integer lacunarity avoids octaves lining up and repeating
+	end
+	return total / maxValue -- ~ -1..1
 end
 
 -- Tries to read the actual pixels of the skybox's top face and figure out
@@ -216,11 +249,21 @@ function CloudClass:SpawnClouds()
 		-- Prefer the actual skybox's dominant color over an authored mood
 		-- color, and prefer that over a generic physics guess - each is a
 		-- fallback for when the one before it isn't available.
+		--
+		-- ColorShift_Top/ColorShift_Bottom are Roblox's own built-in properties
+		-- for tinting geometry based on whether it faces up or down relative to
+		-- the world - exactly the "sunlit top / shadowed underside" split real
+		-- clouds need, and they're already hand-tuned to this rig's golden/khaki
+		-- palette rather than us guessing at a generic sunset color. Atmosphere.
+		-- Decay is deliberately NOT used here: its Roblox engine default is an
+		-- unrelated dark brown, and it only reads correctly once Haze/Glare have
+		-- actually been authored for it - the exact trap that turned the clouds
+		-- brown before.
 		local atmosphere = Lighting:FindFirstChildOfClass("Atmosphere")
 		local nearSunColor = GetDominantSkyColor()
-			or (atmosphere and atmosphere.Color)
+			or (atmosphere and atmosphere.Color and atmosphere.Color:Lerp(Lighting.ColorShift_Top, 0.6))
 			or KelvinToColor3(2000 + sunElevation * 4500)
-		local awaySunColor = (atmosphere and atmosphere.Decay) or Color3.fromRGB(190, 190, 200)
+		local awaySunColor = Lighting.ColorShift_Bottom
 
 		lastCloud.Position = Vector3.new(392.629, self.Height, -405.891)
 
@@ -257,9 +300,10 @@ function CloudClass:SpawnClouds()
 		end
 
 		-- Clouds spawned this close together barely differ in raw sun
-		-- alignment, so stretch whatever spread actually exists across the
-		-- full bright -> dark -> normal gradient instead of relying on fixed
-		-- thresholds that assume a wide-open sky.
+		-- alignment (the whole cluster is small relative to how far away the
+		-- sun effectively is), so stretch whatever spread actually exists
+		-- across the full -1..1 range HenyeyGreenstein expects, rather than
+		-- relying on fixed thresholds that assume a wide-open sky.
 		local minAlign, maxAlign = math.huge, -math.huge
 		for _, data in ipairs(spawned) do
 			minAlign = math.min(minAlign, data.alignment)
@@ -267,39 +311,62 @@ function CloudClass:SpawnClouds()
 		end
 		local alignRange = math.max(maxAlign - minAlign, 0.0001)
 
-		-- Real light on a cloud bank isn't a clean gradient - individual
-		-- wisps catch or miss the light almost at random depending on their
-		-- own shape/thickness, so a smooth ramp reads as "one glowing mass"
-		-- instead of the patchy bright-streak/dark-gap look real clouds
-		-- have. Coherent noise (sampled per cloud's world position) nudges
-		-- each cloud's brightness up or down independent of its neighbors,
-		-- breaking the ramp into streaks without looking like pure static -
-		-- it's random, but *spatially* random, so nearby clouds still drift
-		-- together a bit rather than flickering pixel-to-pixel.
-		local noiseScale = 15 -- lower = tighter/more frequent streaks, higher = broader patches
-		local streakStrength = 0.45 -- 0 = pure smooth gradient, 1 = noise fully overrides alignment
-		local streakSeed = rng:NextNumber(0, 1000)
+		local g = 0.87 -- forward-scattering asymmetry for cloud-droplet-sized Mie scattering
+		local shadowNoiseScale = 12 -- lower = tighter self-shadow bands, higher = broader ones
+		local shadowSeed = rng:NextNumber(0, 1000)
 
 		for _, data in ipairs(spawned) do
 			local cl = data.instance
-			local base = Tone(awaySunColor, data.shade)
-			-- Position.Y is what actually varies between clouds when Offset
-			-- is 0 (they stack straight up) - sampling noise off X/Z here
-			-- would give every cloud the same value and produce no streaking
-			-- at all, since X/Z are identical for the whole stack.
-			local noise = math.noise(cl.Position.Y / noiseScale, streakSeed)
-			local t = (data.alignment - minAlign) / alignRange
-			t = math.clamp(t + noise * streakStrength, 0, 1)
-			local tintedColor = SunTint(t, base, nearSunColor)
+
+			-- Forward scattering (Mie): stretch this cloud's alignment into
+			-- the batch's available -1..1 range, then run it through the
+			-- phase function so brightness peaks sharply the closer a cloud
+			-- sits to the sun's exact forward direction.
+			local cosTheta = ((data.alignment - minAlign) / alignRange) * 2 - 1
+			local glow = HenyeyGreenstein(cosTheta, g)
+
+			-- Self-shadowing: a cloud closer to the sun blocks light from
+			-- ever reaching clouds behind it, regardless of how well-aligned
+			-- those clouds are - real cloud banks are optically thick, so
+			-- this is the actual mechanism behind the streaky look, not
+			-- randomness for its own sake. We can't raytrace through the
+			-- neighboring cloud geometry cheaply, so fBm noise (sampled
+			-- along Position.Y, since that's what actually varies when
+			-- Offset is 0 and the stack runs straight up) stands in for
+			-- "how much intervening cloud mass happened to be in the way,"
+			-- with several octaves so the bands look like turbulent cloud
+			-- structure rather than one clean sine wave. This is scaled
+			-- into a Beer-Lambert-style transmittance term (0 = fully
+			-- blocked, 1 = fully open) rather than left as raw noise.
+			local shadowNoise = FBM(cl.Position.Y / shadowNoiseScale, shadowSeed, 3)
+			local transmittance = math.clamp(0.35 + 0.65 * ((shadowNoise + 1) / 2), 0, 1)
+
+			-- Real clouds are colorless water droplets - their "true color"
+			-- is just whatever light is actually hitting a given face. The
+			-- top faces the open sky, catching direct forward-scattered
+			-- sunlight almost unobstructed, so it should read close to the
+			-- warm near-sun color with the self-shadow term barely touching
+			-- it. The underside only ever gets weak ambient bounce light
+			-- filtered through the cloud's own mass above it, so it should
+			-- skew toward the cooler ColorShift_Bottom tone and take the
+			-- self-shadow term at full strength, same reason real cumulus
+			-- clouds have bright tops and flat grey-khaki bottoms.
+			local topBase = Tone(nearSunColor:Lerp(awaySunColor, 0.35), data.shade)
+			local topT = math.clamp(glow * (0.6 + 0.4 * transmittance), 0, 1)
+			local topColor = SunTint(topT, topBase, nearSunColor)
+
+			local bottomBase = Tone(awaySunColor, data.shade)
+			local bottomT = math.clamp(glow * transmittance * 0.5, 0, 1)
+			local bottomColor = SunTint(bottomT, bottomBase, nearSunColor)
 
 			if cl:FindFirstChild("Texture1") then
 				cl.Texture1.Transparency = 1 - self.Density
-				cl.Texture1.Color3 = tintedColor
+				cl.Texture1.Color3 = topColor
 			end
 
 			if cl:FindFirstChild("Texture2") then
 				cl.Texture2.Transparency = 1 - self.Density
-				cl.Texture2.Color3 = tintedColor
+				cl.Texture2.Color3 = bottomColor
 			end
 		end
 	end)
