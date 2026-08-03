@@ -1,0 +1,83 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+
+local LocalPlayer = Players.LocalPlayer
+
+local function getNearestPlayer()
+	local nearest = nil
+	local shortest = math.huge
+	
+	for _, plr in pairs(Players:GetPlayers()) do
+		if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+			local myChar = LocalPlayer.Character
+			if myChar and myChar:FindFirstChild("HumanoidRootPart") then
+				local dist = (myChar.HumanoidRootPart.Position - plr.Character.HumanoidRootPart.Position).Magnitude
+				if dist < shortest then
+					shortest = dist
+					nearest = plr
+				end
+			end
+		end
+	end
+	
+	return nearest, shortest
+end
+
+local active = true
+local bv
+
+RunService.Heartbeat:Connect(function()
+	if not active then return end
+	
+	local char = LocalPlayer.Character
+	if not char or not char:FindFirstChild("HumanoidRootPart") or not char:FindFirstChild("Humanoid") then return end
+	
+	local hrp = char.HumanoidRootPart
+	local humanoid = char.Humanoid
+	
+	local target, distance = getNearestPlayer()
+	if not target then return end
+	
+	local targetHRP = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+	if not targetHRP then return end
+	
+	if distance <= 1 then
+		active = false
+		humanoid.WalkSpeed = 16
+		
+		if bv then
+			bv.Velocity = Vector3.new(0,0,0)
+			hrp.AssemblyLinearVelocity = Vector3.new(0,0,0)
+			task.wait()
+			bv:Destroy()
+		end
+		
+		for _, part in pairs(char:GetDescendants()) do
+			if part:IsA("BasePart") then
+				part.CanCollide = true
+			end
+		end
+		return
+	end
+	
+	humanoid.WalkSpeed = 1000
+	
+	for _, part in pairs(char:GetDescendants()) do
+		if part:IsA("BasePart") then
+			part.CanCollide = false
+		end
+	end
+	
+	if not bv then
+		bv = Instance.new("BodyVelocity")
+		bv.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+		bv.Parent = hrp
+	end
+	
+	local behindPos = targetHRP.Position - targetHRP.CFrame.LookVector * 1
+	local direction = (behindPos - hrp.Position)
+	
+	if direction.Magnitude > 0 then
+		bv.Velocity = direction.Unit * 1000
+	end
+end)
