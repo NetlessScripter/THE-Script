@@ -22,7 +22,7 @@ local FORWARD_BOOST   = 200     -- outward horizontal speed (studs/sec)
 local TELEPORT_TO_EDGE = true   -- snap the HRP to the exact edge point before launch
 local CHECK_RATE      = 0.05    -- seconds between edge checks (perf throttle)
 local FOOTPRINT_SLOP  = 0.5     -- studs of leeway for "am I still over this part"
-local LEAP_ANIMATION_ID = "rbxassetid://94758840679955"
+local LEAP_ANIMATION_ID = "rbxassetid://16597322398"
 local LEAP_SOUND_IDS = {
     "rbxassetid://10760305528", -- Audio/punchimpact (1)
     "rbxassetid://10772477548", -- Audio/strongpunchimpact
