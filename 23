@@ -7161,17 +7161,21 @@ end)
 -- then plays a local camera shake + VFX reaction package.
 -- =========================================================================
 
--- Reaction gate: true = only ReactionAllowedPlayers trigger reactions (matches EffectSQ.txt's original test scope).
--- Flip it off at runtime (e.g. from console: _G.ReactionGateEnabled = false) to react to every player.
+-- Reaction gate: true = only _G.ReactionAllowedPlayers trigger reactions (matches EffectSQ.txt's original test scope).
+-- Both are read fresh from _G, so set them from the console BEFORE this script loads to configure them:
+--   _G.ReactionGateEnabled = false                          -- react to everyone, skip the list entirely
+--   _G.ReactionAllowedPlayers = {"SomeName", "OtherName"}   -- react only to these players
 if _G.ReactionGateEnabled == nil then _G.ReactionGateEnabled = true end
-ReactionAllowedPlayers = {
-    "Hitmeforgamepass",
-    "veyzak",
-    "Player3"
-}
+if _G.ReactionAllowedPlayers == nil then
+    _G.ReactionAllowedPlayers = {
+        "Hitmeforgamepass",
+        "veyzak",
+        "Player3"
+    }
+end
 local function isReactionAllowed(player)
     if not _G.ReactionGateEnabled then return true end
-    for _, name in ipairs(ReactionAllowedPlayers) do
+    for _, name in ipairs(_G.ReactionAllowedPlayers) do
         if player.Name == name then
             return true
         end
