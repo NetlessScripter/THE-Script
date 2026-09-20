@@ -6753,7 +6753,7 @@ end)
 if not isMobile then
     UserInputService.InputBegan:Connect(function(input, gameProcessed)
         if gameProcessed then return end
-        if input.KeyCode == Enum.KeyCode.Z then
+        if input.KeyCode == Enum.KeyCode.U then
             if flying then
                 stopFlying()
             else
