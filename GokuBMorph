@@ -1,0 +1,61 @@
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local head = character:WaitForChild("Head")
+
+-- remove all existing accessories first
+for _, item in ipairs(character:GetChildren()) do
+	if item:IsA("Accessory") then
+		item:Destroy()
+	end
+end
+
+-- remove existing clothing
+for _, item in ipairs(character:GetChildren()) do
+	if item:IsA("Shirt") or item:IsA("Pants") or item:IsA("ShirtGraphic") then
+		item:Destroy()
+	end
+end
+
+-- create and weld the custom mesh to the head
+local meshPart = Instance.new("MeshPart")
+meshPart.Name = "CustomMesh"
+meshPart.MeshId = "rbxassetid://95299076362241"
+meshPart.TextureID = "http://www.roblox.com/asset/?id=132534966156246"
+meshPart.Size = Vector3.new(1, 1, 1)
+meshPart.Anchored = false
+meshPart.CanCollide = false
+meshPart.Massless = true
+
+meshPart.CFrame = head.CFrame * CFrame.new(0, 1, 0.28)
+meshPart.Parent = character
+
+local weld = Instance.new("WeldConstraint")
+weld.Part0 = head
+weld.Part1 = meshPart
+weld.Parent = meshPart
+
+-- set body colors
+local bodyColors = character:FindFirstChildOfClass("BodyColors")
+if not bodyColors then
+	bodyColors = Instance.new("BodyColors")
+	bodyColors.Parent = character
+end
+
+local skinColor = BrickColor.new(Color3.fromRGB(234, 184, 146))
+
+bodyColors.HeadColor = skinColor
+bodyColors.TorsoColor = skinColor
+bodyColors.LeftArmColor = skinColor
+bodyColors.RightArmColor = skinColor
+bodyColors.LeftLegColor = skinColor
+bodyColors.RightLegColor = skinColor
+
+-- new shirt and pants
+local shirt = Instance.new("Shirt")
+shirt.ShirtTemplate = "http://www.roblox.com/asset/?id=6996213153"
+shirt.Parent = character
+
+local pants = Instance.new("Pants")
+pants.PantsTemplate = "http://www.roblox.com/asset/?id=81211399977568"
+pants.Parent = character
