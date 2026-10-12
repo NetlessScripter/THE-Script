@@ -52,6 +52,1293 @@ _gc_TweenService      = game:GetService("TweenService")
 _gc_LocalPlayer       = game.Players.LocalPlayer
 _gc_LegacyReplication = game.ReplicatedStorage.Resources.LegacyReplication
 
+-- ================= ATTACK 4 FINISHER =================
+-- Hitbox that lives exactly as long as the Attack 4 charge (0.6s), 3 studs in front of us. If it touches a PLAYER whose
+-- health is at or below ATTACK4_FINISHER_HEALTH, the hitbox is destroyed and the planet explosion fires the moment the beam starts to fade.
+ATTACK4_HITBOX_SIZE      = Vector3.new(8, 6, 8) -- studs
+ATTACK4_HITBOX_OFFSET    = 3                    -- studs in front of the character
+ATTACK4_FINISHER_HEALTH  = 23                   -- health at or below this counts (23 and under), but above 0
+ATTACK4_HITBOX_DEBUG     = false                -- true = make the hitbox visible (red, see-through)
+CUTSCENE_TELEPORT_POS    = Vector3.new(377.1642761230469, 699.103271484375, 360.6839904785156) -- where we wait while the cutscene plays
+
+-- Cutscene SFX: downloaded once (writefile), loaded with getcustomasset, and kept ready so it plays the instant the cutscene starts.
+local cutsceneSfx
+task.spawn(function()
+	local ok, result = pcall(GetGitSound,
+		"https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/9214A6CF-F225-4604-81AF-6AA5D26ABA56.mp3",
+		"PlanetCutsceneSFX",
+		2
+	)
+	if ok then cutsceneSfx = result else warn("[Cutscene SFX] failed to load:", result) end
+end)
+
+-- Saves where we are, teleports to CUTSCENE_TELEPORT_POS, plays the cutscene, then teleports back to the saved spot.
+function PlayCutsceneWithTeleport()
+	local function getRoot()
+		local c = LocalPlayer.Character
+		return c and c:FindFirstChild("HumanoidRootPart")
+	end
+
+	local root = getRoot()
+	local savedCFrame = root and root.CFrame -- exactly where we were right before teleporting
+	local pinConn
+
+	if root then
+		local waitCFrame = CFrame.new(CUTSCENE_TELEPORT_POS)
+		root.CFrame = waitCFrame
+		-- keep us parked there for the whole cutscene (stops falling / other scripts moving us)
+		pinConn = game:GetService("RunService").Heartbeat:Connect(function()
+			local r = getRoot()
+			if r then
+				r.CFrame = waitCFrame
+				r.AssemblyLinearVelocity = Vector3.zero
+				r.AssemblyAngularVelocity = Vector3.zero
+			end
+		end)
+	end
+
+	if cutsceneSfx then
+		cutsceneSfx.TimePosition = 0
+		cutsceneSfx:Play() -- cutscene sound starts together with the cutscene
+	end
+
+	PlayPlanetExplosion(function()
+		if pinConn then pinConn:Disconnect() end
+		local r = getRoot()
+		if r and savedCFrame then
+			r.CFrame = savedCFrame -- back to where we were
+			r.AssemblyLinearVelocity = Vector3.zero
+			r.AssemblyAngularVelocity = Vector3.zero
+		end
+	end)
+end
+
+function StartAttack4Hitbox(duration)
+	local state = { triggered = false }
+	local char = LocalPlayer.Character or Character
+	local root = (char and char:FindFirstChild("HumanoidRootPart")) or HumanoidRootPart
+
+	local hitbox = Instance.new("Part")
+	hitbox.Name = "Attack4Hitbox"
+	hitbox.Size = ATTACK4_HITBOX_SIZE
+	hitbox.Anchored = true
+	hitbox.CanCollide, hitbox.CanQuery, hitbox.CanTouch, hitbox.CastShadow = false, false, false, false
+	hitbox.Transparency = ATTACK4_HITBOX_DEBUG and 0.7 or 1
+	hitbox.Color = Color3.new(1, 0, 0)
+	hitbox.Material = Enum.Material.SmoothPlastic
+	hitbox.CFrame = root.CFrame * CFrame.new(0, 0, -ATTACK4_HITBOX_OFFSET)
+	hitbox.Parent = workspace
+
+	local params = OverlapParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { char, hitbox }
+
+	local startTime = os.clock()
+	local conn
+	local function stop()
+		if conn then conn:Disconnect(); conn = nil end
+		if hitbox then hitbox:Destroy(); hitbox = nil end
+	end
+	state.stop = stop
+
+	conn = game:GetService("RunService").Heartbeat:Connect(function()
+		if not hitbox then return end
+		if os.clock() - startTime >= duration then stop() return end
+		hitbox.CFrame = root.CFrame * CFrame.new(0, 0, -ATTACK4_HITBOX_OFFSET) -- rides along with us during the charge
+		for _, part in ipairs(workspace:GetPartBoundsInBox(hitbox.CFrame, hitbox.Size, params)) do
+			local model = part:FindFirstAncestorOfClass("Model")
+			local hum = model and model:FindFirstChildOfClass("Humanoid")
+			local plr = model and Players:GetPlayerFromCharacter(model)
+			local live = workspace:FindFirstChild("Live")
+			local dummy = live and live:FindFirstChild("Weakest Dummy")
+			local isTarget = (plr ~= nil and plr ~= LocalPlayer) or (dummy ~= nil and model == dummy)
+			if hum and isTarget and hum.Health > 0 and hum.Health <= ATTACK4_FINISHER_HEALTH then
+				state.triggered = true
+				stop() -- destroy the hitbox; the explosion waits for the beam fade
+				return
+			end
+		end
+	end)
+	return state
+end
+
+-- ================= PLANET EXPLOSION V3 (embedded) =================
+-- PlayPlanetExplosion() runs the whole cinematic (camera takeover, ~7s). Fired by the Attack 4 finisher below.
+PlayPlanetExplosion = (function()
+--[[
+	PLANET EXPLOSION V3  (LocalScript -> StarterPlayer > StarterPlayerScripts)
+	Explosion happens CONFIG.Distance studs in front of the camera.
+
+	Pacing : charge (energy spirals INTO the core, camera pushes in, rumble builds)
+	         -> inhale (everything collapses, screen dims)  -> BREACH (blue) -> SECOND BURST
+	         -> fade out (the hot detonation, aftershocks and whiteout were cut).
+	3D     : trail-based spiral comets (smooth curved streaks), jagged lightning cracks,
+	         tapered beam starbursts, 12-layer neon core, tilted shockwaves, glowing debris, embers.
+	Screen : stretched particle lens flare (core, band, long streaks, ghost - recolored every phase), 24-layer radial haze,
+	         smooth UI shockwave rings, vignette, impact frames.
+	Camera : impulse shake with decay, dolly via FOV, whip-out on detonation.
+]]
+
+local CONFIG = {
+	Distance = 3000,                          -- studs from camera to the explosion
+	FOV = 60,
+	UseStage = true,                          -- true: camera sits at StageOrigin (empty void)
+	StageOrigin = Vector3.new(0, 25000, 0),   -- false: uses your current camera position/direction
+	Quality = 1,                              -- 0.4 - 1 (lower = fewer trails/beams, better for mobile)
+	Shake = 1,
+	ExplosionShake = 1,                       -- strength of the big smooth camera shakes on the two blue explosions (0 = off)
+	Sway = 1,
+	Flare = 1,                                -- lens flare strength (0 = off)
+	FlareStretch = 1,                         -- how far the flare is stretched out horizontally (0 = round, 2 = double)
+	FlareTilt = 10,                           -- degrees the stretch is tilted (+ = rising to the right, - = falling)
+	SlowMo = true,
+	HideUI = true,                            -- hides your game's HUD, topbar and touch controls while playing
+	AutoPlay = false,                         -- unused here: the explosion is fired by the Attack 4 finisher
+	EarthAssetId = 750680926,
+	EarthIntroSeconds = 2,
+	EarthScreenFraction = 0.55,
+	StartupScale = 1,
+	EarthParkDistance = 8000,
+	EarthReveal = true,                       -- black night-to-day shadow sweeps across the earth during the intro, then is destroyed
+	EarthRevealSeconds = 2.2,                 -- how long the shadow takes to slide off the planet
+	EarthWarningGlow = true,                  -- highlight fades in on the earth right before it gets moved (planet about to blow)
+	EarthWarningGlowSeconds = 1,              -- how long before the breach the glow tween runs
+	EarthWarningGlowEase = 2.5,               -- ease-in strength: 1 = linear, 2 = quad, 3 = cubic, higher = later and sharper
+	EndFadeOutSeconds = 1.5,                  -- the black screen at the end of the cutscene fades out over this long instead of cutting instantly
+	ImpactFlashSeconds = 0.035,               -- real-time length of the pure black & white impact frame on the big blue explosion (0 = off)
+}
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+local StarterGui = game:GetService("StarterGui")
+local Workspace = game:GetService("Workspace")
+
+local player = Players.LocalPlayer
+local camera = Workspace.CurrentCamera
+local PI = math.pi
+local DURATION = 7.12 -- ends right before the old detonation (7.15); hot detonation, aftershocks and whiteout were cut
+
+local NSK, CSK = NumberSequenceKeypoint.new, ColorSequenceKeypoint.new
+local rgb = Color3.fromRGB
+local WHITE = Color3.new(1, 1, 1)
+
+local function kf(t, pts)
+	if t <= pts[1][1] then return pts[1][2] end
+	for i = 2, #pts do
+		local p0, p1 = pts[i - 1], pts[i]
+		if t <= p1[1] then
+			local s = (t - p0[1]) / (p1[1] - p0[1])
+			s = s * s * (3 - 2 * s)
+			local v0, v1 = p0[2], p1[2]
+			if typeof(v0) == "Color3" then return v0:Lerp(v1, s) end
+			return v0 + (v1 - v0) * s
+		end
+	end
+	return pts[#pts][2]
+end
+local function outExpo(a) return a >= 1 and 1 or 1 - 2 ^ (-10 * a) end
+
+local BLUE = { rgb(70, 150, 255), rgb(90, 230, 255), rgb(30, 80, 255), rgb(180, 205, 255) }
+local HOT = { rgb(255, 120, 30), rgb(255, 220, 60), rgb(255, 60, 150), rgb(255, 255, 255), rgb(190, 70, 255), rgb(255, 150, 40) }
+local HOTBOLT = { rgb(255, 230, 120), rgb(255, 140, 50), rgb(255, 255, 255), rgb(255, 90, 140) }
+
+local playing = false
+
+local EARTH_MODEL_NAME = "PlanetExplosionEarth"
+local cachedEarthModel = nil
+local EARTH_VISUAL_TO_BOUNDS_RATIO = 2.1
+local EARTH_BEHIND_PLANE_MARGIN = 1.06
+
+local function obtainEarthModel()
+	if cachedEarthModel and cachedEarthModel.Parent then
+		return cachedEarthModel
+	end
+	local existingEarthModel = Workspace:FindFirstChild(EARTH_MODEL_NAME)
+	if existingEarthModel then
+		cachedEarthModel = existingEarthModel
+		return existingEarthModel
+	end
+	local loadSucceeded, loadedObjects = pcall(function()
+		return game:GetObjects("rbxassetid://" .. tostring(CONFIG.EarthAssetId))
+	end)
+	if not loadSucceeded or type(loadedObjects) ~= "table" or #loadedObjects == 0 then
+		warn("PlanetExplosion: could not load earth model " .. tostring(CONFIG.EarthAssetId) .. " - " .. tostring(loadedObjects))
+		return nil
+	end
+	local earthModel = Instance.new("Model")
+	earthModel.Name = EARTH_MODEL_NAME
+	for _, loadedObject in ipairs(loadedObjects) do
+		loadedObject.Parent = earthModel
+	end
+	for _, descendant in ipairs(earthModel:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			descendant.Anchored = true
+			descendant.CanCollide = false
+			descendant.CanTouch = false
+			descendant.CanQuery = false
+			descendant.CastShadow = false
+		end
+	end
+	earthModel.Parent = Workspace
+	cachedEarthModel = earthModel
+	return earthModel
+end
+
+local function fitEarthDiameter(earthModel, targetDiameter)
+	local _, boundingSize = earthModel:GetBoundingBox()
+	local currentDiameter = math.max(boundingSize.X, boundingSize.Y, boundingSize.Z)
+	if currentDiameter <= 0 then
+		return
+	end
+	local scaleSucceeded, scaleError = pcall(function()
+		earthModel:ScaleTo(earthModel:GetScale() * targetDiameter / currentDiameter)
+	end)
+	if not scaleSucceeded then
+		warn("PlanetExplosion: could not scale earth model - " .. tostring(scaleError))
+	end
+end
+
+local function centerEarthAt(earthModel, targetPosition)
+	local boundingCFrame = earthModel:GetBoundingBox()
+	earthModel:PivotTo(earthModel:GetPivot() + (targetPosition - boundingCFrame.Position))
+end
+
+local function play(onDone)
+	if playing then return end
+	playing = true
+
+	local rng = Random.new(1337)
+	local function rr(a, b) return rng:NextNumber(a, b) end
+	local function pick(t) return t[rng:NextInteger(1, #t)] end
+	local function cnt(n) return math.max(1, math.floor(n * CONFIG.Quality)) end
+
+	-- ================= camera & scale =================
+	local D = CONFIG.Distance
+	local camBase = CONFIG.UseStage and CFrame.new(CONFIG.StageOrigin) or camera.CFrame
+	local C = camBase * CFrame.new(0, 0, -D) -- explosion center; axes = camera axes (X right, Y up, Z toward camera)
+
+	local earthModel = obtainEarthModel()
+
+	camera.CameraType = Enum.CameraType.Scriptable
+	camera.FieldOfView = CONFIG.FOV
+	camera.CFrame = camBase
+	camera.Focus = C
+
+	local V = camera.ViewportSize
+	local aspect = math.max(V.X / math.max(V.Y, 1), 1.6)
+	local halfH = D * math.tan(math.rad(CONFIG.FOV) / 2)
+	local S = halfH * aspect -- half the visible width at the explosion plane; every size is a fraction of S
+	local srcX, srcY, onScreen = V.X / 2, V.Y / 2, true
+
+	local earthRadius = earthModel and CONFIG.EarthScreenFraction * halfH or 0
+	local earthBackOffset = earthModel and EARTH_BEHIND_PLANE_MARGIN * D * earthRadius / (D - earthRadius) or 0
+	local earthDistanceScale = (D + earthBackOffset) / D
+	local startupScale = (1 + earthRadius / (0.2 * S)) * CONFIG.StartupScale
+	local backdropDepth = earthModel and (earthBackOffset + earthRadius * earthDistanceScale + 300) or 300
+
+	if earthModel then
+		fitEarthDiameter(earthModel, math.min(2 * earthRadius * earthDistanceScale / EARTH_VISUAL_TO_BOUNDS_RATIO, 2000))
+		centerEarthAt(earthModel, C.Position + camBase.LookVector * earthBackOffset)
+	end
+
+	-- ================= world setup =================
+	pcall(function() StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.All, false) end)
+
+	local removed = {}
+	for _, c in ipairs(Lighting:GetChildren()) do
+		if c:IsA("Sky") or c:IsA("Atmosphere") then
+			table.insert(removed, c)
+			c.Parent = nil
+		end
+	end
+	local sky = Instance.new("Sky")
+	for _, f in ipairs({ "SkyboxBk", "SkyboxDn", "SkyboxFt", "SkyboxLf", "SkyboxRt", "SkyboxUp" }) do sky[f] = "" end
+	sky.StarCount = 0
+	sky.CelestialBodiesShown = false
+	sky.Parent = Lighting
+
+	local bloom = Instance.new("BloomEffect")
+	bloom.Size = 56
+	bloom.Threshold = 0.8
+	bloom.Parent = Lighting
+
+	local cc = Instance.new("ColorCorrectionEffect")
+	cc.Saturation = 0.25
+	cc.Parent = Lighting
+
+	-- impact frame: a stack of max-contrast, fully desaturated color corrections crushes every pixel to pure black or pure white.
+	-- (one effect can't hard-threshold, so several are chained). They stay disabled except for the flash.
+	local flashCCs = {}
+	for i = 1, 6 do
+		local f = Instance.new("ColorCorrectionEffect")
+		f.Saturation = -1
+		f.Contrast = 1
+		f.Brightness = 0
+		f.TintColor = WHITE
+		f.Enabled = false
+		f.Parent = Lighting
+		flashCCs[i] = f
+	end
+	local flashUntil, flashOn = 0, false
+	local explosionShakes = {} -- { start = real-time stamp, strength, phase } per explosion; drives the smooth camera shakes
+
+	local root = Instance.new("Folder")
+	root.Name = "PlanetExplosionFX"
+	root.Parent = Workspace
+
+	local anchor = Instance.new("Part")
+	anchor.Anchored, anchor.CanCollide, anchor.CanQuery, anchor.CanTouch = true, false, false, false
+	anchor.Transparency = 1
+	anchor.Size = Vector3.one
+	anchor.CFrame = CFrame.new(C.Position)
+	anchor.Parent = root
+
+	local gui = Instance.new("ScreenGui")
+	gui.IgnoreGuiInset = true
+	gui.ScreenInsets = Enum.ScreenInsets.None -- no safe-area clamping, vignette hits the real screen edges
+	gui.ResetOnSpawn = false
+	gui.DisplayOrder = 1000
+	gui.Parent = player:WaitForChild("PlayerGui")
+
+	-- hide the game's own HUD / topbar / touch controls
+	local hiddenGuis, controls = {}, nil
+	if CONFIG.HideUI then
+		for _, g in ipairs(player.PlayerGui:GetChildren()) do
+			if g:IsA("ScreenGui") and g ~= gui and g.Enabled then
+				g.Enabled = false
+				table.insert(hiddenGuis, g)
+			end
+		end
+		pcall(function() StarterGui:SetCore("TopbarEnabled", false) end)
+		pcall(function()
+			controls = require(player.PlayerScripts:WaitForChild("PlayerModule", 2)):GetControls()
+			controls:Disable()
+		end)
+	end
+
+	-- ================= scheduler (story-time) =================
+	local tasks = {}
+	local function at(t0, dur, fn, done) table.insert(tasks, { t0 = t0, dur = dur, fn = fn, done = done }) end
+	local function once(t0, fn) table.insert(tasks, { t0 = t0, once = true, fn = fn }) end
+
+	-- ================= 3D building blocks =================
+	local function newAtt()
+		local a = Instance.new("Attachment")
+		a.Parent = anchor
+		return a
+	end
+
+	local function makeBeam(a0, a1, colorSeq)
+		local b = Instance.new("Beam")
+		b.Attachment0, b.Attachment1 = a0, a1
+		b.FaceCamera = true
+		b.LightEmission = 1
+		b.LightInfluence = 0
+		b.Segments = 1
+		b.Color = colorSeq
+		b.Width0, b.Width1 = 0, 0
+		b.Parent = root
+		return b
+	end
+
+	local function neonPart(shape)
+		local p = Instance.new("Part")
+		p.Shape = shape or Enum.PartType.Block
+		p.Material = Enum.Material.Neon
+		p.Anchored = true
+		p.CanCollide, p.CanQuery, p.CanTouch, p.CastShadow = false, false, false, false
+		p.Parent = root
+		return p
+	end
+
+	local function seqFor(base, tr)
+		local t = base + (1 - base) * tr
+		return NumberSequence.new({ NSK(0, t), NSK(0.55, t + (1 - t) * 0.4), NSK(1, 1) })
+	end
+
+	-- tapered beam streak: white-hot tail -> colored body -> soft tip (halo layer on thick rays)
+	local function addRay(s)
+		local dir = Vector3.new(math.cos(s.ang), math.sin(s.ang), s.z or 0).Unit
+		local grow, hold, tm = s.grow or 0.25, s.hold or 0.5, s.tailMove or 0.7
+		local useHalo = s.w > 0.009 * S
+		local a0, a1, halo, body, core
+		at(s.t0, s.life, function(a)
+			if not a0 then
+				a0, a1 = newAtt(), newAtt()
+				if useHalo then halo = makeBeam(a0, a1, ColorSequence.new(s.color)) end
+				body = makeBeam(a0, a1, ColorSequence.new({ CSK(0, WHITE), CSK(0.3, s.color), CSK(1, s.color) }))
+				core = makeBeam(a0, a1, ColorSequence.new(WHITE))
+			end
+			local g = outExpo(math.min(a / grow, 1))
+			local head = s.r0 + s.len * g
+			local tail = s.r0 + s.len * tm * math.clamp((a - grow) / (1 - grow), 0, 1) ^ 1.5
+			a0.WorldPosition = C * (dir * tail)
+			a1.WorldPosition = C * (dir * head)
+			local tr = math.max(1 - math.min(a / 0.05, 1), math.clamp((a - hold) / (1 - hold), 0, 1) ^ 1.3)
+			local w = s.w * (1 - 0.5 * a)
+			if halo then
+				halo.Width0, halo.Width1 = w * 5, 0
+				halo.Transparency = seqFor(0.82, tr)
+			end
+			body.Width0, body.Width1 = w * 2, 0
+			body.Transparency = seqFor(0.3, tr)
+			core.Width0, core.Width1 = w * 0.7, 0
+			core.Transparency = seqFor(0, tr)
+		end, function()
+			if a0 then
+				a0:Destroy(); a1:Destroy(); body:Destroy(); core:Destroy()
+				if halo then halo:Destroy() end
+			end
+		end)
+	end
+
+	-- tilted ellipse shockwave ring (beam segments)
+	local function addRing3D(s)
+		local N = s.N or cnt(72)
+		local cr, sr = math.cos(s.rot or 0), math.sin(s.rot or 0)
+		local atts, beams
+		at(s.t0, s.life, function(a)
+			if not atts then
+				atts, beams = {}, {}
+				for i = 0, N do atts[i] = newAtt() end
+				for i = 1, N do beams[i] = makeBeam(atts[i - 1], atts[i], ColorSequence.new(s.color)) end
+			end
+			local sc = s.s0 + (s.s1 - s.s0) * outExpo(a)
+			for i = 0, N do
+				local th = 2 * PI * (i / N)
+				local x, y = s.rx * sc * math.cos(th), s.ry * sc * math.sin(th)
+				atts[i].WorldPosition = C * Vector3.new(x * cr - y * sr, x * sr + y * cr, 0)
+			end
+			local tseq = NumberSequence.new(math.max(1 - math.min(a / 0.05, 1), a ^ 1.4))
+			local w = s.w * (1 - 0.75 * a)
+			for i = 1, N do
+				beams[i].Width0, beams[i].Width1 = w, w
+				beams[i].Transparency = tseq
+			end
+		end, function()
+			if atts then
+				for i = 1, N do beams[i]:Destroy() end
+				for i = 0, N do atts[i]:Destroy() end
+			end
+		end)
+	end
+
+	-- smooth curved streak: a glowing head dragging a Trail along a spiral path
+	local function addComet(s)
+		local part, tr
+		local inward = s.mode == "in"
+		at(s.t0, s.life, function(a)
+			if not part then
+				part = neonPart(Enum.PartType.Ball)
+				part.Size = Vector3.one * math.max(s.w * 1.3, 1)
+				part.Color = s.color:Lerp(WHITE, 0.65)
+				local a0, a1 = Instance.new("Attachment"), Instance.new("Attachment")
+				a0.Position, a1.Position = Vector3.new(0, s.w / 2, 0), Vector3.new(0, -s.w / 2, 0)
+				a0.Parent, a1.Parent = part, part
+				tr = Instance.new("Trail")
+				tr.Attachment0, tr.Attachment1 = a0, a1
+				tr.Lifetime = s.trail
+				tr.LightEmission = 1
+				tr.LightInfluence = 0
+				tr.FaceCamera = true
+				tr.Color = ColorSequence.new({ CSK(0, WHITE), CSK(0.18, s.color), CSK(1, s.color2 or s.color) })
+				tr.Transparency = NumberSequence.new({ NSK(0, 0), NSK(0.45, 0.3), NSK(1, 1) })
+				tr.WidthScale = NumberSequence.new({ NSK(0, 1), NSK(1, 0) })
+				tr.Parent = part
+			end
+			local e = inward and a ^ 2.2 or outExpo(a) ^ 0.9
+			local r = s.r0 + (s.r1 - s.r0) * e
+			local th = s.ang + s.swirl * e
+			part.CFrame = C * CFrame.new(math.cos(th) * r, math.sin(th) * r, (s.z or 0) * r)
+			part.Transparency = math.clamp((a - 0.8) / 0.2, 0, 1)
+		end, function()
+			if part then
+				tr.Enabled = false
+				part.Transparency = 1
+				task.delay(s.trail + 0.4, function() part:Destroy() end)
+			end
+		end)
+	end
+
+	-- jagged flickering lightning (planet cracks / charge arcs)
+	local function addBolt(s)
+		local N = s.N or 9
+		local dir = Vector3.new(math.cos(s.ang), math.sin(s.ang), 0)
+		local nrm = Vector3.new(-math.sin(s.ang), math.cos(s.ang), 0)
+		local atts, halos, cores
+		local lastTick, jit = -1, {}
+		at(s.t0, s.life, function(a)
+			if not atts then
+				atts, halos, cores = {}, {}, {}
+				for i = 0, N do atts[i] = newAtt() end
+				for i = 1, N do
+					halos[i] = makeBeam(atts[i - 1], atts[i], ColorSequence.new(s.color))
+					cores[i] = makeBeam(atts[i - 1], atts[i], ColorSequence.new(WHITE))
+				end
+			end
+			local tick = math.floor(a * s.life * 24)
+			if tick ~= lastTick then
+				lastTick = tick
+				for i = 0, N do jit[i] = rr(-1, 1) end
+			end
+			local g = outExpo(math.min(a / 0.18, 1))
+			for i = 0, N do
+				local u = i / N
+				local off = jit[i] * s.len * (s.jitter or 0.07) * math.sin(PI * u) * g
+				atts[i].WorldPosition = C * (dir * (s.r0 + s.len * g * u) + nrm * off)
+			end
+			local fade = math.max(1 - math.min(a / 0.04, 1), math.clamp((a - 0.45) / 0.55, 0, 1))
+			if rr(0, 1) < 0.18 then fade = math.min(1, fade + 0.55) end -- flicker
+			local tsq = NumberSequence.new(fade)
+			local hsq = NumberSequence.new(0.5 + 0.5 * fade)
+			for i = 1, N do
+				local wa, wb = s.w * (1 - (i - 1) / N) ^ 0.7, s.w * (1 - i / N) ^ 0.7
+				halos[i].Width0, halos[i].Width1 = wa * 3.2, wb * 3.2
+				cores[i].Width0, cores[i].Width1 = wa, wb
+				halos[i].Transparency = hsq
+				cores[i].Transparency = tsq
+			end
+		end, function()
+			if atts then
+				for i = 1, N do halos[i]:Destroy(); cores[i]:Destroy() end
+				for i = 0, N do atts[i]:Destroy() end
+			end
+		end)
+	end
+
+	-- glowing planet debris
+	local function addDebris(t0, dir, spd, size, life, spin)
+		local p
+		at(t0, life, function(a)
+			if not p then
+				p = neonPart()
+				p.Color = pick({ rgb(255, 90, 20), rgb(255, 150, 40), rgb(255, 230, 140), rgb(200, 40, 20), rgb(90, 25, 20) })
+			end
+			local dist = spd * 2.2 * (1 - (1 - a) ^ 2.2)
+			local sz = math.max(size * (1 - a ^ 2), 0.06)
+			p.Size = Vector3.new(sz, sz * 0.7, sz * 1.2)
+			p.CFrame = C * CFrame.new(dir * dist) * CFrame.Angles(spin.X * a, spin.Y * a, spin.Z * a)
+			p.Transparency = math.clamp((a - 0.6) / 0.4, 0, 1)
+		end, function() if p then p:Destroy() end end)
+	end
+
+	-- ================= backdrop (deep space color + tiny stars) =================
+	local tiles = {}
+	local stars = {}
+	do
+		local T = 2048
+		local f = (D + backdropDepth) / D
+		-- extra margin so the backdrop still covers the screen when the FOV zooms out during the blue explosion
+		local BACKDROP_WIDTH_MARGIN = 2.2
+		local BACKDROP_HEIGHT_MARGIN = 2.0
+		local cols = math.ceil(2 * S * f * BACKDROP_WIDTH_MARGIN / T)
+		local rows = math.ceil(2 * halfH * f * BACKDROP_HEIGHT_MARGIN / T)
+		for i = 1, cols do
+			for j = 1, rows do
+				local p = neonPart()
+				p.Size = Vector3.new(T, T, 2)
+				p.CFrame = C * CFrame.new((i - (cols + 1) / 2) * T, (j - (rows + 1) / 2) * T, -backdropDepth)
+				p.Color = rgb(0, 0, 0)
+				table.insert(tiles, p)
+			end
+		end
+
+		-- tiny stars: small neon dots just in front of the backdrop, spread over the whole (widened) backdrop area
+		local starColors = { rgb(255, 255, 255), rgb(255, 255, 255), rgb(200, 225, 255), rgb(160, 200, 255), rgb(255, 238, 215) }
+		local starRng = Random.new(2024) -- separate RNG so the stars don't change the existing effects' random layout
+		local function sr(lo, hi) return starRng:NextNumber(lo, hi) end
+		local pxStud = 2 * S * f / math.max(V.X, 1) -- studs per screen pixel at the backdrop
+		for i = 1, cnt(450) do
+			local p = neonPart(Enum.PartType.Ball)
+			local sz = pxStud * sr(1, 2.6)
+			p.Size = Vector3.one * sz
+			p.CFrame = C * CFrame.new((starRng:NextNumber() - 0.5) * cols * T, (starRng:NextNumber() - 0.5) * rows * T, -backdropDepth + 3)
+			p.Color = starColors[starRng:NextInteger(1, #starColors)]
+			p.Transparency = 1
+			table.insert(stars, { part = p, base = sr(0.45, 1), speed = sr(0.8, 3), phase = sr(0, 2 * PI) })
+		end
+	end
+	local starKeys = { { 0, 1 }, { 4.74, 1 }, { 4.9, 0 } } -- gone once the blue breach lights the backdrop
+	local bgKeys = {
+		{ 0, rgb(0, 0, 0) }, { 4.7, rgb(0, 0, 0) }, { 4.9, rgb(6, 28, 150) }, { 5.9, rgb(0, 60, 235) },
+		{ 7.1, rgb(10, 50, 230) }, { 7.4, rgb(62, 12, 150) }, { 9, rgb(38, 10, 100) }, { 11, rgb(105, 34, 110) },
+	}
+
+	-- ================= core: 12 stacked neon spheres = smooth radial glow =================
+	local NL = 12
+	local mult = { 1, 1.2, 1.45, 1.75, 2.1, 2.6, 3.2, 4, 5, 6.3, 8, 10 }
+	local ctr = { 0, 0.18, 0.36, 0.5, 0.62, 0.72, 0.8, 0.86, 0.91, 0.945, 0.97, 0.985 }
+	local blueL, hotL = {}, {}
+	for i = 1, NL do
+		local u = (i - 1) / (NL - 1)
+		blueL[i] = WHITE:Lerp(rgb(25, 70, 255), u ^ 0.7)
+		if u < 0.35 then hotL[i] = WHITE:Lerp(rgb(255, 220, 120), u / 0.35)
+		elseif u < 0.7 then hotL[i] = rgb(255, 220, 120):Lerp(rgb(255, 80, 140), (u - 0.35) / 0.35)
+		else hotL[i] = rgb(255, 80, 140):Lerp(rgb(130, 60, 255), (u - 0.7) / 0.3) end
+	end
+	local layers = {}
+	for i = 1, NL do
+		layers[i] = neonPart(Enum.PartType.Ball)
+		layers[i].CFrame = C
+		layers[i].Transparency = 1
+	end
+	-- parts max out at 2048 studs: ease big sizes into the cap instead of hiding the layer
+	-- (hiding made the whole glow stack vanish once the core passed ~half the screen)
+	local function softCap(x)
+		local knee, cap = 1000, 2040
+		if x <= knee then return x end
+		return knee + (cap - knee) * (1 - math.exp(-(x - knee) / (cap - knee)))
+	end
+	local coreKeys = {
+		{ 0, 0 }, { 0.6, 0.004 }, { 1.6, 0.02 }, { 3.0, 0.034 }, { 4.2, 0.06 }, { 4.55, 0.03 }, { 4.74, 0.004 }, { 4.8, 0.01 },
+		{ 5.0, 0.22 }, { 5.9, 0.22 }, { 6.1, 0.29 }, { 7.1, 0.31 }, { 7.25, 0.5 }, { 9, 0.62 }, { 11, 0.9 },
+	}
+
+	-- ================= sparks, dust, embers =================
+	local emitters = {}
+	local sparkers = {}
+	for i = 1, 16 do
+		local ang = (i / 16) * 2 * PI
+		local p = Instance.new("Part")
+		p.Anchored, p.CanCollide, p.CanQuery, p.CanTouch = true, false, false, false
+		p.Transparency = 1
+		p.Size = Vector3.one
+		p.CFrame = C * CFrame.lookAt(Vector3.zero, Vector3.new(math.cos(ang), math.sin(ang), 0))
+		p.Parent = root
+		local e = Instance.new("ParticleEmitter")
+		e.Rate = 0
+		e.LightEmission = 1
+		e.EmissionDirection = Enum.NormalId.Front
+		e.SpreadAngle = Vector2.new(22, 22)
+		e.Lifetime = NumberRange.new(1.4, 3)
+		e.Drag = 0.8
+		e.Transparency = NumberSequence.new({ NSK(0, 0), NSK(0.7, 0.2), NSK(1, 1) })
+		e.Parent = p
+		table.insert(sparkers, e)
+		table.insert(emitters, e)
+	end
+	local function burst(c0, c1, count, speed, size)
+		for _, e in ipairs(sparkers) do
+			e.Color = ColorSequence.new(c0, c1)
+			e.Speed = NumberRange.new(S * speed * 0.3, S * speed)
+			e.Size = NumberSequence.new({ NSK(0, S * size), NSK(1, 0) })
+			e:Emit(count)
+		end
+	end
+
+	local TILT = -0.2
+	local dustPart = Instance.new("Part")
+	dustPart.Anchored, dustPart.CanCollide, dustPart.CanQuery, dustPart.CanTouch = true, false, false, false
+	dustPart.Transparency = 1
+	dustPart.Size = Vector3.new(math.min(2 * (earthRadius + 0.3 * S), 2048), 0.05 * S, 40)
+	dustPart.CFrame = C * CFrame.Angles(0, 0, TILT)
+	dustPart.Parent = root
+	local dust = Instance.new("ParticleEmitter")
+	dust.Shape = Enum.ParticleEmitterShape.Box
+	dust.Rate = 0
+	dust.LightEmission = 1
+	dust.Lifetime = NumberRange.new(2, 3)
+	dust.Speed = NumberRange.new(0, S * 0.005)
+	dust.Color = ColorSequence.new(rgb(140, 255, 255), rgb(30, 150, 255))
+	dust.Size = NumberSequence.new({ NSK(0, 0), NSK(0.2, S * 0.0045), NSK(0.8, S * 0.0035), NSK(1, 0) })
+	dust.Transparency = NumberSequence.new(0.1)
+	dust.Parent = dustPart
+	table.insert(emitters, dust)
+
+	local emberPart = Instance.new("Part")
+	emberPart.Anchored, emberPart.CanCollide, emberPart.CanQuery, emberPart.CanTouch = true, false, false, false
+	emberPart.Transparency = 1
+	emberPart.Size = Vector3.new(math.min(1.4 * S, 2048), math.min(2 * halfH, 2048), 40)
+	emberPart.CFrame = C
+	emberPart.Parent = root
+	local embers = Instance.new("ParticleEmitter")
+	embers.Shape = Enum.ParticleEmitterShape.Box
+	embers.Rate = 0
+	embers.LightEmission = 1
+	embers.Lifetime = NumberRange.new(3, 5)
+	embers.Speed = NumberRange.new(0, S * 0.05)
+	embers.Acceleration = Vector3.new(0, S * 0.02, 0)
+	embers.Drag = 0.5
+	embers.Color = ColorSequence.new(rgb(255, 220, 120), rgb(255, 80, 30))
+	embers.Size = NumberSequence.new({ NSK(0, 0), NSK(0.15, S * 0.005), NSK(1, 0) })
+	embers.Transparency = NumberSequence.new({ NSK(0, 0.1), NSK(0.8, 0.3), NSK(1, 1) })
+	embers.Parent = emberPart
+	table.insert(emitters, embers)
+	local hasTimeScale = pcall(function() return dust.TimeScale end)
+
+	-- ================= SCREEN LAYER =================
+	local function canvas(z)
+		local c = Instance.new("CanvasGroup")
+		c.Size = UDim2.fromScale(1, 1)
+		c.BackgroundTransparency = 1
+		c.BorderSizePixel = 0
+		c.ZIndex = z
+		c.Parent = gui
+		return c
+	end
+	local function uiFrame(parent, color)
+		local f = Instance.new("Frame")
+		f.AnchorPoint = Vector2.new(0.5, 0.5)
+		f.BackgroundColor3 = color
+		f.BorderSizePixel = 0
+		f.BackgroundTransparency = 1
+		f.Parent = parent
+		return f
+	end
+	local function circle(parent, color)
+		local f = uiFrame(parent, color)
+		local u = Instance.new("UICorner")
+		u.CornerRadius = UDim.new(1, 0)
+		u.Parent = f
+		return f
+	end
+	local function ringF(parent, color, thickness)
+		local f = circle(parent, color)
+		local s = Instance.new("UIStroke")
+		s.Thickness = thickness
+		s.Color = color
+		s.Transparency = 1
+		s.Parent = f
+		return f, s
+	end
+	-- vignette (darker + tighter while charging)
+	local vigC = canvas(1)
+	local function edge(anchorP, pos, size, rot)
+		local f = Instance.new("Frame")
+		f.AnchorPoint = anchorP
+		f.Position = pos
+		f.Size = size
+		f.BackgroundColor3 = Color3.new(0, 0, 0)
+		f.BorderSizePixel = 0
+		local g = Instance.new("UIGradient")
+		g.Rotation = rot
+		g.Transparency = NumberSequence.new({ NSK(0, 0.35), NSK(1, 1) })
+		g.Parent = f
+		f.Parent = vigC
+	end
+	edge(Vector2.new(0, 0), UDim2.fromScale(0, 0), UDim2.fromScale(0.28, 1), 0)
+	edge(Vector2.new(1, 0), UDim2.fromScale(1, 0), UDim2.fromScale(0.28, 1), 180)
+	edge(Vector2.new(0, 0), UDim2.fromScale(0, 0), UDim2.fromScale(1, 0.28), 90)
+	edge(Vector2.new(0, 1), UDim2.fromScale(0, 1), UDim2.fromScale(1, 0.28), 270)
+
+	-- radial haze: 24 stacked discs for a smooth falloff
+	local NG = 24
+	local glowC = canvas(2)
+	local glowCircles = {}
+	for i = 1, NG do glowCircles[i] = circle(glowC, WHITE) end
+
+	-- UI shockwave rings
+	local ringC = canvas(3)
+	local function addUIRing(s)
+		local fa, sa, fb, sb
+		at(s.t0, s.life, function(a)
+			if not fa then
+				fa, sa = ringF(ringC, s.color, 10)
+				fb, sb = ringF(ringC, WHITE, 3)
+			end
+			local d = V.Y * (s.r0 + (s.r1 - s.r0) * outExpo(a)) * 2
+			local fade = math.clamp(a ^ 1.4, 0, 1)
+			for _, f in ipairs({ fa, fb }) do
+				f.Position = UDim2.fromOffset(srcX, srcY)
+				f.Size = UDim2.fromOffset(d, d)
+			end
+			local th = s.thick * (1 - 0.85 * a)
+			sa.Thickness, sb.Thickness = th * 3, th
+			sa.Transparency = math.clamp(0.55 + 0.45 * fade, 0, 1)
+			sb.Transparency = math.clamp(fade, 0, 1)
+		end, function() if fa then fa:Destroy(); fb:Destroy() end end)
+	end
+
+	-- lens flare: particle flare ported from Sunset, stretched out horizontally like an anamorphic lens (negative Squash = wider).
+	-- One emitter per attachment, placed by screen-space math every frame, tinted by the current phase colors
+	-- (role 1 = main, 2 = accent, 3 = ghost). Everything except the ghost stays pinned on the core.
+	local FLARE_DEPTH = 13
+	local flareRig = Instance.new("Part")
+	flareRig.Anchored, flareRig.CanCollide, flareRig.CanQuery, flareRig.CanTouch = true, false, false, false
+	flareRig.CastShadow = false
+	flareRig.Transparency = 1
+	flareRig.Size = Vector3.one * 0.05
+	flareRig.Parent = root
+	local flareDefs = {
+		{ -- MainGlow: wide oval glow
+			pos = Vector2.new(1, 1), mult = 1, blend = 0.5, role = 1, squash = -1,
+			size = NumberSequence.new({ NSK(0, 9), NSK(0.5, 4.5), NSK(1, 0) }),
+			alpha = NumberSequence.new({ NSK(0, 0.1), NSK(0.6, 0.55), NSK(1, 1) }),
+		},
+		{ -- CoreFlash: white-hot stretched core
+			pos = Vector2.new(1, 1), mult = 1, blend = 0.15, role = 1, squash = -1.2,
+			size = NumberSequence.new({ NSK(0, 4.5), NSK(1, 0) }),
+			alpha = NumberSequence.new({ NSK(0, 0), NSK(1, 1) }),
+		},
+		{ -- Band: soft colored band running through the core
+			pos = Vector2.new(1, 1), mult = 1, blend = 0.8, role = 2, squash = -4,
+			size = NumberSequence.new({ NSK(0, 6), NSK(1, 0) }),
+			alpha = NumberSequence.new({ NSK(0, 0.25), NSK(0.6, 0.65), NSK(1, 1) }),
+		},
+		{ -- Ghost: faint stretched ghost drifting off-axis
+			pos = Vector2.new(-0.6, -0.6), mult = 1, blend = 0.75, role = 3, squash = -1.5,
+			size = NumberSequence.new({ NSK(0, 2.2), NSK(1, 0) }),
+			alpha = NumberSequence.new({ NSK(0, 0.65), NSK(1, 1) }),
+		},
+		{ -- Anamorphic: long streak across the screen
+			pos = Vector2.new(1, 1), mult = 1, blend = 0.85, role = 2,
+			size = NumberSequence.new({ NSK(0, 3.5), NSK(1, 0) }),
+			alpha = NumberSequence.new({ NSK(0, 0.1), NSK(1, 1) }),
+			squash = NumberSequence.new({ NSK(0, -9), NSK(1, -3) }),
+		},
+		{ -- StreakCore: thin white-hot line through the middle
+			pos = Vector2.new(1, 1), mult = 1, blend = 0.15, role = 1,
+			size = NumberSequence.new({ NSK(0, 2.2), NSK(1, 0) }),
+			alpha = NumberSequence.new({ NSK(0, 0), NSK(1, 1) }),
+			squash = NumberSequence.new({ NSK(0, -14), NSK(1, -5) }),
+		},
+	}
+	for _, d in ipairs(flareDefs) do
+		d.att = Instance.new("Attachment")
+		d.att.Parent = flareRig
+		local e = Instance.new("ParticleEmitter")
+		e.Enabled, e.Rate = false, 0
+		e.Speed, e.RotSpeed = NumberRange.new(0), NumberRange.new(0)
+		e.Lifetime = NumberRange.new(0.05)
+		e.Rotation = NumberRange.new(CONFIG.FlareTilt)
+		e.LightEmission, e.LightInfluence, e.ZOffset = 1, 0, -5
+		e.Orientation = Enum.ParticleOrientation.FacingCamera
+		e.Parent = d.att
+		d.e = e
+	end
+	local function evalSeq(v, a)
+		if typeof(v) == "number" then return v end
+		a = math.clamp(a, 0, 1)
+		local k = v.Keypoints
+		for i = 2, #k do
+			if a <= k[i].Time then
+				local p0, p1 = k[i - 1], k[i]
+				return p0.Value + (p1.Value - p0.Value) * (a - p0.Time) / (p1.Time - p0.Time)
+			end
+		end
+		return k[#k].Value
+	end
+
+	local whiteF = uiFrame(gui, WHITE)
+	whiteF.AnchorPoint, whiteF.Size, whiteF.ZIndex = Vector2.zero, UDim2.fromScale(1, 1), 5
+	local blackF = uiFrame(gui, Color3.new(0, 0, 0))
+	blackF.AnchorPoint, blackF.Size, blackF.ZIndex = Vector2.zero, UDim2.fromScale(1, 1), 6
+
+	-- ================= TIMELINE =================
+	local T1, T2 = 4.8, 5.9
+
+	local function starburst(t0, n, baseLen, w, palette, life, tilt)
+		for i = 1, n do
+			local big = (i % 4 == 0)
+			addRay{
+				t0 = t0 + rr(0, 0.04), life = life, ang = tilt + (i / n) * 2 * PI, z = rr(-0.08, 0.08),
+				r0 = 0.03 * S, len = baseLen * S * ((i % 2 == 0) and 1 or 0.55) * (big and 1.25 or 1) * rr(0.9, 1.1),
+				w = w * S * (big and 1.4 or 1), color = pick(palette), grow = 0.12, hold = 0.5, tailMove = 0.45,
+			}
+		end
+	end
+
+	-- EARTH REVEAL: a soft black shadow (dark on the left, clear on the right), as tall as the screen, slides across the planet
+	-- and off the left edge, like night turning to day. It is destroyed when the tween finishes.
+	-- Built from a long solid-black tail (always runs past the screen's left edge, so no visible cut) + a soft gradient edge.
+	if earthModel and CONFIG.EarthReveal then
+		local earthCenter = C.Position + camBase.LookVector * earthBackOffset
+		local holder = Instance.new("Frame")
+		holder.Size = UDim2.fromScale(1, 1)
+		holder.BackgroundTransparency = 1
+		holder.BorderSizePixel = 0
+		holder.ZIndex = 4
+		holder.Parent = gui
+
+		local tail = Instance.new("Frame") -- solid black, extends far past the left of the screen
+		tail.BackgroundColor3 = Color3.new(0, 0, 0)
+		tail.BorderSizePixel = 0
+		tail.ZIndex = 4
+		tail.Parent = holder
+
+		local fade = Instance.new("Frame") -- soft terminator edge
+		fade.BackgroundColor3 = Color3.new(0, 0, 0)
+		fade.BorderSizePixel = 0
+		fade.ZIndex = 4
+		fade.Parent = holder
+		local fadeGrad = Instance.new("UIGradient")
+		fadeGrad.Rotation = 0 -- left -> right: dark to clear
+		fadeGrad.Transparency = NumberSequence.new({ NSK(0, 0), NSK(0.45, 0.45), NSK(1, 1) })
+		fadeGrad.Parent = fade
+
+		local function placeShadow(a)
+			local pxPerStud = (V.Y / 2) / (D * math.tan(math.rad(camera.FieldOfView) / 2))
+			local dPx = 2 * earthRadius * pxPerStud * 1.03
+			local P = camera:WorldToViewportPoint(earthCenter)
+			local planetLeft = P.X - dPx / 2
+			local F = dPx * 1.4 -- width of the soft edge
+			local e = a * a * (3 - 2 * a)
+			-- start: planet fully in shadow. end: soft edge fully past the planet's left edge, planet fully lit
+			local x0 = planetLeft + dPx * 1.03
+			local x1 = planetLeft - F - dPx * 0.03
+			local x = x0 + (x1 - x0) * e
+			local tailW = V.X * 3 + dPx * 4
+			tail.Size = UDim2.new(0, tailW, 1, 0) -- full screen height
+			tail.Position = UDim2.new(0, x - tailW, 0, 0)
+			fade.Size = UDim2.new(0, F, 1, 0)
+			fade.Position = UDim2.new(0, x, 0, 0)
+		end
+		placeShadow(0)
+		at(-CONFIG.EarthIntroSeconds, CONFIG.EarthRevealSeconds, placeShadow, function() holder:Destroy() end)
+	end
+
+	-- EARTH WARNING GLOW: in the last second before the planet is moved away (T1), a highlight fades in on the earth in the
+	-- charge-phase lens flare color (BLUE[2], cyan), telling the viewer the planet is about to blow. Ease-in (power curve):
+	-- starts slow, shoots to full strength right at the end. Occluded depth mode, fill + outline, destroyed when the earth moves.
+	if earthModel and CONFIG.EarthWarningGlow then
+		local glow
+		at(T1 - CONFIG.EarthWarningGlowSeconds, CONFIG.EarthWarningGlowSeconds, function(a)
+			if not glow then
+				glow = Instance.new("Highlight")
+				glow.Adornee = earthModel
+				glow.DepthMode = Enum.HighlightDepthMode.Occluded
+				glow.FillColor = BLUE[2]
+				glow.OutlineColor = BLUE[2]
+				glow.FillTransparency, glow.OutlineTransparency = 1, 1
+				glow.Parent = root
+			end
+			local e = a ^ CONFIG.EarthWarningGlowEase -- power ease-in: slow start, fast finish, but visible much earlier than an expo curve
+			glow.FillTransparency = 1 - (1 - 0.15) * e
+			glow.OutlineTransparency = 1 - e
+		end, function() if glow then glow:Destroy() end end)
+	end
+
+	-- PHASE 1: seed + lens streak + charge (energy spirals INTO the core)
+	for _, off in ipairs({ 0, PI }) do
+		addRay{ t0 = 0.5, life = 4.2, ang = TILT + off, r0 = 0, len = earthRadius + 0.62 * S, w = 0.007 * S * startupScale, color = BLUE[2], grow = 0.3, hold = 0.85, tailMove = 0 }
+	end
+	for i = 1, cnt(12) do
+		addRay{ t0 = 0.9 + i * 0.02, life = 3.8, ang = TILT + PI * i / 6 + rr(-0.1, 0.1), z = rr(-0.2, 0.2), r0 = 0.01 * S, len = rr(0.07, 0.22) * S * startupScale, w = 0.0035 * S * startupScale, color = pick(BLUE), grow = 0.3, hold = 0.85, tailMove = 0 }
+	end
+	for i = 1, cnt(110) do
+		local u = rng:NextNumber()
+		addComet{
+			t0 = 1.2 + 3.4 * u ^ 0.6, life = rr(1.1, 1.7), mode = "in", ang = rr(0, 2 * PI), r0 = rr(0.3, 0.95) * S, r1 = 0.015 * S,
+			swirl = rr(2.2, 3.6) * (rng:NextNumber() < 0.5 and 1 or -1), z = rr(-0.2, 0.2), w = rr(0.003, 0.008) * S * startupScale,
+			trail = rr(0.35, 0.6), color = pick(BLUE), color2 = BLUE[3],
+		}
+	end
+	for i = 1, cnt(6) do
+		addBolt{ t0 = 3.5 + i * 0.18, life = 0.5, ang = rr(0, 2 * PI), r0 = 0.03 * S, len = rr(0.1, 0.22) * S * startupScale, w = 0.003 * S * startupScale, color = BLUE[2], jitter = 0.14, N = 7 }
+	end
+
+	-- PHASE 2: BREACH (your frame 2)
+	once(T1, function() burst(WHITE, BLUE[2], cnt(10), 1.0, 0.006) end)
+	-- the big blue explosion: pure black & white impact frame (real-time, so slow-mo doesn't stretch it)
+	once(T1, function() flashUntil = os.clock() + CONFIG.ImpactFlashSeconds end)
+	once(T1, function() table.insert(explosionShakes, { start = os.clock(), strength = 1, phase = 0 }) end) -- big smooth camera shake on the breach
+	once(T1, function()
+		if earthModel then
+			centerEarthAt(earthModel, C.Position + camBase.UpVector * CONFIG.EarthParkDistance)
+		end
+	end)
+	starburst(T1, 16, 1.5, 0.007, BLUE, 2.2, TILT)
+	for i = 1, cnt(40) do
+		addRay{ t0 = T1 + rr(0, 0.1), life = rr(0.8, 1.3), ang = rr(0, 2 * PI), z = rr(-0.3, 0.3), r0 = rr(0.02, 0.1) * S, len = rr(0.12, 0.5) * S, w = rr(0.008, 0.016) * S, color = pick(BLUE), grow = 0.16, hold = 0.35, tailMove = 0.6 }
+	end
+	for i = 1, cnt(90) do
+		addComet{
+			t0 = T1 + rr(0, 0.2), life = rr(1.0, 1.7), mode = "out", ang = rr(0, 2 * PI), r0 = 0.04 * S, r1 = rr(0.8, 2.3) * S,
+			swirl = rr(0.7, 1.7) * (rng:NextNumber() < 0.5 and 1 or -1), z = rr(-0.25, 0.25), w = rr(0.008, 0.02) * S,
+			trail = rr(0.4, 0.8), color = pick(BLUE), color2 = BLUE[3],
+		}
+	end
+	for i = 1, cnt(10) do
+		addBolt{ t0 = T1 + rr(0, 0.35), life = rr(0.4, 0.8), ang = rr(0, 2 * PI), r0 = 0.1 * S, len = rr(0.5, 1.1) * S, w = 0.006 * S, color = BLUE[2], jitter = 0.08 }
+	end
+
+	-- PHASE 3: SECOND BURST (your frame 3)
+	once(T2, function() burst(BLUE[2], BLUE[3], cnt(12), 1.2, 0.007) end)
+	once(T2, function() table.insert(explosionShakes, { start = os.clock(), strength = 0.85, phase = 2.3 }) end) -- smooth shake on the second burst too
+	for _, a in ipairs({ 0.15, PI + 0.15, -0.12, PI - 0.12, 1.2, PI + 1.2 }) do
+		addRay{ t0 = T2 + 0.03, life = 2.6, ang = a, r0 = 0.1 * S, len = 1.7 * S, w = 0.03 * S, color = BLUE[2], grow = 0.12, hold = 0.6, tailMove = 0.35 }
+	end
+	for i = 1, cnt(90) do
+		addComet{
+			t0 = T2 + rr(0, 0.25), life = rr(1.0, 1.8), mode = "out", ang = rr(0, 2 * PI), r0 = 0.06 * S, r1 = rr(1, 2.6) * S,
+			swirl = rr(0.8, 2.0) * (rng:NextNumber() < 0.5 and 1 or -1), z = rr(-0.25, 0.25), w = rr(0.01, 0.025) * S,
+			trail = rr(0.45, 0.9), color = pick(BLUE), color2 = BLUE[3],
+		}
+	end
+	for i = 1, cnt(8) do
+		addBolt{ t0 = T2 + rr(0, 0.4), life = rr(0.4, 0.8), ang = rr(0, 2 * PI), r0 = 0.12 * S, len = rr(0.7, 1.4) * S, w = 0.007 * S, color = BLUE[2], jitter = 0.08 }
+	end
+
+	-- ================= key tracks =================
+	local blackKeys = earthModel and { { 0, 1 }, { 6.7, 1 }, { 7.1, 0 } } or { { 0, 0 }, { 1.3, 1 }, { 6.7, 1 }, { 7.1, 0 } }
+	local dimKeys = { { 0, 1 }, { 4.3, 1 }, { 4.72, 0.5 }, { 4.79, 0.5 }, { 4.84, 1 } }
+	local whiteKeys = { { 0, 1 }, { 4.74, 1 }, { 4.8, 0.15 }, { 4.86, 0.7 }, { 5.3, 1 }, { 5.88, 1 }, { 5.93, 0.3 }, { 6.3, 1 }, { 7.12, 1 }, { 7.2, 0 }, { 7.3, 0.4 }, { 7.9, 0.96 }, { 10, 0.96 }, { 11.2, 0 } }
+	local rumbleKeys = { { 0, 0 }, { 1.5, 0.03 }, { 4.4, 0.3 }, { 4.74, 0.55 }, { 4.78, 0 }, { 7.2, 0 }, { 7.5, 0.4 }, { 12, 0 } }
+	local impulses = {} -- the old jagged per-explosion impulses are gone: the two blue explosions use the smooth shake below
+	local swayKeys = { { 0, 0 }, { 7.1, 0 }, { 7.3, 0.03 }, { 10, 0.015 }, { 12, 0 } }
+	local fovKeys = { { 0, 3 }, { 4.4, -6 }, { 4.74, -17 }, { 4.8, -17 }, { 4.88, 14 }, { 5.5, 5 }, { 5.9, 2 }, { 6.0, 10 }, { 7.1, 5 }, { 7.14, -9 }, { 7.3, 24 }, { 9, 9 }, { 12, 0 } }
+	local dustKeys = { { 0.5, 0 }, { 1, 70 }, { 4.6, 70 }, { 4.8, 0 } }
+	local emberKeys = { { 7.2, 0 }, { 7.6, 120 }, { 11, 60 }, { 12, 0 } }
+	local pulseKeys = { { 0.5, 0 }, { 1.5, 1 }, { 4.0, 1 }, { 4.6, 0 } }
+	local hotKeys = { { 7.1, 0 }, { 7.4, 1 } }
+	local bloomKeys = { { 0, 0.5 }, { 4.7, 1.0 }, { 4.82, 2.0 }, { 5.5, 1.2 }, { 7.2, 2.6 }, { 9, 1.8 }, { 11, 3 } }
+	local contrastKeys = { { 0, 0.12 }, { 7.14, 0.12 }, { 7.18, 1.0 }, { 7.32, 0.12 } }
+	local brightKeys = { { 0, 0 }, { 4.4, 0 }, { 4.72, -0.12 }, { 4.8, 0.15 }, { 5.2, 0 } }
+	local vigKeys = { { 0, 0.4 }, { 4.4, 0.2 }, { 4.72, 0 }, { 4.84, 0.4 }, { 7.1, 0.3 }, { 7.2, 0.45 }, { 11, 0.6 } }
+	local tsKeys = CONFIG.SlowMo
+		and { { 0, 1 }, { 4.74, 1 }, { 4.8, 0.35 }, { 4.92, 0.35 }, { 5.05, 1 }, { 7.05, 1 }, { 7.12, 0.15 }, { 7.4, 0.15 }, { 7.6, 1 } }
+		or { { 0, 1 }, { 1, 1 } }
+	local flareKeys = {
+		{ 0, 0 }, { 0.6, 0 }, { 3.0, 0.12 }, { 4.4, 0.3 }, { 4.72, 0.1 }, { 4.82, 1.0 }, { 5.5, 0.5 }, { 5.9, 0.6 }, { 6.0, 0.9 },
+		{ 6.6, 0.6 }, { 7.1, 0.65 }, { 7.2, 1.0 }, { 8.5, 0.85 }, { 10, 1.0 }, { 11.2, 0.6 }, { 11.8, 0 },
+	}
+
+	-- flare colors per phase: { start, end, main, accent, ghost } - the gap between two phases is the crossfade
+	local flarePhases = {
+		{ 0,    4.7,  BLUE[2],            BLUE[1], BLUE[3] }, -- charge: cyan
+		{ 4.84, 5.85, BLUE[4],            BLUE[2], BLUE[1] }, -- breach: icy white-blue
+		{ 5.95, 7.05, BLUE[1],            BLUE[3], BLUE[2] }, -- second burst: deep blue
+		{ 7.25, 8.4,  rgb(255, 220, 120), HOT[1],  HOT[3] },  -- detonation: gold / orange / magenta
+		{ 8.8,  10.1, rgb(255, 80, 140),  HOT[5],  HOT[3] },  -- aftershocks: magenta / violet
+		{ 10.5, 12,   WHITE,              rgb(255, 150, 200), HOT[5] }, -- whiteout
+	}
+	local flareCols = { {}, {}, {} }
+	for _, ph in ipairs(flarePhases) do
+		for i = 1, 3 do
+			table.insert(flareCols[i], { ph[1], ph[2 + i] })
+			table.insert(flareCols[i], { ph[2], ph[2 + i] })
+		end
+	end
+	local glowSize = { { 0, 0 }, { 0.5, 0.05 }, { 1.6, 0.5 }, { 4.2, 0.9 }, { 4.72, 0.12 }, { 4.85, 2.0 }, { 5.9, 2.2 }, { 7.1, 2.4 }, { 7.25, 4 }, { 9, 5 }, { 11, 7 } }
+	local glowAlpha = { { 0, 0 }, { 0.5, 0.2 }, { 1.5, 0.7 }, { 4.5, 0.9 }, { 4.85, 1.4 }, { 5.5, 1.0 }, { 6.1, 1.4 }, { 7.1, 1.2 }, { 7.25, 2.0 }, { 9, 1.6 }, { 11, 2.5 }, { 11.8, 0 } }
+
+	-- ================= per-frame drivers =================
+	local function shakeAmp(t)
+		local a = kf(t, rumbleKeys)
+		for _, im in ipairs(impulses) do
+			if t >= im[1] then a += im[2] * math.exp(-(t - im[1]) * im[3]) end
+		end
+		return a
+	end
+
+	-- big smooth shake per explosion: sums of sine waves (no noise, no random jumps) under a punchy envelope
+	-- (instant-ish attack, hard hit, long heavy tail). Runs in real time so the slow-mo doesn't dull it.
+	-- Each explosion gets its own phase so the two shakes don't move identically; overlapping tails simply add.
+	local TAU = 2 * PI
+	local function explosionShake()
+		if CONFIG.ExplosionShake <= 0 or #explosionShakes == 0 then return 0, 0, 0 end
+		local now = os.clock()
+		local yaw, pitch, roll = 0, 0, 0
+		for _, sh in ipairs(explosionShakes) do
+			local rt = now - sh.start
+			local atk = math.clamp(rt / 0.06, 0, 1)
+			atk = atk * atk * (3 - 2 * atk)
+			local env = atk * (0.55 * math.exp(-rt * 4.5) + 0.45 * math.exp(-rt * 1.3))
+			if env >= 0.0005 then
+				local k, ph = env * sh.strength * CONFIG.ExplosionShake, sh.phase
+				yaw += (0.6 * math.sin(rt * TAU * 6.1 + 0.3 + ph) + 0.4 * math.sin(rt * TAU * 10.7 + 1.7 + ph)) * 0.11 * k
+				pitch += (0.6 * math.sin(rt * TAU * 7.3 + 2.1 + ph) + 0.4 * math.sin(rt * TAU * 12.9 + 0.4 + ph)) * 0.09 * k
+				roll += (0.7 * math.sin(rt * TAU * 5.2 + 4.0 + ph) + 0.3 * math.sin(rt * TAU * 9.1 + 1.0 + ph)) * 0.07 * k
+			end
+		end
+		return yaw, pitch, roll -- radians (a single hit peaks around 6 deg yaw, 5 deg pitch, 4 deg roll)
+	end
+
+	local function updateCamera(t)
+		local amp = shakeAmp(t) * CONFIG.Shake
+		local shYaw, shPitch, shRoll = explosionShake()
+		local yaw = (0.045 * math.sin(t * 0.45) + kf(t, swayKeys) * math.sin(t * 1.7)) * CONFIG.Sway
+		local pitch = 0.028 * math.sin(t * 0.37 + 1) * CONFIG.Sway
+		camera.CFrame = camBase * CFrame.Angles(
+			pitch + math.noise(t * 31, 0.3) * amp * 0.035 + shPitch,
+			yaw + math.noise(t * 31, 10.3) * amp * 0.035 + shYaw,
+			math.noise(t * 27, 20.3) * amp * 0.025 + shRoll)
+		camera.FieldOfView = CONFIG.FOV + kf(t, fovKeys)
+		V = camera.ViewportSize
+		local P = camera:WorldToViewportPoint(C.Position)
+		srcX, srcY, onScreen = P.X, P.Y, P.Z > 0
+	end
+
+	local function updateWorld(t, ts)
+		local flashing = os.clock() < flashUntil
+		if flashing ~= flashOn then
+			flashOn = flashing
+			for _, f in ipairs(flashCCs) do f.Enabled = flashing end
+		end
+		bloom.Intensity = flashing and 0 or kf(t, bloomKeys) -- bloom would smear the pure black/white
+		cc.Contrast = kf(t, contrastKeys)
+		cc.Brightness = kf(t, brightKeys)
+
+		local bc = kf(t, bgKeys)
+		for _, tile in ipairs(tiles) do tile.Color = bc end
+
+		local starFade = kf(t, starKeys)
+		for _, st in ipairs(stars) do
+			local tw = 0.7 + 0.3 * math.sin(t * st.speed + st.phase) -- gentle twinkle
+			st.part.Transparency = 1 - math.clamp(st.base * tw * starFade, 0, 1)
+		end
+
+		local d = kf(t, coreKeys) * S * (1 + 0.12 * math.sin(t * (6 + 3 * t)) * kf(t, pulseKeys))
+		local hot = kf(t, hotKeys)
+		for i = 1, NL do
+			local l = layers[i]
+			local sz = softCap(d * mult[i])
+			if d > 1 then
+				l.Size = Vector3.one * sz
+				l.Transparency = ctr[i]
+				l.Color = blueL[i]:Lerp(hotL[i], hot)
+			else
+				l.Transparency = 1
+			end
+		end
+
+		dust.Rate = kf(t, dustKeys) * CONFIG.Quality
+		embers.Rate = kf(t, emberKeys) * CONFIG.Quality
+		if hasTimeScale then
+			for _, e in ipairs(emitters) do e.TimeScale = ts end
+		end
+		return hot
+	end
+
+	local function updateUI(t, hot)
+		local cx, cy = V.X / 2, V.Y / 2
+		local tint = rgb(70, 150, 255):Lerp(rgb(255, 120, 60), hot)
+		local fl = onScreen and kf(t, flareKeys) * CONFIG.Flare or 0
+
+		vigC.GroupTransparency = kf(t, vigKeys)
+		vigC.Visible, glowC.Visible, ringC.Visible = not flashOn, not flashOn, not flashOn -- keep the flash exactly black/white
+
+		local gs, ga = kf(t, glowSize), onScreen and kf(t, glowAlpha) or 0
+		for i, c in ipairs(glowCircles) do
+			local sz = V.Y * 0.05 * 1.22 ^ (i - 1) * gs
+			c.Size = UDim2.fromOffset(sz, sz)
+			c.Position = UDim2.fromOffset(srcX, srcY)
+			c.BackgroundColor3 = tint:Lerp(WHITE, math.clamp(1 - (i - 1) / 8, 0, 1))
+			-- discs wider than the screen only tint the whole frame (the wash + visible ring edges), so they fade out
+			local reach = 1 - math.clamp((sz - V.Y * 1.1) / (V.Y * 0.9), 0, 1)
+			c.BackgroundTransparency = 1 - math.clamp(0.025 * ga * reach, 0, 1)
+		end
+
+		-- lens flare: Sunset-style placement, colors follow the current phase
+		local cols = { kf(t, flareCols[1]), kf(t, flareCols[2]), kf(t, flareCols[3]) }
+		local cf = camera.CFrame
+		local toSrc = C.Position - cf.Position
+		local viewAngle = math.acos(math.clamp(cf.LookVector:Dot(toSrc.Unit), -1, 1))
+		local vFov = math.rad(camera.FieldOfView)
+		local ar = V.X / V.Y
+		local dFov = 2 * math.atan(math.tan(vFov / 2) * math.sqrt(1 + ar * ar))
+		local angleAlpha = 1 - math.clamp(viewAngle / (dFov / 2), 0, 1)
+		local strength = math.clamp(angleAlpha * fl, 0, 1)
+		if strength > 0.001 then
+			local src = Vector2.new(srcX, srcY)
+			-- drift bias so the ghosts still spread out while the source sits dead center
+			local b = Vector2.new(cx, cy) - src + Vector2.new(math.cos(t * 0.7) * V.Y * 0.16, math.sin(t * 0.5) * V.Y * 0.1)
+			local fovK = math.tan(vFov / 2) / math.tan(math.rad(CONFIG.FOV) / 2) -- keeps flare size constant on screen while FOV swings
+			for _, d in ipairs(flareDefs) do
+				local k = Vector2.one - d.pos * d.mult
+				local pt = src + Vector2.new(b.X * k.X, b.Y * k.Y)
+				local ray = camera:ViewportPointToRay(pt.X, pt.Y)
+				d.att.WorldPosition = ray.Origin + ray.Direction.Unit * FLARE_DEPTH
+				local fade = 1 - angleAlpha
+				d.e.Size = NumberSequence.new(evalSeq(d.size, fade) * fovK)
+				d.e.Squash = NumberSequence.new(evalSeq(d.squash, fade) * CONFIG.FlareStretch)
+				d.e.Transparency = NumberSequence.new(math.clamp(1 - (1 - evalSeq(d.alpha, fade)) * strength, 0, 1))
+				d.e.Color = ColorSequence.new(WHITE:Lerp(cols[d.role], d.blend))
+				d.e:Emit(1)
+			end
+		end
+
+		blackF.BackgroundTransparency = math.min(kf(t, blackKeys), kf(t, dimKeys))
+		whiteF.BackgroundTransparency = kf(t, whiteKeys)
+	end
+
+	-- ================= run =================
+	local clock = earthModel and -CONFIG.EarthIntroSeconds or 0
+	local conn
+	conn = RunService.RenderStepped:Connect(function(dt)
+		local ts = kf(clock, tsKeys)
+		clock += dt * ts
+		updateCamera(clock)
+		for i = #tasks, 1, -1 do
+			local k = tasks[i]
+			if clock >= k.t0 then
+				if k.once then
+					k.fn()
+					table.remove(tasks, i)
+				else
+					local a = (clock - k.t0) / k.dur
+					if a >= 1 then
+						k.fn(1)
+						if k.done then k.done() end
+						table.remove(tasks, i)
+					else
+						k.fn(a)
+					end
+				end
+			end
+		end
+		local hot = updateWorld(clock, ts)
+		updateUI(clock, hot)
+
+		if clock >= DURATION then
+			conn:Disconnect()
+			-- the cutscene ends on a fully black screen: replace it with a black overlay that fades out
+			-- (created before the cutscene gui is destroyed so there is no one-frame gap)
+			do
+				local endGui = Instance.new("ScreenGui")
+				endGui.Name = "PlanetExplosionEndFade"
+				endGui.IgnoreGuiInset = true
+				endGui.ScreenInsets = Enum.ScreenInsets.None
+				endGui.ResetOnSpawn = false
+				endGui.DisplayOrder = 2000
+				local endFrame = Instance.new("Frame")
+				endFrame.Size = UDim2.fromScale(1, 1)
+				endFrame.BackgroundColor3 = Color3.new(0, 0, 0)
+				endFrame.BackgroundTransparency = 0
+				endFrame.BorderSizePixel = 0
+				endFrame.Parent = endGui
+				endGui.Parent = (gethui and gethui()) or player:WaitForChild("PlayerGui")
+				local endTween = game:GetService("TweenService"):Create(
+					endFrame,
+					TweenInfo.new(CONFIG.EndFadeOutSeconds, Enum.EasingStyle.Linear, Enum.EasingDirection.Out),
+					{ BackgroundTransparency = 1 }
+				)
+				endTween.Completed:Connect(function() endGui:Destroy() end)
+				endTween:Play()
+			end
+			root:Destroy()
+			gui:Destroy()
+			bloom:Destroy()
+			cc:Destroy()
+			for _, f in ipairs(flashCCs) do f:Destroy() end
+			sky:Destroy()
+			for _, c in ipairs(removed) do c.Parent = Lighting end
+			for _, g in ipairs(hiddenGuis) do g.Enabled = true end
+			pcall(function() StarterGui:SetCore("TopbarEnabled", true) end)
+			if controls then pcall(function() controls:Enable() end) end
+			camera.CameraType = Enum.CameraType.Custom
+			camera.FieldOfView = 70
+			pcall(function() StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.All, true) end)
+			playing = false
+			if onDone then task.spawn(onDone) end -- cutscene finished
+		end
+	end)
+end
+
+-- park the earth far out of sight ahead of time so the first explosion doesn't hitch while the asset downloads
+task.spawn(function()
+	pcall(function()
+		local m = obtainEarthModel()
+		if m then
+			centerEarthAt(m, CONFIG.StageOrigin + Vector3.new(0, CONFIG.EarthParkDistance, 0))
+		end
+	end)
+end)
+
+return play
+end)()
+
 -- Preload attack4 model once so we can clone it cheaply instead of calling GetObjects every time
 do
 	local _a4folder = game.ReplicatedStorage:FindFirstChild("_Attack4Assets")
@@ -6250,15 +7537,21 @@ end)
 			task.spawn(function()
 				local ok, err = pcall(function()
 					PlayAttack4Anim()
+					local beamSfx -- kept so the finisher can fade it out with the beam
 					task.spawn(function()
-						GetGitSound("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/BeamSFX.mp3", "SFX", 2):Play()
+						beamSfx = GetGitSound("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/BeamSFX.mp3", "SFX", 2)
+						beamSfx:Play()
 					end)
 					task.spawn(function()
 						GetGitSound("https://raw.githubusercontent.com/NetlessScripter/GOKU/fe932410b649a18432468eddbb8d4bfe106e6bf5/copy_5801B72C-B51F-4D23-A425-20E3BB77A75C.mp3", "VoiceLineKM", 2):Play()
 					end)
 
+					-- Hitbox lives exactly as long as the charge (0.6s), 3 studs in front of us
+					local a4Hitbox = StartAttack4Hitbox(0.6)
+
 					-- Beam charge VFX for 0.6s, then spawn the model
 					Charge(0.6)
+					a4Hitbox.stop() -- charge is over: make sure the hitbox is gone
 
 					-- Clone the preloaded model instead of fetching it every time
 					local model = game.ReplicatedStorage._Attack4Assets.Attack4Model:Clone()
@@ -6286,6 +7579,9 @@ end)
 
 					-- After 0.6 seconds: disable all particles then fade the whole model out
 					task.delay(0.6, function()
+						-- the beam starts to fade right now. If the hitbox caught a low-health target, a white overlay fades in
+						-- over the same duration as the beam fade, and the cutscene starts once the beam is fully gone (see fade loop below).
+
 						-- Disable particles first so they stop emitting mid-fade
 						for _, desc in ipairs(model:GetDescendants()) do
 							if desc:IsA("ParticleEmitter") or desc:IsA("Trail") or desc:IsA("Beam") then
@@ -6319,6 +7615,26 @@ end)
 
 						-- Tween transparency from original to 1 over 0.3s
 						local fadeDuration = 0.3
+
+						-- Finisher white overlay: only when the hitbox caught a target. Fades in exactly as long as the beam fades.
+						local overlayGui, overlayFrame, fadeSfx, sfxBase
+						if a4Hitbox.triggered and PlayPlanetExplosion then
+							fadeSfx = beamSfx -- the beam sound fades out together with the beam (only on a finisher)
+							sfxBase = fadeSfx and fadeSfx.Volume or 0
+							overlayGui = Instance.new("ScreenGui")
+							overlayGui.Name = "Attack4FinisherWhite"
+							overlayGui.IgnoreGuiInset = true                  -- ignore the topbar inset
+							overlayGui.ScreenInsets = Enum.ScreenInsets.None  -- no safe-area limit: covers the true screen edges
+							overlayGui.ResetOnSpawn = false
+							overlayGui.DisplayOrder = 2000                    -- above the cutscene's own gui (1000)
+							overlayFrame = Instance.new("Frame")
+							overlayFrame.Size = UDim2.fromScale(1, 1)
+							overlayFrame.BackgroundColor3 = Color3.new(1, 1, 1)
+							overlayFrame.BackgroundTransparency = 1
+							overlayFrame.BorderSizePixel = 0
+							overlayFrame.Parent = overlayGui
+							overlayGui.Parent = (gethui and gethui()) or LocalPlayer:WaitForChild("PlayerGui")
+						end
 						local elapsed = 0
 						local fadeConn
 						fadeConn = game:GetService("RunService").Heartbeat:Connect(function(dt)
@@ -6350,9 +7666,34 @@ end)
 									end
 								end
 							end
+							if overlayFrame then
+								overlayFrame.BackgroundTransparency = 1 - alpha -- same timing as the beam fade
+							end
+							if fadeSfx and fadeSfx.Parent then
+								fadeSfx.Volume = sfxBase * (1 - alpha) -- audio fades with the beam
+							end
 							if alpha >= 1 then
 								fadeConn:Disconnect()
 								if model and model.Parent then model:Destroy() end
+								if fadeSfx and fadeSfx.Parent then
+									fadeSfx:Stop()
+									fadeSfx:Destroy()
+								end
+								-- beam fully gone: start the cutscene, then fade the white screen out over 1 second
+								if overlayFrame then
+									task.spawn(PlayCutsceneWithTeleport)
+									-- the cutscene hides ScreenGuis in PlayerGui; make sure our overlay stays visible
+									overlayGui.Enabled = true
+									local fadeOut = game:GetService("TweenService"):Create(
+										overlayFrame,
+										TweenInfo.new(1, Enum.EasingStyle.Linear, Enum.EasingDirection.Out),
+										{ BackgroundTransparency = 1 }
+									)
+									fadeOut.Completed:Connect(function()
+										if overlayGui then overlayGui:Destroy() end
+									end)
+									fadeOut:Play()
+								end
 							end
 						end)
 					end)
