@@ -57,7 +57,7 @@ _gc_LegacyReplication = game.ReplicatedStorage.Resources.LegacyReplication
 -- health is at or below ATTACK4_FINISHER_HEALTH, the hitbox is destroyed and the planet explosion fires the moment the beam starts to fade.
 ATTACK4_HITBOX_SIZE      = Vector3.new(8, 6, 8) -- studs
 ATTACK4_HITBOX_OFFSET    = 3                    -- studs in front of the character
-ATTACK4_FINISHER_HEALTH  = 23                   -- health at or below this counts (23 and under), but above 0
+ATTACK4_FINISHER_HEALTH  = 30                   -- health at or below this counts (23 and under), but above 0
 ATTACK4_HITBOX_DEBUG     = false                -- true = make the hitbox visible (red, see-through)
 CUTSCENE_TELEPORT_POS    = Vector3.new(377.1642761230469, 699.103271484375, 360.6839904785156) -- where we wait while the cutscene plays
 
