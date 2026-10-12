@@ -22,6 +22,56 @@ local function FireReplicationEvent(data)
     firesignal(Replication.OnClientEvent, data)
 end
 
+-- Holds the player anchored in the air until the explosion is over
+local EXPLOSION_DURATION = 3.4 -- seconds after impact until the last debris/shell fades
+local holdInAir = false
+local holdToken = 0
+
+local function ReleaseFromAir()
+    holdInAir = false
+    HumanoidRootPart.Anchored = false
+end
+
+local function HoldInAir()
+    holdToken += 1
+    local myToken = holdToken
+    holdInAir = true
+
+    -- Failsafe so the player can never get stuck up there if something errors
+    task.delay(20, function()
+        if holdToken == myToken and holdInAir then
+            ReleaseFromAir()
+        end
+    end)
+end
+
+local ORB_ASSET_ID = "rbxassetid://99926232093491"
+
+-- Create the SpiritVFX folder (reuse it if the script gets re-executed)
+local SpiritVFX = ReplicatedStorage:FindFirstChild("SpiritVFX")
+if not SpiritVFX then
+    SpiritVFX = Instance.new("Folder")
+    SpiritVFX.Name = "SpiritVFX"
+    SpiritVFX.Parent = ReplicatedStorage
+end
+
+-- Load the orb once, up front
+if not SpiritVFX:FindFirstChild("SpiritBombOrb") then
+    local ok, result = pcall(game.GetObjects, game, ORB_ASSET_ID)
+    if ok and result and result[1] then
+        local orb = result[1]
+        orb.Name = "SpiritBombOrb"
+
+        if orb:IsA("Model") and not orb.PrimaryPart then
+            orb.PrimaryPart = orb:FindFirstChildWhichIsA("BasePart", true)
+        end
+
+        orb.Parent = SpiritVFX
+    else
+        warn("[SpiritBomb] Failed to preload orb model:", result)
+    end
+end
+
 local function GetGitSound(githubUrl, soundName)
     if not isfile(soundName .. ".mp3") then
         writefile(soundName .. ".mp3", game:HttpGet(githubUrl))
@@ -68,13 +118,362 @@ local function PlayImpactScreenFlash()
     blackFlash:Destroy()
 end
 
-local function PlaySpiritBombOrb()
-    local model = game:GetObjects("rbxassetid://99926232093491")[1]
-    model.Parent = Character
+-- ============================================================
+--  SPIRIT BOMB EXPLOSION (big blue sphere blast)
+-- ============================================================
+local EXPLOSION_COLORS = {
+    White = Color3.fromRGB(235, 248, 255),
+    Ice = Color3.fromRGB(150, 225, 255),
+    Cyan = Color3.fromRGB(60, 175, 255),
+    Blue = Color3.fromRGB(30, 100, 255),
+    Deep = Color3.fromRGB(10, 35, 190),
+}
 
-    if not model.PrimaryPart then
-        model.PrimaryPart = model:FindFirstChildWhichIsA("BasePart")
+local function NewEffectPart(parent, className, size, cf, color, material, transparency)
+    local part = Instance.new(className)
+    part.Anchored = true
+    part.CanCollide = false
+    part.CanQuery = false
+    part.CanTouch = false
+    part.CastShadow = false
+    part.Size = size
+    part.CFrame = cf
+    part.Color = color
+    part.Material = material
+    part.Transparency = transparency
+    part.Parent = parent
+    return part
+end
+
+local function PlayTween(instance, duration, style, direction, goal, delayTime)
+    local function run()
+        if instance.Parent then
+            TweenService:Create(instance, TweenInfo.new(duration, style, direction), goal):Play()
+        end
     end
+
+    if delayTime and delayTime > 0 then
+        task.delay(delayTime, run)
+    else
+        run()
+    end
+end
+
+-- Expanding glowing sphere (core / mid / outer / pressure wave)
+local function CreateExplosionShell(folder, center, props)
+    local shell = NewEffectPart(
+        folder, "Part", Vector3.one * 2, CFrame.new(center),
+        props.Color, props.Material, props.Transparency
+    )
+    shell.Shape = Enum.PartType.Ball
+
+    PlayTween(shell, props.GrowTime, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out,
+        {Size = Vector3.one * props.Diameter})
+    PlayTween(shell, props.FadeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.In,
+        {Transparency = 1}, props.FadeDelay)
+
+    return shell
+end
+
+-- Thin glowing ring (hollow) built from a SurfaceGui stroke, tilted like the reference
+local function CreateShockRing(folder, center, tilt, diameter, startDelay, color)
+    task.delay(startDelay, function()
+        local ring = NewEffectPart(
+            folder, "Part", Vector3.new(10, 0.2, 10), CFrame.new(center) * tilt,
+            color, Enum.Material.SmoothPlastic, 1
+        )
+
+        local growTime = 1.4
+        PlayTween(ring, growTime, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out,
+            {Size = Vector3.new(diameter, 0.2, diameter)})
+
+        for _, face in ipairs({Enum.NormalId.Top, Enum.NormalId.Bottom}) do
+            local gui = Instance.new("SurfaceGui")
+            gui.Face = face
+            gui.SizingMode = Enum.SurfaceGuiSizingMode.FixedSize
+            gui.CanvasSize = Vector2.new(1024, 1024)
+            gui.LightInfluence = 0
+            gui.Brightness = 3
+            gui.Parent = ring
+
+            local frame = Instance.new("Frame")
+            frame.AnchorPoint = Vector2.new(0.5, 0.5)
+            frame.Position = UDim2.fromScale(0.5, 0.5)
+            frame.Size = UDim2.fromScale(0.94, 0.94)
+            frame.BackgroundTransparency = 1
+            frame.Parent = gui
+
+            local corner = Instance.new("UICorner")
+            corner.CornerRadius = UDim.new(0.5, 0)
+            corner.Parent = frame
+
+            local stroke = Instance.new("UIStroke")
+            stroke.Color = color
+            stroke.Thickness = 26
+            stroke.Parent = frame
+
+            PlayTween(stroke, 1.0, Enum.EasingStyle.Quad, Enum.EasingDirection.In,
+                {Transparency = 1}, growTime - 0.6)
+        end
+    end)
+end
+
+-- Radial light streaks (the speed lines flanking the blast in the reference)
+local function SpawnLightSpokes(folder, center, rng)
+    for i = 1, 56 do
+        local dir = Vector3.new(rng:NextNumber(-1, 1), rng:NextNumber(-1, 1), rng:NextNumber(-1, 1))
+        if dir.Magnitude > 0.1 then
+            dir = dir.Unit
+
+            local length = rng:NextNumber(140, 320)
+            local startPos = center + dir * rng:NextNumber(40, 90)
+            local endPos = center + dir * rng:NextNumber(380, 760)
+            local travel = rng:NextNumber(0.6, 1.1)
+            local color = (i % 2 == 0) and EXPLOSION_COLORS.White or EXPLOSION_COLORS.Cyan
+
+            local spoke = NewEffectPart(
+                folder, "Part", Vector3.new(0.7, 0.7, length),
+                CFrame.lookAt(startPos, startPos + dir),
+                color, Enum.Material.Neon, 0
+            )
+
+            PlayTween(spoke, travel, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out,
+                {CFrame = CFrame.lookAt(endPos, endPos + dir)})
+            PlayTween(spoke, travel * 0.8, Enum.EasingStyle.Quad, Enum.EasingDirection.In,
+                {Transparency = 1, Size = Vector3.new(0.1, 0.1, length)}, travel * 0.2)
+        end
+    end
+end
+
+-- Dark rock chunks flying out with glowing blue trails
+local function SpawnDebris(folder, center, rng)
+    local rockClasses = {"Part", "WedgePart", "CornerWedgePart"}
+
+    for _ = 1, 48 do
+        local dir = Vector3.new(rng:NextNumber(-1, 1), rng:NextNumber(-0.5, 1), rng:NextNumber(-1, 1))
+        if dir.Magnitude < 0.1 then
+            dir = Vector3.yAxis
+        end
+        dir = dir.Unit
+
+        local size = rng:NextNumber(7, 26)
+        local startCF = CFrame.new(center + dir * rng:NextNumber(40, 110))
+            * CFrame.Angles(rng:NextNumber(0, 6.28), rng:NextNumber(0, 6.28), rng:NextNumber(0, 6.28))
+
+        local rock = NewEffectPart(
+            folder, rockClasses[rng:NextInteger(1, #rockClasses)],
+            Vector3.new(size, size * rng:NextNumber(0.5, 1), size * rng:NextNumber(0.6, 1.2)),
+            startCF, Color3.fromRGB(22, 26, 40), Enum.Material.Slate, 0
+        )
+
+        local a0 = Instance.new("Attachment")
+        a0.Position = Vector3.new(0, size * 0.15, 0)
+        a0.Parent = rock
+        local a1 = Instance.new("Attachment")
+        a1.Position = Vector3.new(0, -size * 0.15, 0)
+        a1.Parent = rock
+
+        local trail = Instance.new("Trail")
+        trail.Attachment0 = a0
+        trail.Attachment1 = a1
+        trail.Color = ColorSequence.new(EXPLOSION_COLORS.Ice, EXPLOSION_COLORS.Deep)
+        trail.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0.2),
+            NumberSequenceKeypoint.new(1, 1),
+        })
+        trail.WidthScale = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 1),
+            NumberSequenceKeypoint.new(1, 0),
+        })
+        trail.Lifetime = 0.7
+        trail.LightEmission = 1
+        trail.FaceCamera = true
+        trail.Parent = rock
+
+        local travelTime = rng:NextNumber(2.2, 3.4)
+        local endPos = center + dir * rng:NextNumber(450, 1100) + Vector3.new(0, -rng:NextNumber(0, 60), 0)
+        local endCF = CFrame.new(endPos)
+            * CFrame.Angles(rng:NextNumber(-3, 3), rng:NextNumber(-3, 3), rng:NextNumber(-3, 3))
+
+        PlayTween(rock, travelTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, {CFrame = endCF})
+        PlayTween(rock, 0.8, Enum.EasingStyle.Linear, Enum.EasingDirection.In,
+            {Transparency = 1}, travelTime - 0.8)
+    end
+end
+
+-- Boiling blue plasma that fills the sphere volume
+local function AttachPlasma(shell)
+    local plasma = Instance.new("ParticleEmitter")
+    plasma.Texture = "rbxasset://textures/particles/smoke_main.dds"
+    plasma.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, EXPLOSION_COLORS.White),
+        ColorSequenceKeypoint.new(0.4, EXPLOSION_COLORS.Cyan),
+        ColorSequenceKeypoint.new(1, EXPLOSION_COLORS.Deep),
+    })
+    plasma.LightEmission = 1
+    plasma.LightInfluence = 0
+    plasma.Size = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 40),
+        NumberSequenceKeypoint.new(1, 100),
+    })
+    plasma.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0.5),
+        NumberSequenceKeypoint.new(0.6, 0.7),
+        NumberSequenceKeypoint.new(1, 1),
+    })
+    plasma.Lifetime = NumberRange.new(0.7, 1.4)
+    plasma.Speed = NumberRange.new(0, 6)
+    plasma.Rotation = NumberRange.new(0, 360)
+    plasma.RotSpeed = NumberRange.new(-40, 40)
+    plasma.Rate = 0
+
+    pcall(function()
+        plasma.Shape = Enum.ParticleEmitterShape.Sphere
+        plasma.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+        plasma.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
+    end)
+
+    plasma.Parent = shell
+    plasma.Rate = 120
+    task.delay(1.4, function()
+        plasma.Rate = 0
+    end)
+end
+
+-- Fast glowing sparks burst out of the core
+local function AttachSparks(core)
+    local sparks = Instance.new("ParticleEmitter")
+    sparks.Color = ColorSequence.new(EXPLOSION_COLORS.White, EXPLOSION_COLORS.Cyan)
+    sparks.LightEmission = 1
+    sparks.LightInfluence = 0
+    sparks.Size = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 4),
+        NumberSequenceKeypoint.new(1, 0),
+    })
+    sparks.Lifetime = NumberRange.new(0.8, 1.8)
+    sparks.Speed = NumberRange.new(250, 700)
+    sparks.Drag = 1.5
+    sparks.SpreadAngle = Vector2.new(180, 180)
+    sparks.Orientation = Enum.ParticleOrientation.VelocityParallel
+    sparks.Rate = 0
+    sparks.Parent = core
+    sparks:Emit(220)
+end
+
+-- Bloom + blue color grade that fade out
+local function PlayExplosionScreenFX(folder)
+    local bloom = Instance.new("BloomEffect")
+    bloom.Intensity = 3
+    bloom.Size = 56
+    bloom.Threshold = 0.6
+    bloom.Parent = Lighting
+    Debris:AddItem(bloom, 4)
+    PlayTween(bloom, 2.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, {Intensity = 0}, 0.4)
+
+    local grade = Instance.new("ColorCorrectionEffect")
+    grade.TintColor = Color3.fromRGB(150, 200, 255)
+    grade.Brightness = 0.25
+    grade.Contrast = 0.15
+    grade.Saturation = 0.2
+    grade.Parent = Lighting
+    Debris:AddItem(grade, 4)
+    PlayTween(grade, 2.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, {
+        TintColor = Color3.new(1, 1, 1),
+        Brightness = 0,
+        Contrast = 0,
+        Saturation = 0,
+    }, 0.3)
+end
+
+local function PlaySpiritBombExplosion(center)
+    local C = EXPLOSION_COLORS
+    local rng = Random.new()
+
+    local folder = Instance.new("Folder")
+    folder.Name = "SpiritBombExplosion"
+    folder.Parent = Workspace
+    Debris:AddItem(folder, 8)
+
+    PlayExplosionScreenFX(folder)
+
+    -- Layered spheres: white-hot core -> cyan body -> forcefield skin -> pressure wave
+    local core = CreateExplosionShell(folder, center, {
+        Color = C.White, Material = Enum.Material.Neon, Transparency = 0,
+        Diameter = 170, GrowTime = 0.35, FadeDelay = 0.6, FadeTime = 1.4,
+    })
+    local body = CreateExplosionShell(folder, center, {
+        Color = C.Cyan, Material = Enum.Material.Neon, Transparency = 0.25,
+        Diameter = 280, GrowTime = 0.5, FadeDelay = 0.9, FadeTime = 1.6,
+    })
+    CreateExplosionShell(folder, center, {
+        Color = C.Blue, Material = Enum.Material.ForceField, Transparency = 0.2,
+        Diameter = 360, GrowTime = 0.7, FadeDelay = 1.2, FadeTime = 1.8,
+    })
+    CreateExplosionShell(folder, center, {
+        Color = C.Ice, Material = Enum.Material.Neon, Transparency = 0.85,
+        Diameter = 700, GrowTime = 0.6, FadeDelay = 0.1, FadeTime = 0.8,
+    })
+
+    AttachPlasma(body)
+    AttachSparks(core)
+
+    -- Light that blasts the surroundings blue
+    local light = Instance.new("PointLight")
+    light.Color = C.Cyan
+    light.Range = 60
+    light.Brightness = 12
+    light.Shadows = false
+    light.Parent = core
+    PlayTween(light, 2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, {Brightness = 0}, 0.4)
+
+    -- Flat shock slab on the plane of the blast
+    local slab = NewEffectPart(
+        folder, "Part", Vector3.new(4, 20, 20),
+        CFrame.new(center) * CFrame.Angles(0, 0, math.rad(90)),
+        C.Ice, Enum.Material.Neon, 0.35
+    )
+    slab.Shape = Enum.PartType.Cylinder
+    PlayTween(slab, 0.9, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out,
+        {Size = Vector3.new(1, 760, 760)})
+    PlayTween(slab, 0.9, Enum.EasingStyle.Quad, Enum.EasingDirection.In, {Transparency = 1}, 0.1)
+
+    -- Tilted glowing rings, staggered
+    CreateShockRing(folder, center + Vector3.new(0, 0, 0),
+        CFrame.Angles(math.rad(12), 0, math.rad(5)), 620, 0, C.White)
+    CreateShockRing(folder, center + Vector3.new(0, 25, 0),
+        CFrame.Angles(math.rad(-8), math.rad(40), math.rad(10)), 780, 0.1, C.Ice)
+    CreateShockRing(folder, center + Vector3.new(0, -25, 0),
+        CFrame.Angles(math.rad(5), math.rad(-30), math.rad(-9)), 940, 0.2, C.Cyan)
+
+    SpawnLightSpokes(folder, center, rng)
+    SpawnDebris(folder, center, rng)
+
+    -- Camera shake through the game's own replication hook
+    FireReplicationEvent({
+        Intensity = 12,
+        Effect = "Camshake"
+    })
+    task.delay(0.4, function()
+        FireReplicationEvent({
+            Intensity = 8,
+            Effect = "Camshake"
+        })
+    end)
+
+    -- Explosion is over: let the player drop
+    task.delay(EXPLOSION_DURATION, ReleaseFromAir)
+end
+
+local function PlaySpiritBombOrb()
+    local template = SpiritVFX:WaitForChild("SpiritBombOrb", 5)
+    if not template then
+        warn("[SpiritBomb] Orb template missing from SpiritVFX")
+        ReleaseFromAir()
+        return
+    end
+
+    local model = template:Clone()
+    model.Parent = Character
 
     model:SetPrimaryPartCFrame(HumanoidRootPart.CFrame * CFrame.new(0, 50, 0))
 
@@ -84,40 +483,56 @@ local function PlaySpiritBombOrb()
         end
     end
 
-    task.wait(2.1)
+    -- Grow in like a real Spirit Bomb: tiny -> full size over the windup
+    local GROW_TIME = 2.1
+    local START_SCALE = 0.05
 
-    for _, part in ipairs(model:GetDescendants()) do
-        if part:IsA("BasePart") then
-            part.Anchored = false
-        end
-    end
+    model:ScaleTo(START_SCALE)
+
+    local scaleValue = Instance.new("NumberValue")
+    scaleValue.Value = START_SCALE
+    scaleValue:GetPropertyChangedSignal("Value"):Connect(function()
+        model:ScaleTo(scaleValue.Value)
+    end)
+
+    local growTween = TweenService:Create(
+        scaleValue,
+        TweenInfo.new(GROW_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+        {Value = 1}
+    )
+    growTween:Play()
+    growTween.Completed:Wait()
+    scaleValue:Destroy()
+    model:ScaleTo(1)
+
+    -- The orb stays anchored the whole time (no physics). One tween drives it
+    -- along a single diagonal path: forward and down together.
+    local FORWARD_DISTANCE = 100
+    local DROP_DISTANCE = 230
+    local FALL_TIME = 0.8
 
     local startPos = model.PrimaryPart.Position
-    local forwardTarget = startPos + HumanoidRootPart.CFrame.LookVector * 50
-    local downTarget = startPos + Vector3.new(0, -126, 0)
+    local look = HumanoidRootPart.CFrame.LookVector
+    local forwardDir = Vector3.new(look.X, 0, look.Z).Unit
+    local targetPos = startPos + forwardDir * FORWARD_DISTANCE + Vector3.new(0, -DROP_DISTANCE, 0)
 
-    local forwardValue = Instance.new("Vector3Value")
-    local downValue = Instance.new("Vector3Value")
-    forwardValue.Value = startPos
-    downValue.Value = startPos
+    local posValue = Instance.new("Vector3Value")
+    posValue.Value = startPos
 
-    local finalPosition = startPos
-
-    forwardValue:GetPropertyChangedSignal("Value"):Connect(function()
-        finalPosition = Vector3.new(forwardValue.Value.X, finalPosition.Y, forwardValue.Value.Z)
-        model:SetPrimaryPartCFrame(CFrame.new(finalPosition))
+    posValue:GetPropertyChangedSignal("Value"):Connect(function()
+        model:SetPrimaryPartCFrame(CFrame.new(posValue.Value))
     end)
 
-    downValue:GetPropertyChangedSignal("Value"):Connect(function()
-        finalPosition = Vector3.new(finalPosition.X, downValue.Value.Y, finalPosition.Z)
-        model:SetPrimaryPartCFrame(CFrame.new(finalPosition))
-    end)
+    local fallTween = TweenService:Create(
+        posValue,
+        TweenInfo.new(FALL_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+        {Value = targetPos}
+    )
+    fallTween:Play()
 
-    TweenService:Create(forwardValue, TweenInfo.new(0.2, Enum.EasingStyle.Linear), {Value = forwardTarget}):Play()
-    TweenService:Create(downValue, TweenInfo.new(0.4, Enum.EasingStyle.Linear), {Value = downTarget}):Play()
-
-    task.delay(0.35, function()
-        local lastPos = model.PrimaryPart.Position
+    fallTween.Completed:Once(function()
+        posValue:Destroy()
+        local lastPos = targetPos
 
         local impactPart = Instance.new("Part")
         impactPart.Anchored = true
@@ -144,6 +559,8 @@ local function PlaySpiritBombOrb()
                 "Weakest Dummy"
             }
         })
+
+        task.spawn(PlaySpiritBombExplosion, lastPos)
 
         task.wait(0.3)
         model:Destroy()
@@ -174,7 +591,9 @@ local function AnchorForWindup()
     task.wait(0.8)
     HumanoidRootPart.Anchored = true
     task.wait(3.6)
-    HumanoidRootPart.Anchored = false
+    if not holdInAir then
+        HumanoidRootPart.Anchored = false
+    end
 end
 
 local function PlayJumpMeshTrails(character)
@@ -537,6 +956,7 @@ local function PlayViewportFlashEffect(camRig)
 end
 
 local function PlaySpiritBombSequence()
+    HoldInAir()
     spiritBombSound:Play()
 
     task.spawn(function()
