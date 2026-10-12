@@ -192,7 +192,7 @@ local CONFIG = {
 	FlareStretch = 1,                         -- how far the flare is stretched out horizontally (0 = round, 2 = double)
 	FlareTilt = 10,                           -- degrees the stretch is tilted (+ = rising to the right, - = falling)
 	SlowMo = true,
-	HideUI = true,                            -- hides your game's HUD, topbar and touch controls while playing
+	HideUI = true,                            -- hides ALL ui (game HUD, CoreGui, gethui, chat, topbar, touch controls) while playing
 	AutoPlay = false,                         -- unused here: the explosion is fired by the Attack 4 finisher
 	EarthAssetId = 750680926,
 	EarthIntroSeconds = 2,
@@ -343,6 +343,14 @@ local function play(onDone)
 	end
 
 	-- ================= world setup =================
+	-- remember which Roblox core UI was on (so we restore exactly that), then hide all of it
+	local coreStates = {}
+	for _, t in ipairs(Enum.CoreGuiType:GetEnumItems()) do
+		if t ~= Enum.CoreGuiType.All then
+			local okState, on = pcall(function() return StarterGui:GetCoreGuiEnabled(t) end)
+			if okState then coreStates[t] = on end
+		end
+	end
 	pcall(function() StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.All, false) end)
 
 	local removed = {}
@@ -401,15 +409,66 @@ local function play(onDone)
 	gui.DisplayOrder = 1000
 	gui.Parent = player:WaitForChild("PlayerGui")
 
-	-- hide the game's own HUD / topbar / touch controls
+	-- hide EVERY ui while the cutscene plays: the game's HUD, CoreGui, gethui() guis, other scripts' guis, the chat window,
+	-- the topbar and touch controls. A per-frame watcher keeps them hidden if the game (or another script) turns one back on
+	-- or creates a new one. Only the cutscene's own gui and the white/black fade overlays are exempt.
 	local hiddenGuis, controls = {}, nil
+	local hiddenSet, chatStates, uiConn = {}, {}, nil
+	local KEEP_GUI_NAMES = { Attack4FinisherWhite = true, PlanetExplosionEndFade = true }
 	if CONFIG.HideUI then
-		for _, g in ipairs(player.PlayerGui:GetChildren()) do
-			if g:IsA("ScreenGui") and g ~= gui and g.Enabled then
-				g.Enabled = false
-				table.insert(hiddenGuis, g)
+		local containers = { player.PlayerGui }
+		pcall(function() table.insert(containers, game:GetService("CoreGui")) end)
+		pcall(function()
+			if gethui then
+				local h = gethui()
+				if h and not table.find(containers, h) then table.insert(containers, h) end
+			end
+		end)
+
+		local function hideAllGuis()
+			for _, c in ipairs(containers) do
+				local okKids, kids = pcall(c.GetChildren, c)
+				if okKids then
+					for _, g in ipairs(kids) do
+						if g:IsA("ScreenGui") and g ~= gui and not KEEP_GUI_NAMES[g.Name] and g.Enabled then
+							if not hiddenSet[g] then
+								hiddenSet[g] = true
+								table.insert(hiddenGuis, g)
+							end
+							pcall(function() g.Enabled = false end)
+						end
+					end
+				end
 			end
 		end
+
+		-- new-style chat (TextChatService): chat window + input bar
+		local function hideChat()
+			pcall(function()
+				local tcs = game:GetService("TextChatService")
+				for _, cls in ipairs({ "ChatWindowConfiguration", "ChatInputBarConfiguration" }) do
+					local cfg = tcs:FindFirstChildOfClass(cls)
+					if cfg then
+						if chatStates[cfg] == nil then chatStates[cfg] = cfg.Enabled end
+						cfg.Enabled = false
+					end
+				end
+			end)
+		end
+
+		hideAllGuis()
+		hideChat()
+		local lastCoreSweep = os.clock()
+		uiConn = RunService.RenderStepped:Connect(function()
+			hideAllGuis()
+			if os.clock() - lastCoreSweep > 0.25 then -- re-assert core UI / topbar / chat a few times a second
+				lastCoreSweep = os.clock()
+				pcall(function() StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.All, false) end)
+				pcall(function() StarterGui:SetCore("TopbarEnabled", false) end)
+				hideChat()
+			end
+		end)
+
 		pcall(function() StarterGui:SetCore("TopbarEnabled", false) end)
 		pcall(function()
 			controls = require(player.PlayerScripts:WaitForChild("PlayerModule", 2)):GetControls()
@@ -1283,6 +1342,7 @@ local function play(onDone)
 
 		if clock >= DURATION then
 			conn:Disconnect()
+			if uiConn then uiConn:Disconnect(); uiConn = nil end -- stop keeping the UI hidden
 			-- the cutscene ends on a fully black screen: replace it with a black overlay that fades out
 			-- (created before the cutscene gui is destroyed so there is no one-frame gap)
 			do
@@ -1314,12 +1374,19 @@ local function play(onDone)
 			for _, f in ipairs(flashCCs) do f:Destroy() end
 			sky:Destroy()
 			for _, c in ipairs(removed) do c.Parent = Lighting end
-			for _, g in ipairs(hiddenGuis) do g.Enabled = true end
+			for _, g in ipairs(hiddenGuis) do
+				if g.Parent then pcall(function() g.Enabled = true end) end
+			end
+			for cfg, was in pairs(chatStates) do
+				if cfg.Parent then pcall(function() cfg.Enabled = was end) end
+			end
 			pcall(function() StarterGui:SetCore("TopbarEnabled", true) end)
 			if controls then pcall(function() controls:Enable() end) end
 			camera.CameraType = Enum.CameraType.Custom
 			camera.FieldOfView = 70
-			pcall(function() StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.All, true) end)
+			for t, was in pairs(coreStates) do -- put each core UI back to what it was before the cutscene
+				pcall(function() StarterGui:SetCoreGuiEnabled(t, was) end)
+			end
 			playing = false
 			if onDone then task.spawn(onDone) end -- cutscene finished
 		end
