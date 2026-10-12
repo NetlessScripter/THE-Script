@@ -7827,7 +7827,7 @@ local CFG = {
 	-- ===== boost burst (LeftShift press / BOOST button) =====
 	BOOST_BURST    = 35,
 	BOOST_KICK     = 40,    -- instant speed added
-	BOOST_COOLDOWN = 0.7,
+	BOOST_COOLDOWN = 10,
 
 	-- ===== body language =====
 	BANK_ANGLE     = 38,    -- max roll into turns (degrees)
@@ -7845,7 +7845,7 @@ local CFG = {
 	DOUBLE_TAP_ROLL   = true,   -- double-tap A or D while flying
 	DOUBLE_TAP_WINDOW = 0.28,
 	ROLL_TIME         = 0.55,
-	ROLL_COOLDOWN     = 1.0,
+	ROLL_COOLDOWN     = 10,
 	ROLL_BONUS        = 18,
 	ROLL_CAM_TILT     = 12,     -- degrees of camera tilt during the roll
 
@@ -8050,13 +8050,14 @@ end
 
 -- ===== tricks =====
 local function triggerBoost()
-	if not flying then return end
+	if not flying then return false end
 	local now = os.clock()
-	if now < boostReady then return end
+	if now < boostReady then return false end
 	boostReady = now + CFG.BOOST_COOLDOWN
 	bonus = math.min(CFG.MAX_BONUS, bonus + CFG.BOOST_BURST)
 	speedCur = math.min(CFG.MAX_SPEED, speedCur + CFG.BOOST_KICK)
 	punch(0.85, 1.0, 1.35)
+	return true
 end
 
 local function doRoll(sign)
@@ -8357,8 +8358,7 @@ local function setMiniButtons(v)
 end
 
 boostButton.MouseButton1Click:Connect(function()
-	mobileBoostUntil = os.clock() + 1.6
-	triggerBoost()
+	if triggerBoost() then mobileBoostUntil = os.clock() + 1.6 end -- no free boost during cooldown
 end)
 rollButton.MouseButton1Click:Connect(function() doRoll(lastStrafe) end)
 
