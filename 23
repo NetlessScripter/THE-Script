@@ -7777,358 +7777,537 @@ end)
 	end
 end)
 
-Players          = game:GetService("Players")
-RunService       = game:GetService("RunService")
-UserInputService = game:GetService("UserInputService")
-TweenService     = game:GetService("TweenService")
-ContentProvider  = game:GetService("ContentProvider")
+-- =====================================================================================================
+--  FLYING SYSTEM v2  --  momentum / weight update (inspired by Marvel's Spider-Man 2 traversal)
+--  Still FREE FLIGHT: toggle on/off, hover, go any direction, no falling, no stalling.
+--  Everything below is layered ON TOP of that: inertia, dive speed, pull-up slingshot, boost burst,
+--  barrel roll, speed-reactive camera/FOV/sound, heavy landings.
+--  Tune everything in CFG. All state is local on purpose (the old block leaked globals that collided
+--  with the wind block, e.g. `wasMoving`).
+-- =====================================================================================================
+;(function()
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService     = game:GetService("TweenService")
+local ContentProvider  = game:GetService("ContentProvider")
+local Debris           = game:GetService("Debris")
 
-FLY_SPEED    = 110
-BOOST_MULT   = 2
-BANK_ANGLE   = 20
-MAX_FLY_HEIGHT = 2500
+local CFG = {
+	-- ===== core flight (same numbers as v1) =====
+	CRUISE_SPEED   = 110,   -- studs/s, normal flight
+	BOOST_MULT     = 2,     -- hold LeftShift: cruise speed x this
+	MAX_SPEED      = 350,   -- hard cap (dive + boost + rings can never exceed this)
+	MAX_FLY_HEIGHT = 2500,
 
-FOV_NORMAL   = nil
-FOV_FLYING   = nil
+	-- ===== weight / inertia =====
+	ACCEL      = 2.6,       -- how fast you build up to your target speed (higher = snappier)
+	SLOW_DRAG  = 1.4,       -- slowing down while still holding a direction (e.g. letting go of shift)
+	STOP_DRAG  = 2.0,       -- coasting to a stop after releasing movement keys (lower = floatier drift)
+	TURN_SLOW  = 7.5,       -- max turn rate (rad/s) when slow
+	TURN_FAST  = 2.4,       -- max turn rate (rad/s) at max speed  -> wide, heavy carving turns at speed
+	YAW_FOLLOW = 9,         -- how quickly the body swings round to face the camera
+	HOVER_BOB  = 0.9,       -- tiny idle bob while hovering (0 = off)
+	RELEASE_CAP = 120,      -- when flight ends, keep at most this much speed as free-fall momentum
 
-FLY_ANIM_ID  = "rbxassetid://78547941116306"
-DIVE_ANIM_ID = "rbxassetid://122216590829087"
-LAND_ANIM_ID = "rbxassetid://125881219961499"
-IDLE_ANIM_ID = "rbxassetid://17124063826"
-FALL_ANIM_ID = "rbxassetid://15280575192"
+	-- ===== dive -> pull-up (the swoop) =====
+	DIVE_GAIN       = 85,   -- bonus speed gained per second while diving
+	MAX_BONUS       = 130,  -- cap on the extra speed from diving/boosts (on top of cruise/boost speed)
+	BONUS_DECAY     = 26,   -- bonus bleeds off slowly (this is the "carried momentum" / hang time)
+	CLIMB_BLEED     = 40,   -- extra bleed while climbing (speed converts into height)
+	SLING_MIN_BONUS = 60,   -- need at least this much dive bonus to trigger the pull-up slingshot
+	SLING_WINDOW    = 0.45, -- seconds after a dive in which pulling up counts as a slingshot
+	SLING_BONUS     = 30,
 
-LAND_SOUNDS = {
-    "rbxassetid://12331756832",
-    "rbxassetid://12509675323",
-    "rbxassetid://12509572882",
-    "rbxassetid://9117969892",
-    "rbxassetid://12982203916",
-    "rbxassetid://12308648953",
-    "rbxassetid://12264204235",
-    "rbxassetid://9117969584",
+	-- ===== launch / catch (like Ultimate Wings: opening the wings mid-dive) =====
+	LAUNCH_BONUS  = 30,     -- kick when you start flying
+	CATCH_MAX     = 70,     -- max extra bonus for catching yourself out of a fall
+	CATCH_CONVERT = 0.7,    -- fraction of your fall speed that turns into forward speed
+
+	-- ===== boost burst (LeftShift press / BOOST button) =====
+	BOOST_BURST    = 35,
+	BOOST_KICK     = 40,    -- instant speed added
+	BOOST_COOLDOWN = 0.7,
+
+	-- ===== body language =====
+	BANK_ANGLE     = 38,    -- max roll into turns (degrees)
+	BANK_GAIN      = 12,    -- degrees of roll per rad/s of turning
+	STRAFE_BANK    = 10,    -- extra roll when strafing with A/D
+	BANK_FOLLOW    = 5,
+	BANK_INTO_TURN = true,  -- true = lean INTO turns (v1 leaned out of them). false = old behaviour
+	LEAN_FACTOR    = 0.55,  -- how much of your climb/dive angle the body copies
+	LEAN_MAX_DOWN  = 40,
+	LEAN_MAX_UP    = 28,
+	LEAN_FOLLOW    = 6,
+
+	-- ===== barrel roll (air trick) =====
+	ROLL_KEY          = Enum.KeyCode.C,
+	DOUBLE_TAP_ROLL   = true,   -- double-tap A or D while flying
+	DOUBLE_TAP_WINDOW = 0.28,
+	ROLL_TIME         = 0.55,
+	ROLL_COOLDOWN     = 1.0,
+	ROLL_BONUS        = 18,
+	ROLL_CAM_TILT     = 12,     -- degrees of camera tilt during the roll
+
+	-- ===== camera =====
+	FOV_SPEED_GAIN  = 0.42,     -- FOV grows by up to this fraction at max speed
+	FOV_MAX         = 110,
+	FOV_KICK        = 9,        -- degrees of FOV punch on boost/launch
+	FOV_KICK_DECAY  = 4.5,
+	CAM_PULLBACK    = 4,        -- studs the camera drops back at max speed
+	CAM_PUNCH       = 2.5,      -- extra studs of pull-back on a punch
+	CAM_PUNCH_DECAY = 5,
+	CAM_ROLL_FRAC   = 0.35,     -- camera copies this fraction of the body bank
+	SHAKE_SPEED     = 0.30,     -- constant rumble at max speed (studs)
+	SHAKE_IMPULSE   = 0.9,      -- shake on punches/impacts
+	SHAKE_DECAY     = 6,
+	BLUR_PUNCH      = 14,
+	BLUR_DECAY      = 9,
+
+	-- ===== audio =====
+	SFX_FLY        = "rbxassetid://17862829666",
+	SFX_BOOST      = "rbxassetid://17862829666", -- swap for a whoosh/boom id if you have one
+	LOOP_FLY_SOUND = false,
 }
 
-player    = Players.LocalPlayer
-character = player.Character or player.CharacterAdded:Wait()
-humanoid  = character:WaitForChild("Humanoid")
-rootPart  = character:WaitForChild("HumanoidRootPart")
-camera    = workspace.CurrentCamera
-animator  = humanoid:FindFirstChildOfClass("Animator") or humanoid:WaitForChild("Animator")
+local FLY_ANIM_ID  = "rbxassetid://78547941116306"
+local DIVE_ANIM_ID = "rbxassetid://122216590829087"
+local LAND_ANIM_ID = "rbxassetid://125881219961499"
+local IDLE_ANIM_ID = "rbxassetid://17124063826"
+local FALL_ANIM_ID = "rbxassetid://15280575192"
 
-function randomName()
-    s = ""
-    for _ = 1, 12 do s = s .. string.char(math.random(97, 122)) end
-    return s
+local LAND_SOUNDS = {
+	"rbxassetid://12331756832",
+	"rbxassetid://12509675323",
+	"rbxassetid://12509572882",
+	"rbxassetid://9117969892",
+	"rbxassetid://12982203916",
+	"rbxassetid://12308648953",
+	"rbxassetid://12264204235",
+	"rbxassetid://9117969584",
+}
+
+local player    = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoid  = character:WaitForChild("Humanoid")
+local rootPart  = character:WaitForChild("HumanoidRootPart")
+local camera    = workspace.CurrentCamera
+local animator  = humanoid:FindFirstChildOfClass("Animator") or humanoid:WaitForChild("Animator")
+
+local function randomName()
+	local s = ""
+	for _ = 1, 12 do s = s .. string.char(math.random(97, 122)) end
+	return s
 end
-BV_NAME = randomName()
+local BV_NAME = randomName()
+local FX_NAME = randomName()
 
-FOV_TWEEN = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-lastFOVTarget = nil
-function tweenFOV(target)
-    if target == lastFOVTarget then return end
-    lastFOVTarget = target
-    TweenService:Create(camera, FOV_TWEEN, { FieldOfView = target }):Play()
+local controlModule = require(player:WaitForChild("PlayerScripts")
+	:WaitForChild("PlayerModule")
+	:WaitForChild("ControlModule"))
+
+-- ===== state =====
+local flying, falling = false, false
+local renderConn, landHitbox
+local flySound, fadeTween
+local landSounds = {}
+local flyTrack, diveTrack, landTrack, idleTrack, fallTrack
+
+local speedCur  = 0                     -- current flight speed (studs/s)
+local dirCur    = Vector3.new(0, 1, 0)  -- current flight direction (unit)
+local bonus     = 0                     -- extra speed from dives / boosts / rings (decays slowly)
+local yawCur, bankCur, pitchCur = 0, 0, 0
+local startFlyY = 0
+local wasAudible = false
+local lastDiveTime, slingReady, boostReady = -math.huge, 0, 0
+local mobileBoostUntil = 0
+local lastStrafe = 1
+local roll = { active = false, t = 0, dir = 1, ready = 0 }
+local rollTilt = 0
+
+-- camera fx state
+local fovBase, fxActive = 70, false
+local camSpeed, camRoll = 0, 0
+local fovKick, camPunch, shake, blurPunch = 0, 0, 0, 0
+
+local startFlying, stopFlying, playLandAnim
+
+-- ===== helpers =====
+local function angleDiff(a, b)  -- shortest signed a - b
+	local d = (a - b) % (math.pi * 2)
+	if d > math.pi then d = d - math.pi * 2 end
+	return d
 end
 
-controlModule = require(player:WaitForChild("PlayerScripts")
-    :WaitForChild("PlayerModule")
-    :WaitForChild("ControlModule"))
+local function turnToward(a, b, maxAng)
+	local d = math.clamp(a:Dot(b), -1, 1)
+	local ang = math.acos(d)
+	if ang <= maxAng or ang < 1e-4 then return b end
+	local axis = a:Cross(b)
+	if axis.Magnitude < 1e-4 then axis = Vector3.yAxis end -- exactly opposite: swing round the vertical
+	axis = axis.Unit
+	local c, s = math.cos(maxAng), math.sin(maxAng)
+	local r = a * c + axis:Cross(a) * s + axis * axis:Dot(a) * (1 - c)
+	return r.Unit
+end
 
-flying      = false
-falling     = false
-renderConn  = nil
-landHitbox  = nil
+local function playOneShot(id, volume, pitch)
+	if not rootPart or not rootPart.Parent then return end
+	local snd = Instance.new("Sound")
+	snd.SoundId = id
+	snd.Volume = volume or 1
+	snd.PlaybackSpeed = pitch or 1
+	snd.Parent = rootPart
+	snd:Play()
+	Debris:AddItem(snd, 5)
+end
 
-flySound  = nil
-fadeTween = nil
-landSounds = {}
+-- a "punch": the whole screen reacts (FOV, pull-back, shake, blur), optional shock ring + sound
+local function punch(strength, _unused, pitch)
+	fovKick   = math.max(fovKick,   CFG.FOV_KICK * strength)
+	camPunch  = math.max(camPunch,  CFG.CAM_PUNCH * strength)
+	shake     = math.max(shake,     CFG.SHAKE_IMPULSE * strength)
+	blurPunch = math.max(blurPunch, CFG.BLUR_PUNCH * strength)
+	if pitch then playOneShot(CFG.SFX_BOOST, 0.9, pitch) end
+end
 
-flyTrack  = nil
-diveTrack = nil
-landTrack = nil
-idleTrack = nil
-fallTrack = nil
+local function impactFx(spd)
+	local s = math.clamp(spd / 220, 0.15, 1.5)
+	punch(s * 0.9)
+end
 
-currentBank = 0
-prevYaw     = 0
-wasMoving   = false
-startFlyY   = 0
+-- ===== animations / sounds (same as v1) =====
+local function loadAnim()
+	if flyTrack  then pcall(function() flyTrack:Stop()  end) end
+	if fallTrack then pcall(function() fallTrack:Stop() end) end
 
-function loadAnim()
-    if flyTrack  then pcall(function() flyTrack:Stop()  end) end
-    if fallTrack then pcall(function() fallTrack:Stop() end) end
-
-    anim = Instance.new("Animation")
-    anim.AnimationId = FLY_ANIM_ID
-    flyTrack = animator:LoadAnimation(anim)
-    flyTrack.Priority = Enum.AnimationPriority.Action4
-    flyTrack.Looped   = true
-
-    diveAnim = Instance.new("Animation")
-    diveAnim.AnimationId = DIVE_ANIM_ID
-    diveTrack = animator:LoadAnimation(diveAnim)
-    diveTrack.Priority = Enum.AnimationPriority.Action4
-    diveTrack.Looped   = true
-
-    landAnim = Instance.new("Animation")
-    landAnim.AnimationId = LAND_ANIM_ID
-    landTrack = animator:LoadAnimation(landAnim)
-    landTrack.Priority = Enum.AnimationPriority.Action4
-    landTrack.Looped   = false
-
-    idleAnim = Instance.new("Animation")
-    idleAnim.AnimationId = IDLE_ANIM_ID
-    idleTrack = animator:LoadAnimation(idleAnim)
-    idleTrack.Priority = Enum.AnimationPriority.Action4
-    idleTrack.Looped   = true
-
-    fallAnim = Instance.new("Animation")
-    fallAnim.AnimationId = FALL_ANIM_ID
-    fallTrack = animator:LoadAnimation(fallAnim)
-    fallTrack.Priority = Enum.AnimationPriority.Action4
-    fallTrack.Looped   = true
+	local function make(id, looped)
+		local a = Instance.new("Animation")
+		a.AnimationId = id
+		local t = animator:LoadAnimation(a)
+		t.Priority = Enum.AnimationPriority.Action4
+		t.Looped = looped
+		return t
+	end
+	flyTrack  = make(FLY_ANIM_ID,  true)
+	diveTrack = make(DIVE_ANIM_ID, true)
+	landTrack = make(LAND_ANIM_ID, false)
+	idleTrack = make(IDLE_ANIM_ID, true)
+	fallTrack = make(FALL_ANIM_ID, true)
 end
 loadAnim()
 
-function loadLandSounds()
-    for _, snd in ipairs(landSounds) do
-        pcall(function() snd:Destroy() end)
-    end
-    landSounds = {}
-
-    for _, id in ipairs(LAND_SOUNDS) do
-        snd = Instance.new("Sound")
-        snd.SoundId = id
-        snd.Volume  = 1
-        snd.Parent  = rootPart
-        table.insert(landSounds, snd)
-    end
-
-    
-    task.spawn(function()
-        ContentProvider:PreloadAsync(landSounds)
-    end)
+local function loadLandSounds()
+	for _, snd in ipairs(landSounds) do pcall(function() snd:Destroy() end) end
+	landSounds = {}
+	for _, id in ipairs(LAND_SOUNDS) do
+		local snd = Instance.new("Sound")
+		snd.SoundId = id
+		snd.Volume = 1
+		snd.Parent = rootPart
+		table.insert(landSounds, snd)
+	end
+	task.spawn(function() ContentProvider:PreloadAsync(landSounds) end)
 end
 loadLandSounds()
 
-function getOrCreate(name, class)
-    existing = rootPart:FindFirstChild(name)
-    if existing then return existing end
-    inst = Instance.new(class)
-    inst.Name   = name
-    inst.Parent = rootPart
-    return inst
+local function initPhysics()
+	local bv = rootPart:FindFirstChild(BV_NAME)
+	if not bv then
+		bv = Instance.new("BodyVelocity")
+		bv.Name = BV_NAME
+		bv.Parent = rootPart
+	end
+	bv.Velocity = Vector3.zero
+	bv.MaxForce = Vector3.zero
+	bv.P = 1e4
 end
 
-function initPhysics()
-    bv = getOrCreate(BV_NAME, "BodyVelocity")
-    bv.Velocity = Vector3.zero
-    bv.MaxForce = Vector3.zero
-    bv.P        = 1e4
+local function playFlySound()
+	if fadeTween then fadeTween:Cancel(); fadeTween = nil end
+	if flySound then flySound:Destroy(); flySound = nil end
+	local snd = Instance.new("Sound")
+	snd.SoundId = CFG.SFX_FLY
+	snd.Volume = 1
+	snd.Looped = CFG.LOOP_FLY_SOUND
+	snd.Parent = rootPart
+	snd:Play()
+	flySound = snd
 end
 
-function playFlySound()
-    
-    if fadeTween then fadeTween:Cancel(); fadeTween = nil end
-    if flySound  then flySound:Destroy();  flySound  = nil end
-
-    snd = Instance.new("Sound")
-    snd.SoundId = "rbxassetid://17862829666"
-    snd.Volume  = 1
-    snd.Parent  = rootPart
-    snd:Play()
-    flySound = snd
+local function stopFlySound()
+	if not flySound then return end
+	local snd = flySound
+	if fadeTween then fadeTween:Cancel() end
+	fadeTween = TweenService:Create(snd, TweenInfo.new(0.8, Enum.EasingStyle.Linear), { Volume = 0 })
+	fadeTween:Play()
+	fadeTween.Completed:Connect(function()
+		snd:Destroy()
+		if flySound == snd then flySound = nil end
+		fadeTween = nil
+	end)
 end
 
-function stopFlySound()
-    if not flySound then return end
-    snd = flySound
-    if fadeTween then fadeTween:Cancel() end
-    fadeTween = TweenService:Create(snd, TweenInfo.new(0.8, Enum.EasingStyle.Linear), { Volume = 0 })
-    fadeTween:Play()
-    fadeTween.Completed:Connect(function()
-        snd:Destroy()
-        if flySound  == snd  then flySound  = nil end
-        if fadeTween ~= nil  then fadeTween = nil end
-    end)
+-- ===== tricks =====
+local function triggerBoost()
+	if not flying then return end
+	local now = os.clock()
+	if now < boostReady then return end
+	boostReady = now + CFG.BOOST_COOLDOWN
+	bonus = math.min(CFG.MAX_BONUS, bonus + CFG.BOOST_BURST)
+	speedCur = math.min(CFG.MAX_SPEED, speedCur + CFG.BOOST_KICK)
+	punch(0.85, 1.0, 1.35)
 end
 
-function startFlying()
-    if flying then return end
-    flying = true
-    lastFOVTarget = nil
-
-    FOV_NORMAL = camera.FieldOfView
-    FOV_FLYING = FOV_NORMAL * 1.2
-
-    initPhysics()
-    humanoid.PlatformStand = true
-    tweenFOV(FOV_NORMAL)
-    wasMoving = false
-    startFlyY = rootPart.Position.Y
-
-    
-    rootPart.AssemblyLinearVelocity = Vector3.new(
-        rootPart.AssemblyLinearVelocity.X,
-        math.max(rootPart.AssemblyLinearVelocity.Y, 18),
-        rootPart.AssemblyLinearVelocity.Z
-    )
-
-    renderConn = RunService.RenderStepped:Connect(function(dt)
-        if not flying then return end  -- guard against stray frame after stopFlying
-        bv = rootPart:FindFirstChild(BV_NAME)
-        if not bv then
-            initPhysics()
-            bv = rootPart:FindFirstChild(BV_NAME)
-            if not bv then return end
-        end
-
-        bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
-
-        
-        dir      = controlModule:GetMoveVector()
-        moving   = dir.Magnitude > 0.01
-        isDiving   = moving and camera.CFrame.LookVector.Y < -0.2 and dir.Z < 0
-        isBackward = dir.Z > 0
-        speed    = (isDiving and 175 or FLY_SPEED)
-                         * (UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) and BOOST_MULT or 1)
-
-        
-        if moving and not wasMoving then
-            playFlySound()
-        elseif not moving and wasMoving then
-            stopFlySound()
-        end
-        wasMoving = moving
-
-        
-        if moving then
-            vel = Vector3.zero
-            if dir.X ~= 0 then vel = vel + camera.CFrame.RightVector * (dir.X * speed) end
-            if dir.Z ~= 0 then vel = vel - camera.CFrame.LookVector  * (dir.Z * speed) end
-            bv.Velocity = vel
-        else
-            bv.Velocity = Vector3.zero
-        end
-
-        if not landHitbox or not landHitbox.Parent then
-            landHitbox = Instance.new("Part")
-            landHitbox.Name         = "Hitbox"
-            landHitbox.Size         = Vector3.new(10, 10, 10)
-            landHitbox.Anchored     = true
-            landHitbox.CanCollide   = false
-            landHitbox.CanQuery     = false
-            landHitbox.CastShadow   = false
-            landHitbox.Transparency = 1
-            landHitbox.CFrame       = rootPart.CFrame
-            landHitbox.Parent       = workspace
-
-            landHitbox.Touched:Connect(function(hit)
-                if not flying then return end
-                if hit:IsDescendantOf(character) then return end
-                local hitModel = hit:FindFirstAncestorOfClass("Model")
-                if hitModel == character then return end
-                if landHitbox then landHitbox:Destroy(); landHitbox = nil end
-                stopFlying()
-                playLandAnim()
-            end)
-        else
-            landHitbox.CFrame = rootPart.CFrame
-        end
-
-        
-        if rootPart.Position.Y >= startFlyY + MAX_FLY_HEIGHT then
-            stopFlying()
-            falling = true
-            if fallTrack and not fallTrack.IsPlaying then fallTrack:Play(0.2) end
-            return
-        end
-
-        
-        if moving and isDiving then
-            if flyTrack.IsPlaying  then flyTrack:Stop(0.3)  end
-            if idleTrack.IsPlaying then idleTrack:Stop(0.3) end
-            if not diveTrack.IsPlaying then diveTrack:Play(0.3) end
-        elseif moving and not isBackward then
-            if diveTrack.IsPlaying then diveTrack:Stop(0.3) end
-            if idleTrack.IsPlaying then idleTrack:Stop(0.3) end
-            if not flyTrack.IsPlaying then flyTrack:Play(0.3) end
-        else
-            if flyTrack.IsPlaying  then flyTrack:Stop(0.3)  end
-            if diveTrack.IsPlaying then diveTrack:Stop(0.3) end
-            if not idleTrack.IsPlaying then idleTrack:Play(0.3) end
-        end
-
-        
-        tweenFOV(moving and FOV_FLYING or FOV_NORMAL)
-
-        
-        look     = camera.CFrame.LookVector
-        flatLook = Vector3.new(look.X, 0, look.Z)
-
-        if moving and flatLook.Magnitude > 0.001 then
-            yaw = math.atan2(-flatLook.Z, flatLook.X) - math.rad(90)
-
-            yawDelta = yaw - prevYaw
-            if yawDelta >  math.pi then yawDelta -= math.pi * 2 end
-            if yawDelta < -math.pi then yawDelta += math.pi * 2 end
-            bankTarget = math.clamp(-yawDelta * (BANK_ANGLE / 0.04), -BANK_ANGLE, BANK_ANGLE)
-            currentBank = currentBank + (bankTarget - currentBank) * math.clamp(dt * 6, 0, 1)
-            prevYaw = yaw
-
-            rootPart.CFrame = CFrame.new(rootPart.Position)
-                * CFrame.Angles(0, yaw, 0)
-                * CFrame.Angles(0, 0, math.rad(currentBank))
-        else
-            currentBank = currentBank + (0 - currentBank) * math.clamp(dt * 7, 0, 1)
-            _, yaw, _ = rootPart.CFrame:ToEulerAnglesYXZ()
-            rootPart.CFrame = CFrame.new(rootPart.Position)
-                * CFrame.Angles(0, yaw, 0)
-                * CFrame.Angles(0, 0, math.rad(currentBank))
-            prevYaw = yaw
-        end
-    end)
+local function doRoll(sign)
+	if not flying or roll.active or speedCur < 40 then return end
+	local now = os.clock()
+	if now < roll.ready then return end
+	roll.active = true
+	roll.t = 0
+	roll.dir = (sign and sign ~= 0) and sign or lastStrafe
+	roll.ready = now + CFG.ROLL_COOLDOWN
+	bonus = math.min(CFG.MAX_BONUS, bonus + CFG.ROLL_BONUS)
+	punch(0.35, nil, 1.15)
 end
 
-stopFlying = function()
-    if not flying then return end
-    flying = false
+-- ===== camera fx (runs just after the Roblox camera has updated) =====
+local punchBlur = Instance.new("BlurEffect")
+punchBlur.Name = randomName()
+punchBlur.Size = 0
+punchBlur.Parent = camera
 
-    if renderConn then renderConn:Disconnect(); renderConn = nil end
-    if landHitbox then landHitbox:Destroy(); landHitbox = nil end
+local function camFx(dt)
+	camera = workspace.CurrentCamera or camera
+	if camera.CameraType == Enum.CameraType.Scriptable then return end -- cutscenes own the camera
 
-    humanoid.PlatformStand = false
-    tweenFOV(FOV_NORMAL)
-    lastFOVTarget = nil
+	camSpeed = camSpeed + ((flying and speedCur or 0) - camSpeed) * (1 - math.exp(-5 * dt))
+	local targetRoll = flying and (math.rad(bankCur) * CFG.CAM_ROLL_FRAC + rollTilt) or 0
+	camRoll   = camRoll + (targetRoll - camRoll) * (1 - math.exp(-8 * dt))
+	fovKick   = fovKick   * math.exp(-CFG.FOV_KICK_DECAY * dt)
+	camPunch  = camPunch  * math.exp(-CFG.CAM_PUNCH_DECAY * dt)
+	shake     = shake     * math.exp(-CFG.SHAKE_DECAY * dt)
+	blurPunch = blurPunch * math.exp(-CFG.BLUR_DECAY * dt)
 
-    bv = rootPart:FindFirstChild(BV_NAME)
-    if bv then bv:Destroy(); bv = nil end
+	local active = flying or camSpeed > 1 or math.abs(camRoll) > 0.002 or fovKick > 0.05
+		or camPunch > 0.03 or shake > 0.01 or blurPunch > 0.05
+	if not active then
+		if fxActive then
+			fxActive = false
+			camera.FieldOfView = fovBase
+			punchBlur.Size = 0
+		end
+		return
+	end
+	fxActive = true
+	if punchBlur.Parent ~= camera then punchBlur.Parent = camera end
 
-    if flyTrack  and flyTrack.IsPlaying  then flyTrack:Stop(0.4)  end
-    if diveTrack and diveTrack.IsPlaying then diveTrack:Stop(0.4) end
-    if idleTrack and idleTrack.IsPlaying then idleTrack:Stop(0.4) end
+	local r = math.clamp(camSpeed / CFG.MAX_SPEED, 0, 1)
+	local fov = fovBase * (1 + CFG.FOV_SPEED_GAIN * (r ^ 0.8)) + fovKick
+	camera.FieldOfView = math.min(fov, math.max(CFG.FOV_MAX, fovBase))
 
-    stopFlySound()
-    currentBank = 0
+	local t = os.clock()
+	local amp = CFG.SHAKE_SPEED * r * r + shake
+	local sx = math.noise(t * 23, 1.3, 0) * 2 * amp
+	local sy = math.noise(t * 27, 7.7, 0) * 2 * amp
+	local sr = math.noise(t * 19, 3.1, 0) * 2 * amp
+	local pull = CFG.CAM_PULLBACK * r + camPunch
+	camera.CFrame = camera.CFrame * CFrame.new(sx, sy, pull) * CFrame.Angles(0, 0, camRoll + math.rad(sr * 1.5))
+	punchBlur.Size = math.clamp(blurPunch, 0, 24)
+end
+RunService:BindToRenderStep(FX_NAME, Enum.RenderPriority.Camera.Value + 1, camFx)
+
+-- ===== main flight step =====
+local function step(dt)
+	if not flying then return end -- guard against a stray frame after stopFlying
+	if dt > 0.1 then dt = 0.1 end
+	local now = os.clock()
+
+	local bv = rootPart:FindFirstChild(BV_NAME)
+	if not bv then
+		initPhysics()
+		bv = rootPart:FindFirstChild(BV_NAME)
+		if not bv then return end
+	end
+	bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+
+	-- ---- input ----
+	local camCF = camera.CFrame
+	local look = camCF.LookVector
+	local rf = Vector3.new(-look.Z, 0, look.X)
+	local right = rf.Magnitude > 1e-3 and rf.Unit or camCF.RightVector
+
+	local dirIn = controlModule:GetMoveVector()
+	local wishDir
+	if dirIn.Magnitude > 0.01 then
+		local w = right * dirIn.X - look * dirIn.Z
+		if w.Magnitude > 1e-3 then wishDir = w.Unit end
+	end
+	local moving     = wishDir ~= nil
+	local forwardIn  = moving and dirIn.Z < 0
+	local isDiving   = moving and look.Y < -0.2 and dirIn.Z < 0
+	local isBackward = dirIn.Z > 0
+	local shiftHeld  = UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or now < mobileBoostUntil
+	if math.abs(dirIn.X) > 0.3 then lastStrafe = dirIn.X > 0 and 1 or -1 end
+
+	-- ---- dive / climb momentum ----
+	local diveFactor  = forwardIn and math.clamp((-look.Y - 0.15) / 0.6, 0, 1) or 0
+	local climbFactor = forwardIn and math.clamp((look.Y - 0.15) / 0.6, 0, 1) or 0
+	if diveFactor > 0 then
+		bonus = math.min(CFG.MAX_BONUS, bonus + CFG.DIVE_GAIN * diveFactor * dt)
+		if diveFactor > 0.5 and bonus > CFG.SLING_MIN_BONUS then lastDiveTime = now end
+	else
+		bonus = math.max(0, bonus - (CFG.BONUS_DECAY + CFG.CLIMB_BLEED * climbFactor) * dt)
+	end
+	-- pull-up slingshot: dive hard, then pull up -> extra kick
+	if climbFactor > 0.25 and now - lastDiveTime < CFG.SLING_WINDOW and now > slingReady then
+		lastDiveTime = -math.huge
+		slingReady = now + 1.0
+		bonus = math.min(CFG.MAX_BONUS, bonus + CFG.SLING_BONUS)
+		punch(0.8, 1.2, 1.25)
+	end
+
+	-- ---- speed with inertia ----
+	local baseSpeed = CFG.CRUISE_SPEED * (shiftHeld and CFG.BOOST_MULT or 1)
+	local targetSpeed = moving and math.min(baseSpeed + bonus, CFG.MAX_SPEED) or 0
+	local rate
+	if targetSpeed > speedCur then rate = CFG.ACCEL
+	elseif moving then rate = CFG.SLOW_DRAG
+	else rate = CFG.STOP_DRAG end
+	speedCur = speedCur + (targetSpeed - speedCur) * (1 - math.exp(-rate * dt))
+	local r = math.clamp(speedCur / CFG.MAX_SPEED, 0, 1)
+
+	-- ---- heading with inertia (heavier the faster you go) ----
+	if moving then
+		if speedCur < 12 then
+			dirCur = wishDir
+		else
+			local turnRate = CFG.TURN_SLOW + (CFG.TURN_FAST - CFG.TURN_SLOW) * r
+			dirCur = turnToward(dirCur, wishDir, turnRate * dt)
+		end
+	end
+
+	local vel = dirCur * speedCur
+	if speedCur < 8 and not moving and CFG.HOVER_BOB > 0 then
+		vel = vel + Vector3.new(0, math.sin(now * 1.8) * CFG.HOVER_BOB, 0)
+	end
+	bv.Velocity = vel
+
+	-- ---- hitbox (stops flight on contact, same as v1) ----
+	local hitSize = 10 + math.max(0, speedCur - 200) * 0.05 -- a bit larger at extreme speed so thin walls can't be tunnelled
+	if not landHitbox or not landHitbox.Parent then
+		landHitbox = Instance.new("Part")
+		landHitbox.Name         = "Hitbox"
+		landHitbox.Size         = Vector3.new(hitSize, hitSize, hitSize)
+		landHitbox.Anchored     = true
+		landHitbox.CanCollide   = false
+		landHitbox.CanQuery     = false
+		landHitbox.CastShadow   = false
+		landHitbox.Transparency = 1
+		landHitbox.CFrame       = rootPart.CFrame
+		landHitbox.Parent       = workspace
+
+		landHitbox.Touched:Connect(function(hit)
+			if not flying then return end
+			if hit:IsDescendantOf(character) then return end
+			local hitModel = hit:FindFirstAncestorOfClass("Model")
+			if hitModel == character then return end
+			local impactSpeed = speedCur
+			if landHitbox then landHitbox:Destroy(); landHitbox = nil end
+			stopFlying()
+			playLandAnim(impactSpeed)
+		end)
+	else
+		landHitbox.Size = Vector3.new(hitSize, hitSize, hitSize)
+		landHitbox.CFrame = rootPart.CFrame
+	end
+
+	-- ---- height cap ----
+	if rootPart.Position.Y >= startFlyY + CFG.MAX_FLY_HEIGHT then
+		stopFlying()
+		falling = true
+		if fallTrack and not fallTrack.IsPlaying then fallTrack:Play(0.2) end
+		return
+	end
+
+	-- ---- animations (fly pose follows actual speed, so coasting doesn't snap to idle) ----
+	if isDiving then
+		if flyTrack.IsPlaying  then flyTrack:Stop(0.3)  end
+		if idleTrack.IsPlaying then idleTrack:Stop(0.3) end
+		if not diveTrack.IsPlaying then diveTrack:Play(0.3) end
+		diveTrack:AdjustSpeed(0.9 + r * 0.5)
+	elseif speedCur > 25 and not (moving and isBackward) then
+		if diveTrack.IsPlaying then diveTrack:Stop(0.3) end
+		if idleTrack.IsPlaying then idleTrack:Stop(0.3) end
+		if not flyTrack.IsPlaying then flyTrack:Play(0.3) end
+		flyTrack:AdjustSpeed(0.85 + r * 0.6)
+	else
+		if flyTrack.IsPlaying  then flyTrack:Stop(0.3)  end
+		if diveTrack.IsPlaying then diveTrack:Stop(0.3) end
+		if not idleTrack.IsPlaying then idleTrack:Play(0.3) end
+	end
+
+	-- ---- wind sound follows speed ----
+	local audible = speedCur > 14
+	if audible and not wasAudible then
+		playFlySound()
+	elseif not audible and wasAudible then
+		stopFlySound()
+	end
+	wasAudible = audible
+	if audible and flySound and not fadeTween then
+		flySound.PlaybackSpeed = 0.85 + r * 0.55
+		flySound.Volume = 0.6 + r * 0.7
+	end
+
+	-- ---- body orientation: yaw (lagged) + bank + pitch lean + barrel roll ----
+	local lookFlat = Vector3.new(look.X, 0, look.Z)
+	local yawTarget = yawCur
+	if moving and lookFlat.Magnitude > 0.001 then
+		yawTarget = math.atan2(-lookFlat.Z, lookFlat.X) - math.rad(90)
+	end
+	local newYaw = yawCur + angleDiff(yawTarget, yawCur) * (1 - math.exp(-CFG.YAW_FOLLOW * dt))
+	local yawRate = angleDiff(newYaw, yawCur) / math.max(dt, 1e-3)
+	yawCur = newYaw
+
+	local speedScale = math.clamp(speedCur / 60, 0, 1)
+	local bankSign = CFG.BANK_INTO_TURN and 1 or -1
+	local bankTarget = (yawRate * CFG.BANK_GAIN + dirIn.X * -CFG.STRAFE_BANK) * bankSign * speedScale
+	bankTarget = math.clamp(bankTarget, -CFG.BANK_ANGLE, CFG.BANK_ANGLE)
+	bankCur = bankCur + (bankTarget - bankCur) * (1 - math.exp(-CFG.BANK_FOLLOW * dt))
+
+	local velPitch = math.asin(math.clamp(dirCur.Y, -1, 1))
+	local pitchTarget = math.clamp(velPitch * CFG.LEAN_FACTOR * math.clamp(speedCur / 80, 0, 1),
+		-math.rad(CFG.LEAN_MAX_DOWN), math.rad(CFG.LEAN_MAX_UP))
+	pitchCur = pitchCur + (pitchTarget - pitchCur) * (1 - math.exp(-CFG.LEAN_FOLLOW * dt))
+
+	local rollAngle = 0
+	rollTilt = 0
+	if roll.active then
+		roll.t = roll.t + dt / CFG.ROLL_TIME
+		if roll.t >= 1 then
+			roll.active = false
+			roll.t = 0
+		else
+			local e = roll.t * roll.t * (3 - 2 * roll.t)
+			rollAngle = -roll.dir * math.pi * 2 * e
+			rollTilt = -roll.dir * math.sin(math.pi * roll.t) * math.rad(CFG.ROLL_CAM_TILT)
+		end
+	end
+
+	rootPart.CFrame = CFrame.new(rootPart.Position)
+		* CFrame.Angles(0, yawCur, 0)
+		* CFrame.Angles(pitchCur, 0, 0)
+		* CFrame.Angles(0, 0, math.rad(bankCur) + rollAngle)
 end
 
-playLandAnim = function()
-    if not landTrack then return end
-
-    if fallTrack and fallTrack.IsPlaying then fallTrack:Stop(0.2) end
-    falling = false
-
-    landTrack:Play(0.1)
-
-    for _, snd in ipairs(landSounds) do
-        snd:Play()
-    end
-end
-
-local isMobile = game:GetService("UserInputService").TouchEnabled and not game:GetService("UserInputService").KeyboardEnabled
-
+-- ===== mobile UI =====
+local isMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
 local PlayerGui = player:WaitForChild("PlayerGui")
-local flyScreenGui = Instance.new("ScreenGui", PlayerGui)
+local flyScreenGui = Instance.new("ScreenGui")
+flyScreenGui.Name = randomName()
+flyScreenGui.ResetOnSpawn = false -- v1 lost its buttons on respawn
+flyScreenGui.Parent = PlayerGui
 
 local imageButton2 = Instance.new("ImageButton")
 imageButton2.Size = UDim2.new(0, 54, 0, 54)
@@ -8149,69 +8328,195 @@ imageButton1.BackgroundTransparency = 1
 imageButton1.Visible = isMobile
 imageButton1.Parent = flyScreenGui
 
-imageButton1.MouseButton1Click:Connect(function()
-    if flying then
-        stopFlying()
-    else
-        startFlying()
-    end
-end)
+local function makeMiniButton(text, yOffset)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(0, 56, 0, 40)
+	b.AnchorPoint = Vector2.new(0.5, 0.5)
+	b.Position = UDim2.new(0.8456, 0, 0.4677, yOffset)
+	b.BackgroundColor3 = Color3.fromRGB(20, 20, 24)
+	b.BackgroundTransparency = 0.35
+	b.Text = text
+	b.TextColor3 = Color3.new(1, 1, 1)
+	b.TextScaled = true
+	b.Font = Enum.Font.GothamBold
+	b.Visible = false
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, 12)
+	c.Parent = b
+	b.Parent = flyScreenGui
+	return b
+end
+local boostButton = makeMiniButton("BOOST", 68)
+local rollButton  = makeMiniButton("ROLL", 116)
 
--- PC keybind: press Z to toggle flying
-if not isMobile then
-    UserInputService.InputBegan:Connect(function(input, gameProcessed)
-        if gameProcessed then return end
-        if input.KeyCode == Enum.KeyCode.U then
-            if flying then
-                stopFlying()
-            else
-                startFlying()
-            end
-        end
-    end)
+local function setMiniButtons(v)
+	if isMobile then
+		boostButton.Visible = v
+		rollButton.Visible = v
+	end
 end
 
-humanoid.StateChanged:Connect(function(_, new)
-    if new == Enum.HumanoidStateType.Landed then
-        if flying then stopFlying() end
-        if flying or falling then playLandAnim() end
-    end
+boostButton.MouseButton1Click:Connect(function()
+	mobileBoostUntil = os.clock() + 1.6
+	triggerBoost()
+end)
+rollButton.MouseButton1Click:Connect(function() doRoll(lastStrafe) end)
+
+-- ===== start / stop =====
+startFlying = function()
+	if flying then return end
+	flying = true
+
+	if not fxActive then fovBase = camera.FieldOfView end
+	initPhysics()
+	humanoid.PlatformStand = true
+	startFlyY = rootPart.Position.Y
+	wasAudible = false
+	roll.active = false
+	setMiniButtons(true)
+
+	local _, y0, _ = rootPart.CFrame:ToEulerAnglesYXZ()
+	yawCur, bankCur, pitchCur = y0, 0, 0
+
+	-- carry existing momentum in; same upward floor as v1
+	local v = rootPart.AssemblyLinearVelocity
+	local fallSpeed = math.max(0, -v.Y)
+	local vel = Vector3.new(v.X, math.max(v.Y, 18), v.Z)
+	speedCur = vel.Magnitude
+	dirCur = speedCur > 1 and vel.Unit or Vector3.new(0, 1, 0)
+	bonus = CFG.LAUNCH_BONUS
+
+	if fallSpeed > 30 then
+		-- opening the wings out of a dive: convert the fall into forward speed
+		local lk = camera.CFrame.LookVector
+		local flat = Vector3.new(lk.X, 0, lk.Z)
+		flat = flat.Magnitude > 0.01 and flat.Unit or Vector3.new(0, 0, -1)
+		dirCur = (flat + Vector3.new(0, 0.1, 0)).Unit
+		speedCur = math.max(speedCur, fallSpeed * CFG.CATCH_CONVERT)
+		bonus = bonus + math.clamp((fallSpeed - 30) * 0.6, 0, CFG.CATCH_MAX)
+		punch(1.0, 1.4, 1.1)
+	else
+		punch(0.55, 0.8, 1.0)
+	end
+
+	renderConn = RunService.RenderStepped:Connect(step)
+end
+
+stopFlying = function()
+	if not flying then return end
+	flying = false
+
+	if renderConn then renderConn:Disconnect(); renderConn = nil end
+	if landHitbox then landHitbox:Destroy(); landHitbox = nil end
+	setMiniButtons(false)
+
+	humanoid.PlatformStand = false
+
+	local bv = rootPart:FindFirstChild(BV_NAME)
+	if bv then bv:Destroy() end
+
+	-- keep some momentum as free-fall velocity, but never fling the character
+	local v = rootPart.AssemblyLinearVelocity
+	if v.Magnitude > CFG.RELEASE_CAP then
+		rootPart.AssemblyLinearVelocity = v.Unit * CFG.RELEASE_CAP
+	end
+
+	if flyTrack  and flyTrack.IsPlaying  then flyTrack:Stop(0.4)  end
+	if diveTrack and diveTrack.IsPlaying then diveTrack:Stop(0.4) end
+	if idleTrack and idleTrack.IsPlaying then idleTrack:Stop(0.4) end
+
+	stopFlySound()
+	wasAudible = false
+	speedCur, bonus, bankCur, pitchCur = 0, 0, 0, 0
+	roll.active = false
+	rollTilt = 0
+end
+
+playLandAnim = function(impactSpeed)
+	if not landTrack then return end
+	if fallTrack and fallTrack.IsPlaying then fallTrack:Stop(0.2) end
+	falling = false
+
+	landTrack:Play(0.1)
+	for _, snd in ipairs(landSounds) do snd:Play() end
+	impactFx(impactSpeed or 90)
+end
+
+imageButton1.MouseButton1Click:Connect(function()
+	if flying then stopFlying() else startFlying() end
 end)
 
-humanoid.Died:Connect(function()
-    if fallTrack and fallTrack.IsPlaying then fallTrack:Stop(0.2) end
-    falling = false
-end)
+-- ===== keyboard =====
+local lastTap = {}
+if not isMobile then
+	UserInputService.InputBegan:Connect(function(input, gameProcessed)
+		if gameProcessed then return end
+		local kc = input.KeyCode
+		if kc == Enum.KeyCode.U then
+			if flying then stopFlying() else startFlying() end
+		elseif not flying then
+			return
+		elseif kc == Enum.KeyCode.LeftShift then
+			triggerBoost()
+		elseif kc == CFG.ROLL_KEY then
+			doRoll(lastStrafe)
+		elseif CFG.DOUBLE_TAP_ROLL and (kc == Enum.KeyCode.A or kc == Enum.KeyCode.D) then
+			local now = os.clock()
+			if lastTap[kc] and now - lastTap[kc] < CFG.DOUBLE_TAP_WINDOW then
+				doRoll(kc == Enum.KeyCode.D and 1 or -1)
+				lastTap[kc] = nil
+			else
+				lastTap[kc] = now
+			end
+		end
+	end)
+end
+
+-- ===== character hooks =====
+local function hookHumanoid()
+	humanoid.StateChanged:Connect(function(_, new)
+		if new == Enum.HumanoidStateType.Landed then
+			if flying then stopFlying() end
+			if flying or falling then playLandAnim(80) end
+		end
+	end)
+	humanoid.Died:Connect(function()
+		if flying then stopFlying() end
+		if fallTrack and fallTrack.IsPlaying then fallTrack:Stop(0.2) end
+		falling = false
+	end)
+end
+hookHumanoid()
+
 player.CharacterAdded:Connect(function(newChar)
-    character  = newChar
-    humanoid   = newChar:WaitForChild("Humanoid")
-    rootPart   = newChar:WaitForChild("HumanoidRootPart")
-    animator   = humanoid:FindFirstChildOfClass("Animator") or humanoid:WaitForChild("Animator")
+	character = newChar
+	humanoid  = newChar:WaitForChild("Humanoid")
+	rootPart  = newChar:WaitForChild("HumanoidRootPart")
+	animator  = humanoid:FindFirstChildOfClass("Animator") or humanoid:WaitForChild("Animator")
 
-    flying      = false
-    falling     = false
-    currentBank = 0
-    lastFOVTarget = nil
-    flySound    = nil
-    fadeTween   = nil
-    if renderConn then renderConn:Disconnect(); renderConn = nil end
-    if landHitbox then landHitbox:Destroy(); landHitbox = nil end
+	flying, falling = false, false
+	speedCur, bonus, bankCur, pitchCur = 0, 0, 0, 0
+	roll.active = false
+	rollTilt = 0
+	wasAudible = false
+	flySound, fadeTween = nil, nil
+	if renderConn then renderConn:Disconnect(); renderConn = nil end
+	if landHitbox then landHitbox:Destroy(); landHitbox = nil end
+	setMiniButtons(false)
 
-    loadAnim()
-    loadLandSounds()
-
-    humanoid.StateChanged:Connect(function(_, new)
-        if new == Enum.HumanoidStateType.Landed then
-            if flying then stopFlying() end
-            if flying or falling then playLandAnim() end
-        end
-    end)
-
-    humanoid.Died:Connect(function()
-        if fallTrack and fallTrack.IsPlaying then fallTrack:Stop(0.2) end
-        falling = false
-    end)
+	loadAnim()
+	loadLandSounds()
+	hookHumanoid()
 end)
+
+-- handy handles for other scripts / the console
+_G.FlySystem = {
+	Start = function() startFlying() end,
+	Stop = function() stopFlying() end,
+	IsFlying = function() return flying end,
+	Config = CFG,
+}
+end)()
 
 task.spawn(function()
 TweenService = game:GetService("TweenService")
