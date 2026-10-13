@@ -159,22 +159,6 @@ local function PlayTween(instance, duration, style, direction, goal, delayTime)
     end
 end
 
--- Expanding glowing sphere (core / mid / outer / pressure wave)
-local function CreateExplosionShell(folder, center, props)
-    local shell = NewEffectPart(
-        folder, "Part", Vector3.one * 2, CFrame.new(center),
-        props.Color, props.Material, props.Transparency
-    )
-    shell.Shape = Enum.PartType.Ball
-
-    PlayTween(shell, props.GrowTime, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out,
-        {Size = Vector3.one * props.Diameter})
-    PlayTween(shell, props.FadeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.In,
-        {Transparency = 1}, props.FadeDelay)
-
-    return shell
-end
-
 -- Thin glowing ring (hollow) built from a SurfaceGui stroke, tilted like the reference
 local function CreateShockRing(folder, center, tilt, diameter, startDelay, color)
     task.delay(startDelay, function()
@@ -385,7 +369,637 @@ local function PlayExplosionScreenFX(folder)
     }, 0.3)
 end
 
-local function PlaySpiritBombExplosion(center)
+-- ============================================================
+--  SPIRIT BOMB FX STAGE
+--  Ported from the planet explosion startup (23_3): tapered beam rays, spiral comets with
+--  trails, jagged lightning, the 12-layer stacked glow core and the stretched particle lens flare.
+--  Everything is drawn on a plane that faces the camera and follows the orb.
+-- ============================================================
+local NSK, CSK = NumberSequenceKeypoint.new, ColorSequenceKeypoint.new
+local WHITE = Color3.new(1, 1, 1)
+local PI = math.pi
+local rgb = Color3.fromRGB
+local SB_BLUE = { rgb(70, 150, 255), rgb(90, 230, 255), rgb(30, 80, 255), rgb(180, 205, 255) }
+local SB_TILT = -0.2
+
+local SB_FALL_TIME = 0.8        -- how long the orb takes to drop
+local SB_CHARGE_PRE = 0.3       -- the charge-up starts this long before the drop
+local SB_CHARGE_TIME = SB_CHARGE_PRE + SB_FALL_TIME -- total charge, ends exactly at impact
+local SB_ORB_FINAL = 220        -- diameter of the white-hot blast core at full size
+local SB_FLARE = 1              -- lens flare strength (0 = off)
+local SB_FLARE_STRETCH = 1      -- how far the flare is stretched horizontally
+local SB_FLARE_TILT = 10        -- degrees the stretch is tilted
+
+local function kf(t, pts)
+    if t <= pts[1][1] then return pts[1][2] end
+    for i = 2, #pts do
+        local p0, p1 = pts[i - 1], pts[i]
+        if t <= p1[1] then
+            local s = (t - p0[1]) / (p1[1] - p0[1])
+            s = s * s * (3 - 2 * s)
+            local v0, v1 = p0[2], p1[2]
+            if typeof(v0) == "Color3" then return v0:Lerp(v1, s) end
+            return v0 + (v1 - v0) * s
+        end
+    end
+    return pts[#pts][2]
+end
+
+local function outExpo(a)
+    return a >= 1 and 1 or 1 - 2 ^ (-10 * a)
+end
+
+local function evalSeq(v, a)
+    if typeof(v) == "number" then return v end
+    a = math.clamp(a, 0, 1)
+    local k = v.Keypoints
+    for i = 2, #k do
+        if a <= k[i].Time then
+            local p0, p1 = k[i - 1], k[i]
+            return p0.Value + (p1.Value - p0.Value) * (a - p0.Time) / (p1.Time - p0.Time)
+        end
+    end
+    return k[#k].Value
+end
+
+local function SpiritBombScale(orbDiameter)
+    return math.clamp(orbDiameter * 1.8, 130, 600)
+end
+
+local function CreateFXStage(S, orbDiameter)
+    local stage = {
+        S = S,
+        OrbDiameter = orbDiameter,
+        Center = Vector3.zero,
+        Time = 0,
+        Hooks = {},
+        Cleanup = {},
+        CoreDiameter = 0,
+        CoreAlpha = 0,
+        CoreDeep = 0,
+    }
+
+    local rng = Random.new()
+    local function rr(a, b) return rng:NextNumber(a, b) end
+    local function pick(t) return t[rng:NextInteger(1, #t)] end
+    stage.rr, stage.pick = rr, pick
+
+    local root = Instance.new("Folder")
+    root.Name = "SpiritBombFX"
+    root.Parent = Workspace
+
+    local anchor = Instance.new("Part")
+    anchor.Anchored, anchor.CanCollide, anchor.CanQuery, anchor.CanTouch = true, false, false, false
+    anchor.Transparency = 1
+    anchor.Size = Vector3.one
+    anchor.Parent = root
+
+    local plane = CFrame.new() -- camera-facing axes at the orb: X right, Y up, Z toward camera
+    local tasks = {}
+    local function at(t0, dur, fn, done) table.insert(tasks, { t0 = t0, dur = dur, fn = fn, done = done }) end
+
+    -- ---------- building blocks ----------
+    local function newAtt()
+        local a = Instance.new("Attachment")
+        a.Parent = anchor
+        return a
+    end
+
+    local function makeBeam(a0, a1, colorSeq)
+        local b = Instance.new("Beam")
+        b.Attachment0, b.Attachment1 = a0, a1
+        b.FaceCamera = true
+        b.LightEmission = 1
+        b.LightInfluence = 0
+        b.Segments = 1
+        b.Color = colorSeq
+        b.Width0, b.Width1 = 0, 0
+        b.Parent = root
+        return b
+    end
+
+    local function neonPart(shape)
+        local p = Instance.new("Part")
+        p.Shape = shape or Enum.PartType.Block
+        p.Material = Enum.Material.Neon
+        p.Anchored = true
+        p.CanCollide, p.CanQuery, p.CanTouch, p.CastShadow = false, false, false, false
+        p.Parent = root
+        return p
+    end
+
+    local function seqFor(base, tr)
+        local t = base + (1 - base) * tr
+        return NumberSequence.new({ NSK(0, t), NSK(0.55, t + (1 - t) * 0.4), NSK(1, 1) })
+    end
+
+    -- tapered beam streak: white-hot tail -> colored body -> soft tip (halo layer on thick rays)
+    function stage.addRay(s)
+        local dir = Vector3.new(math.cos(s.ang), math.sin(s.ang), s.z or 0).Unit
+        local grow, hold, tm = s.grow or 0.25, s.hold or 0.5, s.tailMove or 0.7
+        local useHalo = s.w > 0.009 * S
+        local a0, a1, halo, body, core
+        at(s.t0, s.life, function(a)
+            if not a0 then
+                a0, a1 = newAtt(), newAtt()
+                if useHalo then halo = makeBeam(a0, a1, ColorSequence.new(s.color)) end
+                body = makeBeam(a0, a1, ColorSequence.new({ CSK(0, WHITE), CSK(0.3, s.color), CSK(1, s.color) }))
+                core = makeBeam(a0, a1, ColorSequence.new(WHITE))
+            end
+            local g = outExpo(math.min(a / grow, 1))
+            local head = s.r0 + s.len * g
+            local tail = s.r0 + s.len * tm * math.clamp((a - grow) / (1 - grow), 0, 1) ^ 1.5
+            a0.WorldPosition = plane * (dir * tail)
+            a1.WorldPosition = plane * (dir * head)
+            local tr = math.max(1 - math.min(a / 0.05, 1), math.clamp((a - hold) / (1 - hold), 0, 1) ^ 1.3)
+            local w = s.w * (1 - 0.5 * a)
+            if halo then
+                halo.Width0, halo.Width1 = w * 5, 0
+                halo.Transparency = seqFor(0.82, tr)
+            end
+            body.Width0, body.Width1 = w * 2, 0
+            body.Transparency = seqFor(0.3, tr)
+            core.Width0, core.Width1 = w * 0.7, 0
+            core.Transparency = seqFor(0, tr)
+        end, function()
+            if a0 then
+                a0:Destroy(); a1:Destroy(); body:Destroy(); core:Destroy()
+                if halo then halo:Destroy() end
+            end
+        end)
+    end
+
+    -- smooth curved streak: a glowing head dragging a Trail along a spiral path
+    function stage.addComet(s)
+        local part, tr
+        local inward = s.mode == "in"
+        at(s.t0, s.life, function(a)
+            if not part then
+                part = neonPart(Enum.PartType.Ball)
+                part.Size = Vector3.one * math.max(s.w * 1.3, 1)
+                part.Color = s.color:Lerp(WHITE, 0.65)
+                local a0, a1 = Instance.new("Attachment"), Instance.new("Attachment")
+                a0.Position, a1.Position = Vector3.new(0, s.w / 2, 0), Vector3.new(0, -s.w / 2, 0)
+                a0.Parent, a1.Parent = part, part
+                tr = Instance.new("Trail")
+                tr.Attachment0, tr.Attachment1 = a0, a1
+                tr.Lifetime = s.trail
+                tr.LightEmission = 1
+                tr.LightInfluence = 0
+                tr.FaceCamera = true
+                tr.Color = ColorSequence.new({ CSK(0, WHITE), CSK(0.18, s.color), CSK(1, s.color2 or s.color) })
+                tr.Transparency = NumberSequence.new({ NSK(0, 0), NSK(0.45, 0.3), NSK(1, 1) })
+                tr.WidthScale = NumberSequence.new({ NSK(0, 1), NSK(1, 0) })
+                tr.Parent = part
+            end
+            local e = inward and a ^ 2.2 or outExpo(a) ^ 0.9
+            local r = s.r0 + (s.r1 - s.r0) * e
+            local th = s.ang + s.swirl * e
+            part.CFrame = plane * CFrame.new(math.cos(th) * r, math.sin(th) * r, (s.z or 0) * r)
+            part.Transparency = math.clamp((a - 0.8) / 0.2, 0, 1)
+        end, function()
+            if part then
+                tr.Enabled = false
+                part.Transparency = 1
+                task.delay(s.trail + 0.4, function() part:Destroy() end)
+            end
+        end)
+    end
+
+    -- jagged flickering lightning
+    function stage.addBolt(s)
+        local N = s.N or 9
+        local dir = Vector3.new(math.cos(s.ang), math.sin(s.ang), 0)
+        local nrm = Vector3.new(-math.sin(s.ang), math.cos(s.ang), 0)
+        local atts, halos, cores
+        local lastTick, jit = -1, {}
+        at(s.t0, s.life, function(a)
+            if not atts then
+                atts, halos, cores = {}, {}, {}
+                for i = 0, N do atts[i] = newAtt() end
+                for i = 1, N do
+                    halos[i] = makeBeam(atts[i - 1], atts[i], ColorSequence.new(s.color))
+                    cores[i] = makeBeam(atts[i - 1], atts[i], ColorSequence.new(WHITE))
+                end
+            end
+            local tick = math.floor(a * s.life * 24)
+            if tick ~= lastTick then
+                lastTick = tick
+                for i = 0, N do jit[i] = rr(-1, 1) end
+            end
+            local g = outExpo(math.min(a / 0.18, 1))
+            for i = 0, N do
+                local u = i / N
+                local off = jit[i] * s.len * (s.jitter or 0.07) * math.sin(PI * u) * g
+                atts[i].WorldPosition = plane * (dir * (s.r0 + s.len * g * u) + nrm * off)
+            end
+            local fade = math.max(1 - math.min(a / 0.04, 1), math.clamp((a - 0.45) / 0.55, 0, 1))
+            if rr(0, 1) < 0.18 then fade = math.min(1, fade + 0.55) end -- flicker
+            local tsq = NumberSequence.new(fade)
+            local hsq = NumberSequence.new(0.5 + 0.5 * fade)
+            for i = 1, N do
+                local wa, wb = s.w * (1 - (i - 1) / N) ^ 0.7, s.w * (1 - i / N) ^ 0.7
+                halos[i].Width0, halos[i].Width1 = wa * 3.2, wb * 3.2
+                cores[i].Width0, cores[i].Width1 = wa, wb
+                halos[i].Transparency = hsq
+                cores[i].Transparency = tsq
+            end
+        end, function()
+            if atts then
+                for i = 1, N do halos[i]:Destroy(); cores[i]:Destroy() end
+                for i = 0, N do atts[i]:Destroy() end
+            end
+        end)
+    end
+
+    -- ---------- core: 12 stacked neon spheres = smooth radial glow ----------
+    local NL = 12
+    local mult = { 1, 1.2, 1.45, 1.75, 2.1, 2.6, 3.2, 4, 5, 6.3, 8, 10 }
+    local ctr = { 0, 0.18, 0.36, 0.5, 0.62, 0.72, 0.8, 0.86, 0.91, 0.945, 0.97, 0.985 }
+    local layers, blueL, deepL = {}, {}, {}
+    for i = 1, NL do
+        local u = (i - 1) / (NL - 1)
+        blueL[i] = WHITE:Lerp(rgb(25, 70, 255), u ^ 0.7)
+        deepL[i] = rgb(190, 225, 255):Lerp(rgb(10, 40, 230), u ^ 0.6)
+        layers[i] = neonPart(Enum.PartType.Ball)
+        layers[i].Size = Vector3.one
+        layers[i].Transparency = 1
+    end
+    -- parts max out at 2048 studs: ease big sizes into the cap instead of hiding the layer
+    local function softCap(x)
+        local knee, cap = 1000, 2040
+        if x <= knee then return x end
+        return knee + (cap - knee) * (1 - math.exp(-(x - knee) / (cap - knee)))
+    end
+
+    -- ---------- lens flare (stretched anamorphic particle flare, ported from the planet explosion) ----------
+    local FLARE_DEPTH = 13
+    local flareRig = Instance.new("Part")
+    flareRig.Anchored, flareRig.CanCollide, flareRig.CanQuery, flareRig.CanTouch = true, false, false, false
+    flareRig.CastShadow = false
+    flareRig.Transparency = 1
+    flareRig.Size = Vector3.one * 0.05
+    flareRig.Parent = root
+    local flareDefs = {
+        { -- MainGlow: wide oval glow
+            pos = Vector2.new(1, 1), mult = 1, blend = 0.5, role = 1, squash = -1,
+            size = NumberSequence.new({ NSK(0, 9), NSK(0.5, 4.5), NSK(1, 0) }),
+            alpha = NumberSequence.new({ NSK(0, 0.1), NSK(0.6, 0.55), NSK(1, 1) }),
+        },
+        { -- CoreFlash: white-hot stretched core
+            pos = Vector2.new(1, 1), mult = 1, blend = 0.15, role = 1, squash = -1.2,
+            size = NumberSequence.new({ NSK(0, 4.5), NSK(1, 0) }),
+            alpha = NumberSequence.new({ NSK(0, 0), NSK(1, 1) }),
+        },
+        { -- Band: soft colored band running through the core
+            pos = Vector2.new(1, 1), mult = 1, blend = 0.8, role = 2, squash = -4,
+            size = NumberSequence.new({ NSK(0, 6), NSK(1, 0) }),
+            alpha = NumberSequence.new({ NSK(0, 0.25), NSK(0.6, 0.65), NSK(1, 1) }),
+        },
+        { -- Ghost: faint stretched ghost drifting off-axis
+            pos = Vector2.new(-0.6, -0.6), mult = 1, blend = 0.75, role = 3, squash = -1.5,
+            size = NumberSequence.new({ NSK(0, 2.2), NSK(1, 0) }),
+            alpha = NumberSequence.new({ NSK(0, 0.65), NSK(1, 1) }),
+        },
+        { -- Anamorphic: long streak across the screen
+            pos = Vector2.new(1, 1), mult = 1, blend = 0.85, role = 2,
+            size = NumberSequence.new({ NSK(0, 3.5), NSK(1, 0) }),
+            alpha = NumberSequence.new({ NSK(0, 0.1), NSK(1, 1) }),
+            squash = NumberSequence.new({ NSK(0, -9), NSK(1, -3) }),
+        },
+        { -- StreakCore: thin white-hot line through the middle
+            pos = Vector2.new(1, 1), mult = 1, blend = 0.15, role = 1,
+            size = NumberSequence.new({ NSK(0, 2.2), NSK(1, 0) }),
+            alpha = NumberSequence.new({ NSK(0, 0), NSK(1, 1) }),
+            squash = NumberSequence.new({ NSK(0, -14), NSK(1, -5) }),
+        },
+    }
+    for _, d in ipairs(flareDefs) do
+        d.att = Instance.new("Attachment")
+        d.att.Parent = flareRig
+        local e = Instance.new("ParticleEmitter")
+        e.Enabled, e.Rate = false, 0
+        e.Speed, e.RotSpeed = NumberRange.new(0), NumberRange.new(0)
+        e.Lifetime = NumberRange.new(0.05)
+        e.Rotation = NumberRange.new(SB_FLARE_TILT)
+        e.LightEmission, e.LightInfluence, e.ZOffset = 1, 0, -5
+        e.Orientation = Enum.ParticleOrientation.FacingCamera
+        e.Parent = d.att
+        d.e = e
+    end
+
+    -- ---------- per-frame driver ----------
+    local conn
+    conn = RunService.RenderStepped:Connect(function(dt)
+        local cam = Workspace.CurrentCamera
+        stage.Time += dt
+        local t = stage.Time
+
+        if stage.Tracker then stage.Center = stage.Tracker() end
+        local center = stage.Center
+        local cf = cam.CFrame
+        plane = CFrame.fromMatrix(center, cf.RightVector, cf.UpVector, -cf.LookVector)
+        anchor.CFrame = CFrame.new(center)
+
+        -- scheduled beams / comets / bolts
+        for i = #tasks, 1, -1 do
+            local k = tasks[i]
+            if t >= k.t0 then
+                local a = (t - k.t0) / k.dur
+                if a >= 1 then
+                    k.fn(1)
+                    if k.done then k.done() end
+                    table.remove(tasks, i)
+                else
+                    k.fn(a)
+                end
+            end
+        end
+
+        for _, hook in ipairs(stage.Hooks) do hook(t, dt) end
+
+        -- glow core
+        local d, al = stage.CoreDiameter, stage.CoreAlpha
+        for i = 1, NL do
+            local l = layers[i]
+            if d > 1 and al > 0.002 then
+                l.Size = Vector3.one * softCap(d * mult[i])
+                l.CFrame = CFrame.new(center)
+                l.Transparency = 1 - (1 - ctr[i]) * al
+                l.Color = blueL[i]:Lerp(deepL[i], stage.CoreDeep)
+            else
+                l.Transparency = 1
+            end
+        end
+
+        -- lens flare, placed by screen-space math every frame
+        local V = cam.ViewportSize
+        local P = cam:WorldToViewportPoint(center)
+        local strength, c1, c2, c3 = 0, SB_BLUE[2], SB_BLUE[1], SB_BLUE[3]
+        if stage.FlareFn then strength, c1, c2, c3 = stage.FlareFn(t) end
+        strength = (P.Z > 0) and strength * SB_FLARE or 0
+        if strength > 0.001 then
+            local cols = { c1, c2, c3 }
+            local toSrc = center - cf.Position
+            local viewAngle = math.acos(math.clamp(cf.LookVector:Dot(toSrc.Unit), -1, 1))
+            local vFov = math.rad(cam.FieldOfView)
+            local ar = V.X / V.Y
+            local dFov = 2 * math.atan(math.tan(vFov / 2) * math.sqrt(1 + ar * ar))
+            local angleAlpha = 1 - math.clamp(viewAngle / (dFov / 2), 0, 1)
+            local str = math.clamp(angleAlpha * strength, 0, 1)
+            if str > 0.001 then
+                local src = Vector2.new(P.X, P.Y)
+                -- drift bias so the ghosts still spread out while the source sits dead center
+                local b = Vector2.new(V.X / 2, V.Y / 2) - src
+                    + Vector2.new(math.cos(t * 0.7) * V.Y * 0.16, math.sin(t * 0.5) * V.Y * 0.1)
+                local fovK = math.tan(vFov / 2) / math.tan(math.rad(60) / 2) -- keeps flare size constant while FOV swings
+                local fade = 1 - angleAlpha
+                for _, fd in ipairs(flareDefs) do
+                    local k = Vector2.one - fd.pos * fd.mult
+                    local pt = src + Vector2.new(b.X * k.X, b.Y * k.Y)
+                    local ray = cam:ViewportPointToRay(pt.X, pt.Y)
+                    fd.att.WorldPosition = ray.Origin + ray.Direction.Unit * FLARE_DEPTH
+                    fd.e.Size = NumberSequence.new(evalSeq(fd.size, fade) * fovK)
+                    fd.e.Squash = NumberSequence.new(evalSeq(fd.squash, fade) * SB_FLARE_STRETCH)
+                    fd.e.Transparency = NumberSequence.new(math.clamp(1 - (1 - evalSeq(fd.alpha, fade)) * str, 0, 1))
+                    fd.e.Color = ColorSequence.new(WHITE:Lerp(cols[fd.role], fd.blend))
+                    fd.e:Emit(1)
+                end
+            end
+        end
+    end)
+
+    function stage.Destroy()
+        if conn then
+            conn:Disconnect()
+            conn = nil
+        end
+        for _, fn in ipairs(stage.Cleanup) do pcall(fn) end
+        root:Destroy()
+    end
+
+    return stage
+end
+
+-- ============================================================
+--  CHARGE-UP: the planet explosion startup, crushed down to ~1 second.
+--  Energy spirals INTO the orb while it drops, the core swells and pulses, the lens flare builds,
+--  the screen tightens/dims right before impact, then the breach takes over.
+-- ============================================================
+local function StartSpiritBombCharge(getOrbPosition, orbDiameter)
+    local T1 = SB_CHARGE_TIME
+    local S = SpiritBombScale(orbDiameter)
+    local SU = 2 -- startup size multiplier
+    local stage = CreateFXStage(S, orbDiameter)
+    local rr, pick = stage.rr, stage.pick
+
+    local lastPos = getOrbPosition() or Vector3.zero
+    stage.Center = lastPos
+    stage.Tracker = function()
+        lastPos = getOrbPosition() or lastPos
+        return lastPos
+    end
+
+    -- seed: horizontal lens streak through the orb
+    for _, off in ipairs({ 0, PI }) do
+        stage.addRay{ t0 = 0, life = T1, ang = SB_TILT + off, r0 = 0, len = 0.9 * S, w = 0.007 * S * SU,
+            color = SB_BLUE[2], grow = 0.3, hold = 0.85, tailMove = 0 }
+    end
+    -- short spiky rays around the orb
+    for i = 1, 12 do
+        stage.addRay{ t0 = 0.12 + i * 0.012, life = T1 - 0.15, ang = SB_TILT + PI * i / 6 + rr(-0.1, 0.1), z = rr(-0.2, 0.2),
+            r0 = 0.01 * S, len = rr(0.07, 0.22) * S * SU, w = 0.0035 * S * SU, color = pick(SB_BLUE),
+            grow = 0.3, hold = 0.85, tailMove = 0 }
+    end
+    -- energy spiralling INTO the core (all of them land before impact)
+    for _ = 1, 120 do
+        local life = rr(0.38, 0.6)
+        local t0 = 0.05 + (T1 - 0.05 - life) * rr(0, 1) ^ 0.7
+        stage.addComet{ t0 = t0, life = life, mode = "in", ang = rr(0, 2 * PI), r0 = rr(0.5, 1.4) * S, r1 = 0.015 * S,
+            swirl = rr(2.2, 3.6) * (rr(0, 1) < 0.5 and 1 or -1), z = rr(-0.2, 0.2), w = rr(0.003, 0.008) * S * SU,
+            trail = rr(0.14, 0.26), color = pick(SB_BLUE), color2 = SB_BLUE[3] }
+    end
+    -- charge arcs crackling in the last stretch
+    for i = 1, 7 do
+        stage.addBolt{ t0 = T1 * 0.6 + i * 0.05, life = 0.3, ang = rr(0, 2 * PI), r0 = 0.03 * S,
+            len = rr(0.1, 0.22) * S * SU, w = 0.003 * S * SU, color = SB_BLUE[2], jitter = 0.14, N = 7 }
+    end
+
+    -- glow core: swells, pulses faster and faster, then gets sucked in for the last instant ("inhale")
+    local coreK = { { 0, 0.28 }, { 0.35, 0.5 }, { 0.85, 0.66 }, { T1 - 0.14, 0.78 }, { T1 - 0.02, 0.5 } }
+    local alphaK = { { 0, 0 }, { 0.3, 0.55 }, { 0.9, 0.95 }, { T1, 1 } }
+    local pulseK = { { 0.1, 0 }, { 0.5, 1 }, { T1 - 0.2, 1 }, { T1 - 0.05, 0 } }
+    table.insert(stage.Hooks, function(t)
+        if stage.BreachAt then return end -- the explosion drives the core from here on
+        stage.CoreDiameter = orbDiameter * kf(t, coreK) * (1 + 0.1 * math.sin(t * (18 + 12 * t)) * kf(t, pulseK))
+        stage.CoreAlpha = kf(t, alphaK)
+    end)
+
+    -- lens flare: cyan, builds through the charge, dips on the inhale
+    local flarePre = { { 0, 0 }, { 0.25, 0 }, { 0.7, 0.3 }, { T1 - 0.2, 0.45 }, { T1 - 0.05, 0.12 }, { T1, 0.12 } }
+    stage.FlareFn = function(t)
+        return kf(t, flarePre), SB_BLUE[2], SB_BLUE[1], SB_BLUE[3]
+    end
+
+    -- screen: bloom ramps, brightness dips on the inhale, vignette tightens
+    local bloom = Instance.new("BloomEffect")
+    bloom.Size, bloom.Threshold, bloom.Intensity = 56, 0.8, 0
+    bloom.Parent = Lighting
+    local grade = Instance.new("ColorCorrectionEffect")
+    grade.Parent = Lighting
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "SpiritBombVignette"
+    gui.IgnoreGuiInset = true
+    gui.ResetOnSpawn = false
+    gui.DisplayOrder = 1000
+    pcall(function() gui.ScreenInsets = Enum.ScreenInsets.None end)
+    gui.Parent = LocalPlayer.PlayerGui
+
+    local vig = Instance.new("CanvasGroup")
+    vig.Size = UDim2.fromScale(1, 1)
+    vig.BackgroundTransparency = 1
+    vig.GroupTransparency = 1
+    vig.Parent = gui
+    local function edge(anchorP, pos, size, rot)
+        local f = Instance.new("Frame")
+        f.AnchorPoint = anchorP
+        f.Position = pos
+        f.Size = size
+        f.BackgroundColor3 = Color3.new(0, 0, 0)
+        f.BorderSizePixel = 0
+        local g = Instance.new("UIGradient")
+        g.Rotation = rot
+        g.Transparency = NumberSequence.new({ NSK(0, 0.35), NSK(1, 1) })
+        g.Parent = f
+        f.Parent = vig
+    end
+    edge(Vector2.new(0, 0), UDim2.fromScale(0, 0), UDim2.fromScale(0.28, 1), 0)
+    edge(Vector2.new(1, 0), UDim2.fromScale(1, 0), UDim2.fromScale(0.28, 1), 180)
+    edge(Vector2.new(0, 0), UDim2.fromScale(0, 0), UDim2.fromScale(1, 0.28), 90)
+    edge(Vector2.new(0, 1), UDim2.fromScale(0, 1), UDim2.fromScale(1, 0.28), 270)
+
+    local bloomK = { { 0, 0 }, { 0.4, 0.35 }, { T1 - 0.12, 1.0 }, { T1, 1.8 } }
+    local brightK = { { 0, 0 }, { T1 - 0.16, 0 }, { T1 - 0.04, -0.12 }, { T1, -0.12 } }
+    local vigK = { { 0, 1 }, { T1 - 0.1, 0.3 }, { T1, 0.25 } } -- fades in across the whole charge
+    table.insert(stage.Hooks, function(t)
+        if stage.BreachAt then
+            vig.GroupTransparency = kf(t - stage.BreachAt, { { 0, 0.25 }, { 0.6, 0.3 }, { 3.4, 1 } }) -- holds, then fades out by the end of the explosion
+        else
+            bloom.Intensity = kf(t, bloomK)
+            grade.Brightness = kf(t, brightK)
+            vig.GroupTransparency = kf(t, vigK)
+        end
+    end)
+
+    function stage.EndCharge() -- the explosion has its own bloom / grade
+        bloom:Destroy()
+        grade:Destroy()
+    end
+    table.insert(stage.Cleanup, function()
+        gui:Destroy()
+        if bloom.Parent then bloom:Destroy() end
+        if grade.Parent then grade:Destroy() end
+    end)
+
+    -- rumble builds with the charge
+    for _, shake in ipairs({ { 0.2, 2 }, { 0.5, 3 }, { 0.85, 4 } }) do
+        task.delay(shake[1], function()
+            if not stage.BreachAt then
+                FireReplicationEvent({ Intensity = shake[2], Effect = "Camshake" })
+            end
+        end)
+    end
+
+    return stage
+end
+
+-- ============================================================
+--  EXPLOSION ORB: 12-layer white-hot glow core, forcefield shields, starburst rays,
+--  lightning, outward comets, big anamorphic bars and the blast lens flare.
+-- ============================================================
+local function CreateExplosionOrb(folder, center, stage)
+    local C = EXPLOSION_COLORS
+    local S, orbD = stage.S, stage.OrbDiameter
+    local rr, pick = stage.rr, stage.pick
+    local DF = SB_ORB_FINAL
+    local t0 = stage.Time
+
+    -- hand the stage over from the charge to the blast
+    stage.BreachAt = t0
+    stage.Tracker = nil
+    stage.Center = center
+    if stage.EndCharge then stage.EndCharge() end
+
+    -- glow core: pops out white-hot, settles, then cools to deep blue while it fades
+    local d0 = math.min(orbD * 0.55, DF * 0.9)
+    local dK = { { 0, d0 }, { 0.05, DF * 0.85 }, { 0.28, DF }, { 1.2, DF * 1.1 }, { 2.2, DF * 1.22 }, { 3.4, DF * 1.3 } }
+    local aK = { { 0, 1 }, { 0.7, 1 }, { 1.6, 0.45 }, { 2.7, 0 } }
+    local deepK = { { 0, 0 }, { 1.2, 0.6 }, { 2.7, 1 } }
+    table.insert(stage.Hooks, function(t)
+        local tb = t - t0
+        stage.CoreDiameter = kf(tb, dK) * (1 + 0.025 * math.sin(tb * 22) * math.clamp(1 - tb, 0, 1))
+        stage.CoreAlpha = kf(tb, aK)
+        stage.CoreDeep = kf(tb, deepK)
+    end)
+
+    -- lens flare: icy white-blue on the hit, cooling to deep blue
+    local flarePost = { { 0, 1 }, { 0.5, 0.75 }, { 1.4, 0.55 }, { 2.4, 0.3 }, { 3.3, 0 } }
+    local mainK = { { 0, SB_BLUE[4] }, { 0.5, SB_BLUE[4] }, { 1.6, SB_BLUE[1] }, { 3.2, SB_BLUE[3] } }
+    local accentK = { { 0, SB_BLUE[2] }, { 1.6, SB_BLUE[1] } }
+    local ghostK = { { 0, SB_BLUE[1] }, { 1.6, SB_BLUE[2] } }
+    stage.FlareFn = function(t)
+        local tb = t - t0
+        return kf(tb, flarePost), kf(tb, mainK), kf(tb, accentK), kf(tb, ghostK)
+    end
+
+    -- shield shells (the forcefield skin + a faint pressure wave)
+    local function Shield(color, material, tr, diameter, grow, fadeDelay, fadeTime)
+        local p = NewEffectPart(folder, "Part", Vector3.one * math.max(orbD * 0.6, 2), CFrame.new(center), color, material, tr)
+        p.Shape = Enum.PartType.Ball
+        PlayTween(p, grow, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out, { Size = Vector3.one * diameter })
+        PlayTween(p, fadeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.In, { Transparency = 1 }, fadeDelay)
+    end
+    Shield(C.Ice, Enum.Material.ForceField, 0, DF * 1.5, 0.5, 0.9, 1.4)
+    Shield(C.Cyan, Enum.Material.ForceField, 0.15, DF * 2.3, 0.75, 1.1, 1.7)
+    Shield(C.Ice, Enum.Material.Neon, 0.9, DF * 3.4, 0.6, 0.05, 0.75)
+
+    -- starburst: tapered rays, long ones alternating with short ones
+    local n = 20
+    for i = 1, n do
+        local big = (i % 4 == 0)
+        stage.addRay{
+            t0 = t0 + rr(0, 0.04), life = 1.6, ang = SB_TILT + (i / n) * 2 * PI, z = rr(-0.08, 0.08),
+            r0 = DF * 0.35, len = 1.5 * S * ((i % 2 == 0) and 1 or 0.55) * (big and 1.25 or 1) * rr(0.9, 1.1),
+            w = 0.007 * S * (big and 1.4 or 1), color = pick(SB_BLUE), grow = 0.12, hold = 0.5, tailMove = 0.45,
+        }
+    end
+    -- big anamorphic bars through the blast
+    for _, a in ipairs({ 0.15, PI + 0.15, -0.12, PI - 0.12 }) do
+        stage.addRay{ t0 = t0 + 0.04, life = 1.8, ang = a, r0 = DF * 0.4, len = 1.7 * S, w = 0.02 * S,
+            color = SB_BLUE[2], grow = 0.12, hold = 0.6, tailMove = 0.35 }
+    end
+    -- lightning crawling off the surface
+    for _ = 1, 14 do
+        stage.addBolt{ t0 = t0 + rr(0, 0.5), life = rr(0.35, 0.7), ang = rr(0, 2 * PI), r0 = DF * 0.45,
+            len = rr(0.4, 0.95) * S, w = 0.005 * S, color = SB_BLUE[2], jitter = 0.09 }
+    end
+    -- comets spiralling OUT
+    for _ = 1, 80 do
+        stage.addComet{ t0 = t0 + rr(0, 0.22), life = rr(0.8, 1.5), mode = "out", ang = rr(0, 2 * PI), r0 = DF * 0.4,
+            r1 = rr(0.8, 2.3) * S, swirl = rr(0.7, 1.7) * (rr(0, 1) < 0.5 and 1 or -1), z = rr(-0.25, 0.25),
+            w = rr(0.008, 0.02) * S, trail = rr(0.35, 0.7), color = pick(SB_BLUE), color2 = SB_BLUE[3] }
+    end
+
+    task.delay(3.8, stage.Destroy)
+
+    -- invisible emitter core: plasma + sparks attach here
+    local core = NewEffectPart(folder, "Part", Vector3.one * DF * 1.1, CFrame.new(center), C.White, Enum.Material.Neon, 1)
+    core.Shape = Enum.PartType.Ball
+    return core
+end
+
+local function PlaySpiritBombExplosion(center, stage, orbDiameter)
     local C = EXPLOSION_COLORS
     local rng = Random.new()
 
@@ -396,25 +1010,11 @@ local function PlaySpiritBombExplosion(center)
 
     PlayExplosionScreenFX(folder)
 
-    -- Layered spheres: white-hot core -> cyan body -> forcefield skin -> pressure wave
-    local core = CreateExplosionShell(folder, center, {
-        Color = C.White, Material = Enum.Material.Neon, Transparency = 0,
-        Diameter = 170, GrowTime = 0.35, FadeDelay = 0.6, FadeTime = 1.4,
-    })
-    local body = CreateExplosionShell(folder, center, {
-        Color = C.Cyan, Material = Enum.Material.Neon, Transparency = 0.25,
-        Diameter = 280, GrowTime = 0.5, FadeDelay = 0.9, FadeTime = 1.6,
-    })
-    CreateExplosionShell(folder, center, {
-        Color = C.Blue, Material = Enum.Material.ForceField, Transparency = 0.2,
-        Diameter = 360, GrowTime = 0.7, FadeDelay = 1.2, FadeTime = 1.8,
-    })
-    CreateExplosionShell(folder, center, {
-        Color = C.Ice, Material = Enum.Material.Neon, Transparency = 0.85,
-        Diameter = 700, GrowTime = 0.6, FadeDelay = 0.1, FadeTime = 0.8,
-    })
-
-    AttachPlasma(body)
+    -- Orb: 12-layer glow core + shields + rays/lightning/comets + lens flare (see CreateExplosionOrb)
+    orbDiameter = orbDiameter or 120
+    stage = stage or CreateFXStage(SpiritBombScale(orbDiameter), orbDiameter)
+    local core = CreateExplosionOrb(folder, center, stage)
+    AttachPlasma(core)
     AttachSparks(core)
 
     -- Light that blasts the surroundings blue
@@ -472,6 +1072,12 @@ local function PlaySpiritBombOrb()
         return
     end
 
+    local orbDiameter = 120
+    pcall(function()
+        local size = template:IsA("Model") and template:GetExtentsSize() or template.Size
+        orbDiameter = math.max(size.X, size.Y, size.Z)
+    end)
+
     local model = template:Clone()
     model.Parent = Character
 
@@ -501,6 +1107,18 @@ local function PlaySpiritBombOrb()
         {Value = 1}
     )
     growTween:Play()
+
+    -- Quick charge-up: starts just before the orb finishes growing and lands exactly on impact
+    local stage
+    task.delay(GROW_TIME - SB_CHARGE_PRE, function()
+        if model.Parent then
+            stage = StartSpiritBombCharge(function()
+                local pp = model.Parent and model.PrimaryPart
+                return pp and pp.Position
+            end, orbDiameter)
+        end
+    end)
+
     growTween.Completed:Wait()
     scaleValue:Destroy()
     model:ScaleTo(1)
@@ -509,7 +1127,7 @@ local function PlaySpiritBombOrb()
     -- along a single diagonal path: forward and down together.
     local FORWARD_DISTANCE = 100
     local DROP_DISTANCE = 230
-    local FALL_TIME = 0.8
+    local FALL_TIME = SB_FALL_TIME
 
     local startPos = model.PrimaryPart.Position
     local look = HumanoidRootPart.CFrame.LookVector
@@ -560,7 +1178,7 @@ local function PlaySpiritBombOrb()
             }
         })
 
-        task.spawn(PlaySpiritBombExplosion, lastPos)
+        task.spawn(PlaySpiritBombExplosion, lastPos, stage, orbDiameter)
 
         task.wait(0.3)
         model:Destroy()
