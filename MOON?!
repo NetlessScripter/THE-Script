@@ -1,0 +1,1965 @@
+UPPERCUT_FINISHER_HEALTH = 15
+UPPERCUT_HITBOX_SECONDS  = 0.88
+UPPERCUT_ORB_SECONDS     = 0.3
+UPPERCUT_FOLLOWUP_ANIM   = "rbxassetid://13927612951"
+UPPERCUT_FOLLOWUP_START  = 2.3
+UPPERCUT_FOLLOWUP_STOP   = 2.7
+UPPERCUT_FALL_ANIM       = "rbxassetid://15280575192"
+UPPERCUT_EARTH_ASSET     = 750680926
+UPPERCUT_MOON_ASSET      = 422840159
+UPPERCUT_EARTH_VISUAL_TO_BOUNDS_RATIO = 2.1
+UPPERCUT_MOON_VISUAL_TO_BOUNDS_RATIO  = 1
+UPPERCUT_STAGE_ORIGIN    = Vector3.new(50000, 30000, 0)
+UPPERCUT_SFX = {
+	impact    = "",
+	launch    = "",
+	whoosh    = "",
+	moonHit   = "",
+	moonCrack = "",
+	moonBoom  = "",
+}
+uppercutFinisherRunning = false
+
+UppercutFX = (function()
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+local StarterGui = game:GetService("StarterGui")
+local Workspace = game:GetService("Workspace")
+local Debris = game:GetService("Debris")
+
+local localPlayer = Players.LocalPlayer
+local PI = math.pi
+local TAU = PI * 2
+local rgb = Color3.fromRGB
+local vec3 = Vector3.new
+local WHITE = Color3.new(1, 1, 1)
+local BLACK = Color3.new(0, 0, 0)
+local SOFT_GLOW = "rbxassetid://272050333"
+local SPARK_TEXTURE = "rbxasset://textures/particles/sparkles_main.dds"
+local MAX_PART_SIZE = 2040
+local numberKeypoint = NumberSequenceKeypoint.new
+local colorKeypoint = ColorSequenceKeypoint.new
+
+local BLUE = { rgb(70, 150, 255), rgb(90, 230, 255), rgb(30, 80, 255), rgb(180, 205, 255) }
+local FIRE = { rgb(255, 248, 225), rgb(255, 222, 110), rgb(255, 150, 40), rgb(232, 68, 20), rgb(140, 30, 10) }
+local PALETTE_BLUE = { core = WHITE, bright = BLUE[2], mid = BLUE[1], deep = BLUE[3], rays = { BLUE[4], BLUE[2], BLUE[1], WHITE } }
+local PALETTE_FIRE = { core = FIRE[1], bright = FIRE[2], mid = FIRE[3], deep = FIRE[4], rays = { FIRE[1], FIRE[2], FIRE[3] } }
+local STAR_COLORS = { rgb(255, 255, 255), rgb(255, 255, 255), rgb(200, 225, 255), rgb(160, 200, 255), rgb(255, 238, 215) }
+
+local function smoothstep(value)
+	value = math.clamp(value, 0, 1)
+	return value * value * (3 - 2 * value)
+end
+
+local function easeOutCubic(value)
+	value = math.clamp(value, 0, 1)
+	return 1 - (1 - value) ^ 3
+end
+
+local function easeInCubic(value)
+	value = math.clamp(value, 0, 1)
+	return value ^ 3
+end
+
+local function easeOutExpo(value)
+	value = math.clamp(value, 0, 1)
+	return value >= 1 and 1 or 1 - 2 ^ (-10 * value)
+end
+
+local function lerp(fromValue, toValue, alpha)
+	return fromValue + (toValue - fromValue) * alpha
+end
+
+local function playSound(soundKey, volume)
+	local soundId = UPPERCUT_SFX[soundKey]
+	if not soundId or soundId == "" then return end
+	local sound = Instance.new("Sound")
+	sound.SoundId = soundId
+	sound.Volume = volume or 2
+	sound.Parent = Workspace
+	sound:Play()
+	Debris:AddItem(sound, 15)
+end
+
+local effectList = {}
+local effectConnection = nil
+local effectClock = 1
+
+local function addEffect(effectFunction)
+	effectList[#effectList + 1] = effectFunction
+	if not effectConnection then
+		effectConnection = RunService.RenderStepped:Connect(function(deltaTime)
+			deltaTime = math.min(deltaTime, 0.1) * effectClock
+			local index = 1
+			while index <= #effectList do
+				local succeeded, finished = pcall(effectList[index], deltaTime)
+				if not succeeded or finished then
+					table.remove(effectList, index)
+				else
+					index += 1
+				end
+			end
+			if #effectList == 0 and effectConnection then
+				effectConnection:Disconnect()
+				effectConnection = nil
+			end
+		end)
+	end
+end
+
+local function clearEffects()
+	effectList = {}
+	if effectConnection then
+		effectConnection:Disconnect()
+		effectConnection = nil
+	end
+end
+
+local function makePart(parent, shape, material, color, size, cframe, transparency)
+	local part = Instance.new("Part")
+	part.Anchored = true
+	part.CanCollide, part.CanQuery, part.CanTouch, part.CastShadow = false, false, false, false
+	part.Shape = shape
+	part.Material = material
+	part.Color = color
+	part.Transparency = transparency or 0
+	part.Size = size
+	part.CFrame = cframe
+	part.TopSurface, part.BottomSurface = Enum.SurfaceType.Smooth, Enum.SurfaceType.Smooth
+	part.Parent = parent
+	return part
+end
+
+local function makeBall(parent, position, diameter, color, transparency)
+	return makePart(parent, Enum.PartType.Ball, Enum.Material.Neon, color, Vector3.one * math.clamp(diameter, 0.05, MAX_PART_SIZE), CFrame.new(position), transparency)
+end
+
+local effectsFolder
+local function getEffectsFolder()
+	if not effectsFolder or not effectsFolder.Parent then
+		effectsFolder = Instance.new("Folder")
+		effectsFolder.Name = "UppercutFinisherFX"
+		effectsFolder.Parent = Workspace
+	end
+	return effectsFolder
+end
+
+local function expandingSphere(parent, position, startDiameter, endDiameter, life, color, startTransparency, fadePower, delay)
+	local ball = makeBall(parent, position, startDiameter, color, 1)
+	local elapsed = -(delay or 0)
+	addEffect(function(deltaTime)
+		elapsed += deltaTime
+		if elapsed < 0 then return false end
+		local alpha = math.min(elapsed / life, 1)
+		ball.Size = Vector3.one * math.clamp(lerp(startDiameter, endDiameter, easeOutCubic(alpha)), 0.05, MAX_PART_SIZE)
+		ball.Transparency = startTransparency + (1 - startTransparency) * alpha ^ (fadePower or 1.4)
+		if alpha >= 1 then
+			ball:Destroy()
+			return true
+		end
+		return false
+	end)
+	return ball
+end
+
+local function addRing(parent, center, normal, startRadius, endRadius, life, color, width, delay, coreColor)
+	local segmentCount = math.clamp(math.floor(endRadius / 10), 56, 140)
+	local helperAxis = math.abs(normal.Y) > 0.95 and vec3(1, 0, 0) or vec3(0, 1, 0)
+	local axisX = normal:Cross(helperAxis).Unit
+	local axisY = normal:Cross(axisX).Unit
+	local holder = makePart(parent, Enum.PartType.Ball, Enum.Material.SmoothPlastic, WHITE, vec3(0.5, 0.5, 0.5), CFrame.new(center), 1)
+	local attachments = {}
+	for index = 1, segmentCount do
+		local attachment = Instance.new("Attachment")
+		attachment.Parent = holder
+		attachments[index] = attachment
+	end
+	local function makeBeamLayer(beamColor, widthScale)
+		local beamList = {}
+		for index = 1, segmentCount do
+			local beam = Instance.new("Beam")
+			beam.Attachment0 = attachments[index]
+			beam.Attachment1 = attachments[index % segmentCount + 1]
+			beam.FaceCamera = true
+			beam.LightEmission = 1
+			beam.LightInfluence = 0
+			beam.Segments = 1
+			beam.Color = ColorSequence.new(beamColor)
+			beam.Transparency = NumberSequence.new(1)
+			beam.Parent = holder
+			beamList[index] = beam
+		end
+		return { beams = beamList, widthScale = widthScale }
+	end
+	local layers = { makeBeamLayer(color, 1) }
+	if coreColor then
+		layers[2] = makeBeamLayer(coreColor, 0.4)
+	end
+	local elapsed = -(delay or 0)
+	addEffect(function(deltaTime)
+		elapsed += deltaTime
+		if elapsed < 0 then return false end
+		local alpha = math.min(elapsed / life, 1)
+		if alpha >= 1 then
+			holder:Destroy()
+			return true
+		end
+		local radius = lerp(startRadius, endRadius, easeOutCubic(alpha))
+		for index = 1, segmentCount do
+			local angle = (index - 1) / segmentCount * TAU
+			attachments[index].WorldPosition = center + axisX * (math.cos(angle) * radius) + axisY * (math.sin(angle) * radius)
+		end
+		local currentWidth = width * (1 - alpha * 0.65)
+		local transparency = NumberSequence.new(math.clamp(alpha ^ 1.6, 0, 1))
+		for _, layer in ipairs(layers) do
+			local layerWidth = currentWidth * layer.widthScale
+			for _, beam in ipairs(layer.beams) do
+				beam.Width0, beam.Width1 = layerWidth, layerWidth
+				beam.Transparency = transparency
+			end
+		end
+		return false
+	end)
+end
+
+local function rayBurst(parent, position, options)
+	local random = Random.new()
+	local rays = {}
+	for index = 1, options.count do
+		local direction = random:NextUnitVector()
+		local part = makePart(parent, Enum.PartType.Block, Enum.Material.Neon, options.colors[random:NextInteger(1, #options.colors)], vec3(options.width, options.width, 1), CFrame.new(position), 1)
+		rays[index] = {
+			part = part,
+			direction = direction,
+			length = options.length * random:NextNumber(0.55, 1.2),
+			startRadius = options.startRadius * random:NextNumber(0.6, 1.4),
+		}
+	end
+	local elapsed = -(options.delay or 0)
+	addEffect(function(deltaTime)
+		elapsed += deltaTime
+		if elapsed < 0 then return false end
+		local alpha = elapsed / options.life
+		if alpha >= 1 then
+			for _, ray in ipairs(rays) do ray.part:Destroy() end
+			return true
+		end
+		for _, ray in ipairs(rays) do
+			local headDistance = ray.startRadius + ray.length * easeOutExpo(alpha / 0.3)
+			local tailDistance = ray.startRadius + ray.length * 0.85 * smoothstep((alpha - 0.12) / 0.88)
+			local rayLength = math.max(headDistance - tailDistance, 0.05)
+			local middleDistance = (headDistance + tailDistance) / 2
+			local rayWidth = options.width * (1 - alpha * 0.8)
+			ray.part.Size = vec3(rayWidth, rayWidth, rayLength)
+			ray.part.CFrame = CFrame.lookAt(position + ray.direction * middleDistance, position + ray.direction * (middleDistance + 1))
+			ray.part.Transparency = math.clamp(alpha ^ 1.6, 0, 1)
+		end
+		return false
+	end)
+end
+
+local function burstParticles(parent, position, holderDiameter, options, count)
+	local holder = makePart(parent, Enum.PartType.Ball, Enum.Material.SmoothPlastic, WHITE, Vector3.one * math.clamp(holderDiameter, 0.5, MAX_PART_SIZE), CFrame.new(position), 1)
+	local emitter = Instance.new("ParticleEmitter")
+	emitter.Enabled = false
+	emitter.Rate = 0
+	emitter.LockedToPart = false
+	emitter.LightInfluence = 0
+	emitter.Texture = options.texture or SOFT_GLOW
+	emitter.Color = options.color
+	emitter.Size = options.size
+	emitter.Transparency = options.transparency
+	emitter.Lifetime = options.lifetime
+	emitter.Speed = options.speed
+	emitter.Drag = options.drag or 0
+	emitter.Acceleration = options.acceleration or Vector3.zero
+	emitter.Rotation = NumberRange.new(0, 360)
+	emitter.RotSpeed = options.rotSpeed or NumberRange.new(-60, 60)
+	emitter.LightEmission = options.lightEmission or 1
+	emitter.Brightness = options.brightness or 1
+	emitter.ZOffset = options.zOffset or 0
+	emitter.Shape = Enum.ParticleEmitterShape.Sphere
+	emitter.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
+	emitter.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+	emitter.SpreadAngle = Vector2.new(180, 180)
+	emitter.Parent = holder
+	emitter:Emit(count)
+	Debris:AddItem(holder, options.lifetime.Max + 1)
+end
+
+local function cameraFacing(position)
+	local camera = Workspace.CurrentCamera
+	local offset = camera and (camera.CFrame.Position - position) or Vector3.yAxis
+	if offset.Magnitude < 0.01 then return Vector3.yAxis end
+	return offset.Unit
+end
+
+local function tiltedNormal(normal, angle, seed)
+	local axis = normal:Cross(seed == 2 and Vector3.xAxis or Vector3.yAxis)
+	if axis.Magnitude < 0.1 then axis = Vector3.zAxis end
+	return CFrame.fromAxisAngle(axis.Unit, angle):VectorToWorldSpace(normal)
+end
+
+local function randomDirectionInCone(random, axis, coneHalfAngle)
+	local helperAxis = math.abs(axis.Y) > 0.95 and vec3(1, 0, 0) or vec3(0, 1, 0)
+	local axisRight = axis:Cross(helperAxis).Unit
+	local axisUp = axis:Cross(axisRight).Unit
+	local polarAngle = coneHalfAngle * math.sqrt(random:NextNumber())
+	local azimuthAngle = random:NextNumber(0, TAU)
+	local sideways = (axisRight * math.cos(azimuthAngle) + axisUp * math.sin(azimuthAngle)) * math.sin(polarAngle)
+	return (axis * math.cos(polarAngle) + sideways).Unit
+end
+
+local function impactBurst(parent, position, scale, palette, facingNormal)
+	scale = scale or 1
+	palette = palette or PALETTE_BLUE
+	local coreBall = expandingSphere(parent, position, 2 * scale, 14 * scale, 0.26, palette.core, 0, 1.8)
+	expandingSphere(parent, position, 3 * scale, 22 * scale, 0.34, palette.bright, 0.15, 1.5)
+	expandingSphere(parent, position, 4 * scale, 30 * scale, 0.46, palette.mid, 0.5, 1.3)
+	expandingSphere(parent, position, 6 * scale, 42 * scale, 0.62, palette.deep, 0.75, 1.2, 0.04)
+
+	local light = Instance.new("PointLight")
+	light.Color = palette.bright
+	light.Range = math.min(60, 30 * scale)
+	light.Brightness = 8
+	light.Parent = coreBall
+
+	local normal = facingNormal or cameraFacing(position)
+	addRing(parent, position, normal, 1 * scale, 20 * scale, 0.55, palette.bright, 1.1 * scale, 0, palette.core)
+	addRing(parent, position, tiltedNormal(normal, 1.15, 1), 1 * scale, 14 * scale, 0.55, palette.core, 0.6 * scale, 0.05)
+	addRing(parent, position, tiltedNormal(normal, -0.9, 2), 1 * scale, 10 * scale, 0.5, palette.mid, 0.5 * scale, 0.09)
+	addRing(parent, position, normal, 1 * scale, 30 * scale, 0.8, palette.deep, 0.5 * scale, 0.14)
+
+	rayBurst(parent, position, { count = 22, startRadius = 1.5 * scale, length = 18 * scale, width = 0.45 * scale, life = 0.5, colors = palette.rays })
+	rayBurst(parent, position, { count = 10, startRadius = 2 * scale, length = 32 * scale, width = 0.28 * scale, life = 0.38, colors = palette.rays, delay = 0.03 })
+
+	local sparkColor = ColorSequence.new({ colorKeypoint(0, WHITE), colorKeypoint(0.4, palette.bright), colorKeypoint(1, palette.deep) })
+	burstParticles(parent, position, 1.5 * scale, {
+		texture = SPARK_TEXTURE,
+		color = sparkColor,
+		size = NumberSequence.new({ numberKeypoint(0, 0.9 * scale), numberKeypoint(1, 0) }),
+		transparency = NumberSequence.new({ numberKeypoint(0, 0), numberKeypoint(1, 1) }),
+		lifetime = NumberRange.new(0.3, 0.8),
+		speed = NumberRange.new(25 * scale, 80 * scale),
+		drag = 3,
+		brightness = 3,
+	}, 60)
+	burstParticles(parent, position, 1.5 * scale, {
+		color = ColorSequence.new(palette.bright),
+		size = NumberSequence.new({ numberKeypoint(0, 4 * scale), numberKeypoint(1, 13 * scale) }),
+		transparency = NumberSequence.new({ numberKeypoint(0, 0.2), numberKeypoint(1, 1) }),
+		lifetime = NumberRange.new(0.3, 0.55),
+		speed = NumberRange.new(2 * scale, 14 * scale),
+		drag = 2,
+		zOffset = 1,
+	}, 8)
+end
+
+local function convergingEnergy(parent, targetPosition, options)
+	local random = Random.new(options.seed or 5)
+	local bits = {}
+	for index = 1, options.count do
+		local direction = random:NextUnitVector()
+		if direction:Dot(options.hemisphere) < 0 then direction = -direction end
+		local bitSize = random:NextNumber(3, 7)
+		local bit = makePart(parent, Enum.PartType.Ball, Enum.Material.Neon, options.colors[random:NextInteger(1, #options.colors)], Vector3.one * bitSize, CFrame.new(targetPosition + direction * options.radius), 1)
+		local attachmentA, attachmentB = Instance.new("Attachment"), Instance.new("Attachment")
+		attachmentA.Position, attachmentB.Position = vec3(bitSize * 0.9, 0, 0), vec3(-bitSize * 0.9, 0, 0)
+		attachmentA.Parent, attachmentB.Parent = bit, bit
+		local trail = Instance.new("Trail")
+		trail.Attachment0, trail.Attachment1 = attachmentA, attachmentB
+		trail.Lifetime = 0.35
+		trail.MinLength = 0.1
+		trail.FaceCamera = true
+		trail.LightEmission = 1
+		trail.LightInfluence = 0
+		trail.Enabled = false
+		trail.Color = ColorSequence.new({ colorKeypoint(0, WHITE), colorKeypoint(0.4, BLUE[2]), colorKeypoint(1, BLUE[3]) })
+		trail.Transparency = NumberSequence.new({ numberKeypoint(0, 0.05), numberKeypoint(1, 1) })
+		trail.WidthScale = NumberSequence.new({ numberKeypoint(0, 1), numberKeypoint(1, 0) })
+		trail.Parent = bit
+		bits[index] = {
+			part = bit,
+			trail = trail,
+			direction = direction,
+			startRadius = options.radius * random:NextNumber(0.55, 1.1),
+			bornTime = random:NextNumber(0, options.window),
+			life = random:NextNumber(0.45, 0.8),
+			swirl = random:NextNumber(1.2, 2.6) * (random:NextNumber() < 0.5 and 1 or -1),
+		}
+	end
+	local elapsed = 0
+	addEffect(function(deltaTime)
+		elapsed += deltaTime
+		local allDone = true
+		for _, bitState in ipairs(bits) do
+			if bitState.part.Parent then
+				local progress = (elapsed - bitState.bornTime) / bitState.life
+				if progress < 1 then
+					allDone = false
+				end
+				if progress >= 0 and progress < 1 then
+					bitState.trail.Enabled = true
+					bitState.part.Transparency = 0
+					local swirledDirection = CFrame.fromAxisAngle(options.axis, bitState.swirl * progress):VectorToWorldSpace(bitState.direction)
+					local distance = math.max(bitState.startRadius * (1 - progress) ^ 1.8, 0.5)
+					bitState.part.CFrame = CFrame.lookAt(targetPosition + swirledDirection * distance, targetPosition)
+				elseif progress >= 1 then
+					bitState.part:Destroy()
+				end
+			end
+		end
+		return allDone
+	end)
+end
+
+local function buildCrackNetwork(parent, center, radius, originDirection, settings)
+	local random = Random.new(settings.seed or 11)
+	local crackFolder = Instance.new("Folder")
+	crackFolder.Name = "SurfaceCracks"
+	crackFolder.Parent = parent
+	local segments = {}
+	local surfaceRadius = radius * (settings.surfaceOffset or 1.006)
+	local segmentLimit = settings.segmentLimit or 420
+	local stepAngle = settings.stepAngle or 0.05
+
+	local helperAxis = math.abs(originDirection.Y) > 0.95 and vec3(1, 0, 0) or vec3(0, 1, 0)
+	local tangentA = originDirection:Cross(helperAxis).Unit
+	local tangentB = originDirection:Cross(tangentA).Unit
+
+	local function spawnSegment(fromDirection, toDirection, travelledAngle, width, depth)
+		if #segments >= segmentLimit then return end
+		local fromPosition = center + fromDirection * surfaceRadius
+		local toPosition = center + toDirection * surfaceRadius
+		local segmentLength = (toPosition - fromPosition).Magnitude
+		if segmentLength < 0.01 then return end
+		local middlePosition = (fromPosition + toPosition) / 2
+		local orientation = CFrame.lookAt(middlePosition, toPosition)
+		local travelFraction = math.clamp(travelledAngle / settings.maxAngle, 0, 1)
+		local segmentColor = settings.hotColor:Lerp(settings.coolColor, travelFraction ^ 0.8)
+		local corePart = makePart(crackFolder, Enum.PartType.Block, Enum.Material.Neon, segmentColor, vec3(width, width, segmentLength * 1.18), orientation, 1)
+		local haloPart = nil
+		if depth == 0 then
+			haloPart = makePart(crackFolder, Enum.PartType.Block, Enum.Material.Neon, settings.haloColor, vec3(width * 2.8, width * 2.8, segmentLength * 1.2), orientation, 1)
+		end
+		segments[#segments + 1] = {
+			core = corePart,
+			halo = haloPart,
+			bornTime = settings.delay + travelledAngle / settings.spreadSpeed,
+			phase = random:NextNumber(0, TAU),
+		}
+	end
+
+	local function growCrack(startDirection, startHeading, stepCount, width, startAngle, depth)
+		local direction, heading = startDirection, startHeading
+		local travelled = startAngle
+		for stepIndex = 1, stepCount do
+			local cosine, sine = math.cos(stepAngle), math.sin(stepAngle)
+			local nextDirection = (direction * cosine + heading * sine).Unit
+			local nextHeading = -direction * sine + heading * cosine
+			nextHeading = (nextHeading - nextDirection * nextHeading:Dot(nextDirection)).Unit
+			nextHeading = CFrame.fromAxisAngle(nextDirection, random:NextNumber(-settings.jitter, settings.jitter)):VectorToWorldSpace(nextHeading)
+			local taper = 1 - 0.55 * (stepIndex / stepCount)
+			spawnSegment(direction, nextDirection, travelled, width * taper, depth)
+			travelled += stepAngle
+			if depth < 2 and stepIndex > 2 and stepIndex < stepCount - 2 and random:NextNumber() < settings.branchChance then
+				local branchSide = random:NextNumber() < 0.5 and -1 or 1
+				local branchHeading = CFrame.fromAxisAngle(nextDirection, branchSide * random:NextNumber(0.5, 1.1)):VectorToWorldSpace(nextHeading)
+				growCrack(nextDirection, branchHeading, math.floor(stepCount * random:NextNumber(0.3, 0.55)), width * 0.6, travelled, depth + 1)
+			end
+			direction, heading = nextDirection, nextHeading
+		end
+	end
+
+	for crackIndex = 1, settings.mainCount do
+		local angle = (crackIndex - 1) / settings.mainCount * TAU + random:NextNumber(-0.3, 0.3)
+		local heading = tangentA * math.cos(angle) + tangentB * math.sin(angle)
+		growCrack(originDirection, heading, math.floor(settings.maxAngle / stepAngle * random:NextNumber(0.7, 1)), settings.width, 0, 0)
+	end
+
+	local elapsed = 0
+	local destroyed = false
+	addEffect(function(deltaTime)
+		if destroyed then return true end
+		elapsed += deltaTime
+		local fadeProgress = math.clamp((elapsed - settings.fadeStart) / settings.fadeTime, 0, 1)
+		for _, segment in ipairs(segments) do
+			local age = elapsed - segment.bornTime
+			if age >= 0 then
+				local popIn = math.clamp(age / 0.05, 0, 1)
+				local flicker = 0.82 + 0.18 * math.sin(elapsed * 38 + segment.phase)
+				local brightness = popIn * flicker * (1 - fadeProgress)
+				segment.core.Transparency = 1 - brightness
+				if segment.halo then
+					segment.halo.Transparency = 1 - brightness * 0.55
+				end
+			end
+		end
+		if fadeProgress >= 1 then
+			crackFolder:Destroy()
+			destroyed = true
+			return true
+		end
+		return false
+	end)
+
+	return function()
+		if not destroyed then
+			destroyed = true
+			crackFolder:Destroy()
+		end
+	end
+end
+
+local function spawnRockChunks(parent, random, origin, count, options)
+	local smokeBudget = options.smokeBudget or 0
+	for chunkIndex = 1, count do
+		local direction
+		if options.axis then
+			direction = randomDirectionInCone(random, options.axis, options.coneAngle)
+		else
+			direction = random:NextUnitVector()
+		end
+		local bigness = random:NextNumber() ^ options.bigPower
+		local chunkSize = lerp(options.sizeMin, options.sizeMax, bigness)
+		local startPosition = origin + direction * (options.scatterRadius * random:NextNumber(0.05, 1))
+		local chunk = makePart(parent, Enum.PartType.Block, Enum.Material.Neon, FIRE[random:NextInteger(1, 3)],
+			vec3(chunkSize * random:NextNumber(0.6, 1.4), chunkSize * random:NextNumber(0.6, 1.2), chunkSize * random:NextNumber(0.6, 1.4)),
+			CFrame.new(startPosition) * CFrame.Angles(random:NextNumber(0, TAU), random:NextNumber(0, TAU), random:NextNumber(0, TAU)), 0)
+
+		local trailAttachmentA, trailAttachmentB = Instance.new("Attachment"), Instance.new("Attachment")
+		trailAttachmentA.Position, trailAttachmentB.Position = vec3(0, chunkSize * 0.5, 0), vec3(0, -chunkSize * 0.5, 0)
+		trailAttachmentA.Parent, trailAttachmentB.Parent = chunk, chunk
+		local trail = Instance.new("Trail")
+		trail.Attachment0, trail.Attachment1 = trailAttachmentA, trailAttachmentB
+		trail.Lifetime = random:NextNumber(0.5, 1.0)
+		trail.LightEmission = 1
+		trail.LightInfluence = 0
+		trail.FaceCamera = true
+		trail.Color = ColorSequence.new({ colorKeypoint(0, FIRE[2]), colorKeypoint(0.4, FIRE[3]), colorKeypoint(1, FIRE[5]) })
+		trail.Transparency = NumberSequence.new({ numberKeypoint(0, 0.2), numberKeypoint(1, 1) })
+		trail.WidthScale = NumberSequence.new({ numberKeypoint(0, 1), numberKeypoint(1, 0) })
+		trail.Parent = chunk
+
+		if bigness > 0.65 and smokeBudget > 0 then
+			smokeBudget -= 1
+			local smoke = Instance.new("ParticleEmitter")
+			smoke.Texture = SOFT_GLOW
+			smoke.Color = ColorSequence.new({ colorKeypoint(0, rgb(120, 85, 60)), colorKeypoint(1, rgb(30, 28, 28)) })
+			smoke.Size = NumberSequence.new({ numberKeypoint(0, chunkSize * 0.8), numberKeypoint(1, chunkSize * 2.4) })
+			smoke.Transparency = NumberSequence.new({ numberKeypoint(0, 0.45), numberKeypoint(1, 1) })
+			smoke.Lifetime = NumberRange.new(1.0, 1.8)
+			smoke.Rate = 22
+			smoke.Speed = NumberRange.new(0, 12)
+			smoke.LightEmission = 0.2
+			smoke.LightInfluence = 0
+			smoke.LockedToPart = false
+			smoke.Parent = chunk
+		end
+
+		local speed = lerp(options.speedMax, options.speedMin, bigness) * random:NextNumber(0.55, 1.1)
+		local velocity = direction * speed
+		local spin = vec3(random:NextNumber(-3, 3), random:NextNumber(-3, 3), random:NextNumber(-3, 3))
+		local life = random:NextNumber(options.lifeMin, options.lifeMax)
+		local hotColor = chunk.Color
+		local coolColor = rgb(random:NextInteger(70, 105), random:NextInteger(62, 92), random:NextInteger(55, 80))
+		local elapsed = 0
+		local cooled = false
+		addEffect(function(deltaTime)
+			elapsed += deltaTime
+			velocity = velocity * (1 - 0.32 * deltaTime)
+			chunk.CFrame = (chunk.CFrame + velocity * deltaTime) * CFrame.Angles(spin.X * deltaTime, spin.Y * deltaTime, spin.Z * deltaTime)
+			local coolAmount = smoothstep((elapsed - 0.1) / 0.8)
+			chunk.Color = hotColor:Lerp(rgb(255, 120, 40), math.min(coolAmount * 2, 1)):Lerp(coolColor, math.max(coolAmount * 2 - 1, 0))
+			if coolAmount > 0.6 and not cooled then
+				cooled = true
+				chunk.Material = Enum.Material.Slate
+			end
+			chunk.Transparency = math.clamp((elapsed - (life - 0.8)) / 0.8, 0, 1)
+			if elapsed >= life then
+				chunk:Destroy()
+				return true
+			end
+			return false
+		end)
+	end
+end
+
+local function buildStarfield(parent, origin, viewportHeight)
+	local starRandom = Random.new(2024)
+	local starRadius = 9000
+	local studsPerPixel = 2 * starRadius * math.tan(math.rad(35)) / math.max(viewportHeight, 1)
+	local stars = {}
+	for index = 1, 760 do
+		local direction = starRandom:NextUnitVector()
+		local starPart = makePart(parent, Enum.PartType.Ball, Enum.Material.Neon, STAR_COLORS[starRandom:NextInteger(1, #STAR_COLORS)],
+			Vector3.one * studsPerPixel * starRandom:NextNumber(1, 2.6), CFrame.new(origin + direction * starRadius), 1)
+		stars[index] = {
+			part = starPart,
+			base = starRandom:NextNumber(0.45, 1),
+			speed = starRandom:NextNumber(0.8, 3),
+			phase = starRandom:NextNumber(0, TAU),
+		}
+	end
+	return stars
+end
+
+local function buildScreenLayer(playerGui)
+	local screenGui = Instance.new("ScreenGui")
+	screenGui.Name = "UppercutFinisherFade"
+	screenGui.IgnoreGuiInset = true
+	screenGui.ScreenInsets = Enum.ScreenInsets.None
+	screenGui.ResetOnSpawn = false
+	screenGui.DisplayOrder = 5000
+
+	local layer = { gui = screenGui }
+
+	local function solidFrame(color, zIndex)
+		local frame = Instance.new("Frame")
+		frame.Size = UDim2.fromScale(1, 1)
+		frame.BackgroundColor3 = color
+		frame.BackgroundTransparency = 1
+		frame.BorderSizePixel = 0
+		frame.ZIndex = zIndex
+		frame.Parent = screenGui
+		return frame
+	end
+
+	local function vignetteEdge(position, size, rotation, reversed)
+		local frame = Instance.new("Frame")
+		frame.Position = position
+		frame.Size = size
+		frame.BackgroundColor3 = BLACK
+		frame.BackgroundTransparency = 1
+		frame.BorderSizePixel = 0
+		frame.ZIndex = 1
+		local gradient = Instance.new("UIGradient")
+		gradient.Rotation = rotation
+		if reversed then
+			gradient.Transparency = NumberSequence.new({ numberKeypoint(0, 1), numberKeypoint(1, 0) })
+		else
+			gradient.Transparency = NumberSequence.new({ numberKeypoint(0, 0), numberKeypoint(1, 1) })
+		end
+		gradient.Parent = frame
+		frame.Parent = screenGui
+		return frame
+	end
+
+	local vignetteEdges = {
+		vignetteEdge(UDim2.fromScale(0, 0), UDim2.fromScale(1, 0.3), 90, false),
+		vignetteEdge(UDim2.fromScale(0, 0.7), UDim2.fromScale(1, 0.3), 90, true),
+		vignetteEdge(UDim2.fromScale(0, 0), UDim2.fromScale(0.22, 1), 0, false),
+		vignetteEdge(UDim2.fromScale(0.78, 0), UDim2.fromScale(0.22, 1), 0, true),
+	}
+
+	function layer.setVignette(amount)
+		local transparency = 1 - math.clamp(amount, 0, 1)
+		for _, edge in ipairs(vignetteEdges) do
+			edge.BackgroundTransparency = transparency
+		end
+	end
+
+	local lineRandom = Random.new(404)
+	local speedLines = {}
+	local speedLineCount = 60
+	for index = 1, speedLineCount do
+		local frame = Instance.new("Frame")
+		frame.AnchorPoint = Vector2.new(0, 0.5)
+		frame.Position = UDim2.fromScale(0.5, 0.5)
+		frame.BackgroundColor3 = WHITE
+		frame.BackgroundTransparency = 1
+		frame.BorderSizePixel = 0
+		frame.Rotation = (index - 1) / speedLineCount * 360 + lineRandom:NextNumber(-2.5, 2.5)
+		frame.ZIndex = 2
+		local gradient = Instance.new("UIGradient")
+		gradient.Transparency = NumberSequence.new({ numberKeypoint(0, 1), numberKeypoint(1, 0) })
+		gradient.Parent = frame
+		frame.Parent = screenGui
+		speedLines[index] = {
+			frame = frame,
+			innerFactor = lineRandom:NextNumber(0.7, 1.5),
+			lengthFactor = lineRandom:NextNumber(0.5, 1.1),
+			thicknessFactor = lineRandom:NextNumber(0.6, 1.6),
+			noiseSeed = lineRandom:NextNumber(0, 100),
+			noiseSpeed = lineRandom:NextNumber(6, 14),
+		}
+	end
+
+	function layer.setSpeedLines(amount, clockTime, viewportSize, color)
+		if amount <= 0.01 then
+			for _, line in ipairs(speedLines) do
+				line.frame.BackgroundTransparency = 1
+			end
+			return
+		end
+		local shortestSide = math.min(viewportSize.X, viewportSize.Y)
+		local diagonal = viewportSize.Magnitude
+		for _, line in ipairs(speedLines) do
+			local flicker = math.clamp(0.55 + 0.9 * math.noise(clockTime * line.noiseSpeed, line.noiseSeed), 0.1, 1)
+			local innerPixels = shortestSide * 0.2 * line.innerFactor
+			local lengthPixels = math.max(diagonal * 0.5 * line.lengthFactor * amount * flicker, 2)
+			line.frame.AnchorPoint = Vector2.new(-innerPixels / lengthPixels, 0.5)
+			line.frame.Size = UDim2.fromOffset(lengthPixels, 1 + 3 * line.thicknessFactor * amount)
+			line.frame.BackgroundColor3 = color
+			line.frame.BackgroundTransparency = 1 - math.clamp(amount * flicker * 1.1, 0, 0.95)
+		end
+	end
+
+	local flareGlow = Instance.new("ImageLabel")
+	flareGlow.AnchorPoint = Vector2.new(0.5, 0.5)
+	flareGlow.BackgroundTransparency = 1
+	flareGlow.BorderSizePixel = 0
+	flareGlow.Image = SOFT_GLOW
+	flareGlow.ImageTransparency = 1
+	flareGlow.ZIndex = 3
+	flareGlow.Parent = screenGui
+
+	local function flareStreakFrame(isVertical)
+		local frame = Instance.new("Frame")
+		frame.AnchorPoint = Vector2.new(0.5, 0.5)
+		frame.BorderSizePixel = 0
+		frame.BackgroundColor3 = WHITE
+		frame.BackgroundTransparency = 1
+		frame.ZIndex = 3
+		local gradient = Instance.new("UIGradient")
+		gradient.Rotation = isVertical and 90 or 0
+		gradient.Transparency = NumberSequence.new({ numberKeypoint(0, 1), numberKeypoint(0.5, 0), numberKeypoint(1, 1) })
+		gradient.Parent = frame
+		frame.Parent = screenGui
+		return frame
+	end
+	local flareStreakHorizontal = flareStreakFrame(false)
+	local flareStreakVertical = flareStreakFrame(true)
+
+	function layer.setFlare(screenPoint, strength, color, viewportSize)
+		if not screenPoint or strength <= 0.01 then
+			flareGlow.ImageTransparency = 1
+			flareStreakHorizontal.BackgroundTransparency = 1
+			flareStreakVertical.BackgroundTransparency = 1
+			return
+		end
+		local clampedStrength = math.clamp(strength, 0, 1)
+		local position = UDim2.fromOffset(screenPoint.X, screenPoint.Y)
+		local glowSize = viewportSize.Y * (0.3 + 1.3 * strength)
+		flareGlow.Position = position
+		flareGlow.Size = UDim2.fromOffset(glowSize, glowSize)
+		flareGlow.ImageColor3 = color
+		flareGlow.ImageTransparency = 1 - clampedStrength * 0.85
+		local streakColor = color:Lerp(WHITE, 0.5)
+		flareStreakHorizontal.Position = position
+		flareStreakHorizontal.Size = UDim2.fromOffset(viewportSize.X * (0.25 + 1.5 * strength), 2 + 14 * strength)
+		flareStreakHorizontal.BackgroundColor3 = streakColor
+		flareStreakHorizontal.BackgroundTransparency = 1 - clampedStrength * 0.9
+		flareStreakVertical.Position = position
+		flareStreakVertical.Size = UDim2.fromOffset(2 + 8 * strength, viewportSize.Y * (0.1 + 0.5 * strength))
+		flareStreakVertical.BackgroundColor3 = streakColor
+		flareStreakVertical.BackgroundTransparency = 1 - clampedStrength * 0.7
+	end
+
+	function layer.addShockRing(getCenter, startDiameter, endDiameter, life, color, thickness, delay)
+		local ring = Instance.new("Frame")
+		ring.AnchorPoint = Vector2.new(0.5, 0.5)
+		ring.BackgroundTransparency = 1
+		ring.BorderSizePixel = 0
+		ring.ZIndex = 4
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(1, 0)
+		corner.Parent = ring
+		local stroke = Instance.new("UIStroke")
+		stroke.Color = color
+		stroke.Thickness = thickness
+		stroke.Transparency = 1
+		stroke.Parent = ring
+		ring.Parent = screenGui
+		local elapsed = -(delay or 0)
+		addEffect(function(deltaTime)
+			elapsed += deltaTime
+			if elapsed < 0 then return false end
+			local alpha = math.min(elapsed / life, 1)
+			if alpha >= 1 then
+				ring:Destroy()
+				return true
+			end
+			local center = getCenter()
+			if center then
+				local diameter = lerp(startDiameter, endDiameter, easeOutCubic(alpha))
+				ring.Position = UDim2.fromOffset(center.X, center.Y)
+				ring.Size = UDim2.fromOffset(diameter, diameter)
+				stroke.Transparency = math.clamp(alpha ^ 1.3, 0, 1)
+				stroke.Thickness = thickness * (1 - alpha * 0.7)
+			else
+				stroke.Transparency = 1
+			end
+			return false
+		end)
+	end
+
+	layer.white = solidFrame(WHITE, 8)
+	layer.black = solidFrame(BLACK, 9)
+	screenGui.Parent = playerGui
+	return layer
+end
+
+local function blueImpact(position)
+	playSound("impact")
+	local folder = getEffectsFolder()
+	impactBurst(folder, position, 1.2, PALETTE_BLUE)
+	addRing(folder, position, vec3(0, 1, 0), 2, 30, 0.5, BLUE[2], 1.5, 0, WHITE)
+
+	local pillarLength = 90
+	local pillarCore = makePart(folder, Enum.PartType.Cylinder, Enum.Material.Neon, WHITE, vec3(pillarLength, 7, 7), CFrame.new(position + vec3(0, pillarLength / 2, 0)) * CFrame.Angles(0, 0, PI / 2), 0.1)
+	local pillarGlow = makePart(folder, Enum.PartType.Cylinder, Enum.Material.Neon, BLUE[2], vec3(pillarLength, 14, 14), pillarCore.CFrame, 0.55)
+	local pillarElapsed = 0
+	addEffect(function(deltaTime)
+		pillarElapsed += deltaTime
+		local alpha = math.min(pillarElapsed / 0.4, 1)
+		local thickness = lerp(7, 0.5, easeOutCubic(alpha))
+		pillarCore.Size = vec3(pillarLength, thickness, thickness)
+		pillarGlow.Size = vec3(pillarLength, thickness * 2.2, thickness * 2.2)
+		pillarCore.Transparency = 0.1 + 0.9 * alpha
+		pillarGlow.Transparency = 0.55 + 0.45 * alpha
+		if alpha >= 1 then
+			pillarCore:Destroy()
+			pillarGlow:Destroy()
+			return true
+		end
+		return false
+	end)
+
+	local playerGui = localPlayer:FindFirstChildOfClass("PlayerGui")
+	if playerGui then
+		local flashGui = Instance.new("ScreenGui")
+		flashGui.Name = "UppercutImpactFlash"
+		flashGui.IgnoreGuiInset = true
+		flashGui.ResetOnSpawn = false
+		flashGui.DisplayOrder = 4000
+		local flashFrame = Instance.new("Frame")
+		flashFrame.Size = UDim2.fromScale(1, 1)
+		flashFrame.BackgroundColor3 = BLUE[4]
+		flashFrame.BackgroundTransparency = 0.55
+		flashFrame.BorderSizePixel = 0
+		flashFrame.Parent = flashGui
+		flashGui.Parent = playerGui
+		local flashElapsed = 0
+		addEffect(function(deltaTime)
+			flashElapsed += deltaTime
+			local alpha = math.min(flashElapsed / 0.28, 1)
+			flashFrame.BackgroundTransparency = 0.55 + 0.45 * alpha
+			if alpha >= 1 then
+				flashGui:Destroy()
+				return true
+			end
+			return false
+		end)
+	end
+
+	local character = localPlayer.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		local elapsed, shakeRandom = 0, Random.new()
+		addEffect(function(deltaTime)
+			elapsed += deltaTime
+			local alpha = math.min(elapsed / 0.3, 1)
+			local amplitude = 0.4 * (1 - alpha) ^ 2
+			humanoid.CameraOffset = vec3(shakeRandom:NextNumber(-1, 1) * amplitude, shakeRandom:NextNumber(-1, 1) * amplitude, 0)
+			if alpha >= 1 then
+				humanoid.CameraOffset = Vector3.zero
+				return true
+			end
+			return false
+		end)
+	end
+end
+
+local function cloneEnemy(target)
+	if not target then return nil end
+	local restoreList = {}
+	local function makeArchivable(object)
+		if not object.Archivable then
+			restoreList[#restoreList + 1] = object
+			object.Archivable = true
+		end
+	end
+	makeArchivable(target)
+	for _, descendant in ipairs(target:GetDescendants()) do
+		makeArchivable(descendant)
+	end
+	local cloneSucceeded, clone = pcall(function() return target:Clone() end)
+	for _, object in ipairs(restoreList) do
+		pcall(function() object.Archivable = false end)
+	end
+	if not cloneSucceeded or not clone then return nil end
+	clone.Name = "UppercutFinisherEnemy"
+	for _, descendant in ipairs(clone:GetDescendants()) do
+		if descendant:IsA("BaseScript") or descendant:IsA("Sound") or descendant:IsA("BillboardGui") or descendant:IsA("ForceField") or descendant:IsA("Highlight") then
+			descendant:Destroy()
+		elseif descendant:IsA("BasePart") then
+			descendant.CanCollide, descendant.CanTouch, descendant.CanQuery = false, false, false
+			descendant.Anchored = false
+		end
+	end
+	local humanoid = clone:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+		humanoid.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+		humanoid.BreakJointsOnDeath = false
+		humanoid.RequiresNeck = false
+		humanoid.MaxHealth = 100
+		humanoid.Health = 100
+		humanoid:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+		humanoid.PlatformStand = true
+	end
+	local rootPart = clone:FindFirstChild("HumanoidRootPart")
+	if rootPart then rootPart.Anchored = true end
+	return clone
+end
+
+local planetTemplates = { earth = nil, moon = nil }
+local pendingPlanetLoads = 2
+
+local function buildTemplateModel(loadedObjects, modelName)
+	local model = Instance.new("Model")
+	model.Name = modelName
+	for _, loadedObject in ipairs(loadedObjects) do
+		loadedObject.Parent = model
+	end
+	for _, descendant in ipairs(model:GetDescendants()) do
+		if descendant:IsA("BaseScript") or descendant:IsA("Sound") or descendant:IsA("PointLight") or descendant:IsA("SpotLight") or descendant:IsA("SurfaceLight") then
+			descendant:Destroy()
+		end
+	end
+	for _, descendant in ipairs(model:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			descendant.Anchored = true
+			descendant.CanCollide, descendant.CanTouch, descendant.CanQuery, descendant.CastShadow = false, false, false, false
+		end
+	end
+	return model
+end
+
+local function loadModelAsset(assetId, modelName)
+	for attempt = 1, 4 do
+		local loadSucceeded, loadedObjects = pcall(function()
+			return game:GetObjects("rbxassetid://" .. tostring(assetId))
+		end)
+		if loadSucceeded and type(loadedObjects) == "table" and #loadedObjects > 0 then
+			return buildTemplateModel(loadedObjects, modelName)
+		end
+		warn("[UppercutFinisher] attempt " .. attempt .. " could not load " .. modelName .. " (" .. tostring(assetId) .. "): " .. tostring(loadedObjects))
+		task.wait(0.5 * attempt)
+	end
+	return nil
+end
+
+local function preloadPlanet(templateKey, assetId, modelName)
+	task.spawn(function()
+		planetTemplates[templateKey] = loadModelAsset(assetId, modelName)
+		pendingPlanetLoads -= 1
+	end)
+end
+
+preloadPlanet("earth", UPPERCUT_EARTH_ASSET, "UppercutEarth")
+preloadPlanet("moon", UPPERCUT_MOON_ASSET, "UppercutMoon")
+
+local function fallbackBall(name, color, material)
+	local model = Instance.new("Model")
+	model.Name = name
+	local part = Instance.new("Part")
+	part.Shape = Enum.PartType.Ball
+	part.Size = Vector3.one * 1000
+	part.Color = color
+	part.Material = material
+	part.Anchored = true
+	part.CanCollide, part.CanTouch, part.CanQuery, part.CastShadow = false, false, false, false
+	part.Parent = model
+	return model
+end
+
+local function fitDiameter(model, targetDiameter)
+	local _, boundingSize = model:GetBoundingBox()
+	local currentDiameter = math.max(boundingSize.X, boundingSize.Y, boundingSize.Z)
+	if currentDiameter <= 0 then return end
+	pcall(function() model:ScaleTo(model:GetScale() * targetDiameter / currentDiameter) end)
+end
+
+local function centerModelAt(model, position)
+	local boundingCFrame = model:GetBoundingBox()
+	model:PivotTo(model:GetPivot() + (position - boundingCFrame.Position))
+end
+
+local function createPlanet(templateKey, fallbackName, fallbackColor, fallbackMaterial, visualDiameter, visualToBoundsRatio, centerPosition, parent)
+	local planetModel
+	local usedFallback = false
+	local template = planetTemplates[templateKey]
+	if template then
+		planetModel = template:Clone()
+	else
+		planetModel = fallbackBall(fallbackName, fallbackColor, fallbackMaterial)
+		usedFallback = true
+	end
+	planetModel.Parent = parent
+	local boundsDiameter = usedFallback and visualDiameter or math.min(visualDiameter / visualToBoundsRatio, 2000)
+	fitDiameter(planetModel, boundsDiameter)
+	centerModelAt(planetModel, centerPosition)
+	return planetModel, usedFallback
+end
+
+local playing = false
+
+local function play(enemyClone, onDone)
+	if playing then
+		if enemyClone then enemyClone:Destroy() end
+		if onDone then onDone() end
+		return
+	end
+	playing = true
+
+	local waitStart = os.clock()
+	while pendingPlanetLoads > 0 and os.clock() - waitStart < 8 do
+		task.wait()
+	end
+
+	local camera = Workspace.CurrentCamera
+	local random = Random.new(2718)
+	local stage = Instance.new("Folder")
+	stage.Name = "UppercutFinisherStage"
+	stage.Parent = Workspace
+
+	local ORIGIN = UPPERCUT_STAGE_ORIGIN
+	local EARTH_DISTANCE, EARTH_RADIUS = 1300, 470
+	local MOON_RADIUS, MOON_DISTANCE = 480, 1900
+	local PASS_OFFSET = vec3(70, 28, 0)
+	local ENEMY_SCALE = 26
+
+	local earthCenter = ORIGIN + vec3(0, 0, -EARTH_DISTANCE)
+	local earthNormal = vec3(0.12, 0.065, 0.99).Unit
+	local launchPoint = earthCenter + earthNormal * (EARTH_RADIUS - 24)
+	local earthSurfacePoint = earthCenter + earthNormal * EARTH_RADIUS
+	local passPoint = ORIGIN + PASS_OFFSET
+	local launchVector = passPoint - launchPoint
+	local launchDistance = launchVector.Magnitude
+	local flightDirection = launchVector.Unit
+	local towardCamera = -flightDirection
+	local moonCenter = passPoint + flightDirection * MOON_DISTANCE
+	local impactPoint = moonCenter - flightDirection * (MOON_RADIUS * 0.97)
+	local impactDistance = (impactPoint - passPoint).Magnitude
+
+	local LAUNCH_SPEED, LAUNCH_ACCELERATION, IMPACT_SPEED = 320, 2100, 1500
+	local accelerationTime = (-LAUNCH_SPEED + math.sqrt(LAUNCH_SPEED * LAUNCH_SPEED + 2 * LAUNCH_ACCELERATION * launchDistance)) / LAUNCH_ACCELERATION
+	local passSpeed = LAUNCH_SPEED + LAUNCH_ACCELERATION * accelerationTime
+	local decelerationTime = 2 * impactDistance / (passSpeed + IMPACT_SPEED)
+	local deceleration = (passSpeed - IMPACT_SPEED) / decelerationTime
+
+	local T_CHARGE = 0.2
+	local T_LAUNCH = 1.25
+	local T_PASS = T_LAUNCH + accelerationTime
+	local T_WHIP = T_PASS + 0.03
+	local WHIP_DURATION = 0.28
+	local T_CHASE_START = T_WHIP + WHIP_DURATION
+	local T_HIT = T_PASS + decelerationTime
+	local T_BOOM = T_HIT + 1.05
+	local T_END = T_BOOM + 4.4
+
+	local function enemyDistance(time)
+		if time <= T_LAUNCH then return 0 end
+		local sinceLaunch = time - T_LAUNCH
+		if time <= T_PASS then
+			return LAUNCH_SPEED * sinceLaunch + 0.5 * LAUNCH_ACCELERATION * sinceLaunch * sinceLaunch
+		end
+		local sincePass = math.min(time - T_PASS, decelerationTime)
+		return launchDistance + passSpeed * sincePass - 0.5 * deceleration * sincePass * sincePass
+	end
+
+	local sceneBuilt, sceneResult = pcall(function()
+		local builtScene = {}
+		builtScene.starfield = buildStarfield(stage, ORIGIN, camera.ViewportSize.Y)
+		builtScene.earthModel = createPlanet("earth", "UppercutEarth", rgb(40, 100, 200), Enum.Material.SmoothPlastic, 2 * EARTH_RADIUS, UPPERCUT_EARTH_VISUAL_TO_BOUNDS_RATIO, earthCenter, stage)
+		builtScene.moonModel = createPlanet("moon", "UppercutMoon", rgb(170, 168, 160), Enum.Material.Slate, 2 * MOON_RADIUS, UPPERCUT_MOON_VISUAL_TO_BOUNDS_RATIO, moonCenter, stage)
+		local rimHighlight = Instance.new("Highlight")
+		rimHighlight.Adornee = builtScene.earthModel
+		rimHighlight.DepthMode = Enum.HighlightDepthMode.Occluded
+		rimHighlight.FillColor = BLUE[2]
+		rimHighlight.OutlineColor = BLUE[2]
+		rimHighlight.FillTransparency = 1
+		rimHighlight.OutlineTransparency = 1
+		rimHighlight.Parent = stage
+		builtScene.earthRim = rimHighlight
+		builtScene.screenLayer = buildScreenLayer(localPlayer:WaitForChild("PlayerGui"))
+		if enemyClone then
+			pcall(function() enemyClone:ScaleTo(ENEMY_SCALE) end)
+		end
+		return builtScene
+	end)
+	if not sceneBuilt then
+		warn("[UppercutFinisher] could not build the scene:", sceneResult)
+		pcall(function() stage:Destroy() end)
+		if enemyClone then pcall(function() enemyClone:Destroy() end) end
+		playing = false
+		if onDone then pcall(onDone) end
+		return
+	end
+	local starfield = sceneResult.starfield
+	local earthModel = sceneResult.earthModel
+	local moonModel = sceneResult.moonModel
+	local earthRim = sceneResult.earthRim
+	local screenLayer = sceneResult.screenLayer
+	local earthBasePivot = earthModel:GetPivot()
+	local moonBasePivot = moonModel:GetPivot()
+
+	local previousCameraType, previousFieldOfView = camera.CameraType, camera.FieldOfView
+	local lightingPropertyNames = { "ClockTime", "Brightness", "Ambient", "OutdoorAmbient", "FogEnd", "FogStart", "ExposureCompensation", "EnvironmentDiffuseScale", "EnvironmentSpecularScale" }
+	local savedLighting = {}
+	for _, propertyName in ipairs(lightingPropertyNames) do
+		local readSucceeded, value = pcall(function() return Lighting[propertyName] end)
+		if readSucceeded then savedLighting[propertyName] = value end
+	end
+
+	local removedLightingChildren, disabledPostEffects = {}, {}
+	for _, child in ipairs(Lighting:GetChildren()) do
+		if child:IsA("Sky") or child:IsA("Atmosphere") then
+			removedLightingChildren[#removedLightingChildren + 1] = child
+			child.Parent = nil
+		elseif child:IsA("PostEffect") and child.Enabled then
+			disabledPostEffects[#disabledPostEffects + 1] = child
+			child.Enabled = false
+		end
+	end
+
+	local blankSky = Instance.new("Sky")
+	for _, faceName in ipairs({ "SkyboxBk", "SkyboxDn", "SkyboxFt", "SkyboxLf", "SkyboxRt", "SkyboxUp" }) do
+		blankSky[faceName] = ""
+	end
+	blankSky.StarCount = 0
+	blankSky.CelestialBodiesShown = false
+	blankSky.Parent = Lighting
+
+	local BASE_BRIGHTNESS = 2.4
+	Lighting.ClockTime = 15.5
+	Lighting.Brightness = BASE_BRIGHTNESS
+	Lighting.Ambient = rgb(70, 74, 90)
+	Lighting.OutdoorAmbient = rgb(100, 105, 125)
+	Lighting.FogEnd = 1e6
+	Lighting.FogStart = 1e6 - 1
+	Lighting.ExposureCompensation = 0
+
+	local bloom = Instance.new("BloomEffect")
+	bloom.Size = 56
+	bloom.Threshold = 0.8
+	bloom.Intensity = 0.6
+	bloom.Parent = Lighting
+	local colorCorrection = Instance.new("ColorCorrectionEffect")
+	colorCorrection.Saturation = 0.25
+	colorCorrection.Contrast = 0.08
+	colorCorrection.Parent = Lighting
+	local blur = Instance.new("BlurEffect")
+	blur.Size = 0
+	blur.Parent = Lighting
+
+	local flashCorrections = {}
+	for index = 1, 6 do
+		local flashEffect = Instance.new("ColorCorrectionEffect")
+		flashEffect.Saturation, flashEffect.Contrast, flashEffect.Brightness = -1, 1, 0
+		flashEffect.Enabled = false
+		flashEffect.Parent = Lighting
+		flashCorrections[index] = flashEffect
+	end
+	local flashUntil, flashOn = 0, false
+
+	local coreGuiStates = {}
+	for _, coreGuiType in ipairs(Enum.CoreGuiType:GetEnumItems()) do
+		if coreGuiType ~= Enum.CoreGuiType.All then
+			local readSucceeded, enabled = pcall(function() return StarterGui:GetCoreGuiEnabled(coreGuiType) end)
+			if readSucceeded then coreGuiStates[coreGuiType] = enabled end
+		end
+	end
+	pcall(function() StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.All, false) end)
+
+	local hiddenGuis, hiddenGuiSet = {}, {}
+	local function hideGuis()
+		for _, gui in ipairs(localPlayer.PlayerGui:GetChildren()) do
+			if gui:IsA("ScreenGui") and gui ~= screenLayer.gui and gui.Enabled and not hiddenGuiSet[gui] then
+				hiddenGuiSet[gui] = true
+				hiddenGuis[#hiddenGuis + 1] = gui
+				gui.Enabled = false
+			end
+		end
+	end
+	hideGuis()
+
+	local controls
+	pcall(function()
+		controls = require(localPlayer.PlayerScripts:WaitForChild("PlayerModule", 2)):GetControls()
+		controls:Disable()
+	end)
+
+	camera.CameraType = Enum.CameraType.Scriptable
+	local cameraStartRotation = CFrame.lookAt(ORIGIN, earthCenter)
+	local cameraEndRotation = CFrame.lookAt(ORIGIN, moonCenter)
+	camera.CFrame = cameraStartRotation
+	camera.FieldOfView = 70
+
+	local function projectToScreen(worldPosition)
+		local viewportPoint = camera:WorldToViewportPoint(worldPosition)
+		if viewportPoint.Z <= 0 then return nil end
+		return Vector2.new(viewportPoint.X, viewportPoint.Y)
+	end
+
+	local storyTime = 0
+	local timeScale = 1
+	local holdUntil, slowMotionStart = 0, nil
+	local whiteAlpha, whiteDecay, blackAlpha = 1, 3.2, 0
+	local enemyActive, fallTrack = false, nil
+	local enemyCarrier, enemyShell, enemyTails = nil, nil, {}
+	local chargeCore, chargeHalo = nil, nil
+	local moonGlowInner, moonGlowOuter, moonShaking = nil, nil, false
+	local moonCrackDestroy, earthCrackDestroy = nil, nil
+	local lightKickStart = nil
+	local shakes = {}
+	local finished = false
+	local mainLoopConnection
+
+	local function explosionShake()
+		if #shakes == 0 then return 0, 0, 0 end
+		local now = os.clock()
+		local yaw, pitch, roll = 0, 0, 0
+		for _, shake in ipairs(shakes) do
+			local realTime = now - shake.start
+			local attack = smoothstep(realTime / 0.06)
+			local envelope = attack * (0.55 * math.exp(-realTime * 4.5) + 0.45 * math.exp(-realTime * 1.3))
+			if envelope >= 0.0005 then
+				local strength, phase = envelope * shake.strength, shake.phase
+				yaw += (0.6 * math.sin(realTime * TAU * 6.1 + 0.3 + phase) + 0.4 * math.sin(realTime * TAU * 10.7 + 1.7 + phase)) * 0.11 * strength
+				pitch += (0.6 * math.sin(realTime * TAU * 7.3 + 2.1 + phase) + 0.4 * math.sin(realTime * TAU * 12.9 + 0.4 + phase)) * 0.09 * strength
+				roll += (0.7 * math.sin(realTime * TAU * 5.2 + 4.0 + phase) + 0.3 * math.sin(realTime * TAU * 9.1 + 1.0 + phase)) * 0.07 * strength
+			end
+		end
+		return yaw, pitch, roll
+	end
+
+	local function addShake(strength, phase)
+		shakes[#shakes + 1] = { start = os.clock(), strength = strength, phase = phase or 0 }
+	end
+
+	local function beginCharge()
+		chargeCore = makeBall(stage, earthSurfacePoint, 10, WHITE, 0)
+		chargeHalo = makeBall(stage, earthSurfacePoint, 24, BLUE[2], 0.8)
+		convergingEnergy(stage, earthSurfacePoint, {
+			count = 110,
+			radius = 340,
+			window = 0.25,
+			colors = { WHITE, BLUE[2], BLUE[4], BLUE[1] },
+			hemisphere = earthNormal,
+			axis = earthNormal,
+			seed = 9,
+		})
+	end
+
+	local function startEarthCracks()
+		earthCrackDestroy = buildCrackNetwork(stage, earthCenter, EARTH_RADIUS, earthNormal, {
+			seed = 31,
+			mainCount = 7,
+			maxAngle = 1.05,
+			stepAngle = 0.045,
+			width = 6,
+			jitter = 0.35,
+			branchChance = 0.16,
+			segmentLimit = 260,
+			hotColor = WHITE,
+			coolColor = BLUE[1],
+			haloColor = BLUE[2],
+			delay = 0,
+			spreadSpeed = 1.5,
+			fadeStart = (T_LAUNCH - 0.45) + 1.2,
+			fadeTime = 1.4,
+			surfaceOffset = 1.01,
+		})
+	end
+
+	local function launch()
+		playSound("launch")
+		if chargeCore then chargeCore:Destroy() chargeCore = nil end
+		if chargeHalo then chargeHalo:Destroy() chargeHalo = nil end
+
+		local carrier = enemyClone and enemyClone:FindFirstChild("HumanoidRootPart")
+		if not carrier then
+			carrier = makePart(stage, Enum.PartType.Block, Enum.Material.SmoothPlastic, WHITE, vec3(1, 1, 1), CFrame.new(launchPoint), 1)
+		end
+		enemyCarrier = carrier
+
+		if enemyClone then
+			enemyClone.Parent = stage
+			enemyClone:PivotTo(CFrame.lookAt(launchPoint, launchPoint - flightDirection))
+			local humanoid = enemyClone:FindFirstChildOfClass("Humanoid")
+			local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+			if humanoid and not animator then
+				animator = Instance.new("Animator")
+				animator.Parent = humanoid
+			end
+			if animator then
+				pcall(function()
+					local fallAnimation = Instance.new("Animation")
+					fallAnimation.AnimationId = UPPERCUT_FALL_ANIM
+					fallTrack = animator:LoadAnimation(fallAnimation)
+					fallTrack.Looped = true
+					fallTrack:Play(0.05)
+				end)
+			end
+		end
+		enemyActive = true
+
+		local carrierAttachment = Instance.new("Attachment")
+		carrierAttachment.Parent = carrier
+
+		local function addTailBeam(headWidth, colorSequence, transparencySequence, tailLength)
+			local tailPart = makePart(stage, Enum.PartType.Ball, Enum.Material.SmoothPlastic, WHITE, vec3(1, 1, 1), CFrame.new(launchPoint), 1)
+			local tailAttachment = Instance.new("Attachment")
+			tailAttachment.Parent = tailPart
+			local beam = Instance.new("Beam")
+			beam.Attachment0 = carrierAttachment
+			beam.Attachment1 = tailAttachment
+			beam.FaceCamera = true
+			beam.LightEmission = 1
+			beam.LightInfluence = 0
+			beam.Segments = 12
+			beam.Width0, beam.Width1 = headWidth, 0
+			beam.Color = colorSequence
+			beam.Transparency = transparencySequence
+			beam.Parent = tailPart
+			enemyTails[#enemyTails + 1] = { part = tailPart, length = tailLength }
+		end
+		addTailBeam(150,
+			ColorSequence.new({ colorKeypoint(0, WHITE), colorKeypoint(0.25, BLUE[2]), colorKeypoint(1, BLUE[3]) }),
+			NumberSequence.new({ numberKeypoint(0, 0.25), numberKeypoint(0.5, 0.6), numberKeypoint(1, 1) }),
+			1100)
+		addTailBeam(52,
+			ColorSequence.new(WHITE),
+			NumberSequence.new({ numberKeypoint(0, 0), numberKeypoint(0.7, 0.55), numberKeypoint(1, 1) }),
+			650)
+
+		enemyShell = makeBall(stage, launchPoint, 190, BLUE[2], 0.78)
+
+		local trailAttachmentA, trailAttachmentB = Instance.new("Attachment"), Instance.new("Attachment")
+		trailAttachmentA.Position, trailAttachmentB.Position = vec3(-45, 0, 0), vec3(45, 0, 0)
+		trailAttachmentA.Parent, trailAttachmentB.Parent = carrier, carrier
+		local ribbon = Instance.new("Trail")
+		ribbon.Attachment0, ribbon.Attachment1 = trailAttachmentA, trailAttachmentB
+		ribbon.Lifetime = 0.5
+		ribbon.MinLength = 0.1
+		ribbon.FaceCamera = true
+		ribbon.LightEmission = 1
+		ribbon.LightInfluence = 0
+		ribbon.Color = ColorSequence.new({ colorKeypoint(0, BLUE[4]), colorKeypoint(0.5, BLUE[2]), colorKeypoint(1, BLUE[3]) })
+		ribbon.Transparency = NumberSequence.new({ numberKeypoint(0, 0.1), numberKeypoint(1, 1) })
+		ribbon.WidthScale = NumberSequence.new({ numberKeypoint(0, 1), numberKeypoint(1, 0) })
+		ribbon.Parent = carrier
+
+		local aura = Instance.new("ParticleEmitter")
+		aura.Texture = SOFT_GLOW
+		aura.Color = ColorSequence.new(BLUE[2])
+		aura.Size = NumberSequence.new({ numberKeypoint(0, 130), numberKeypoint(1, 0) })
+		aura.Transparency = NumberSequence.new({ numberKeypoint(0, 0.3), numberKeypoint(1, 1) })
+		aura.Lifetime = NumberRange.new(0.35, 0.5)
+		aura.Rate = 70
+		aura.Speed = NumberRange.new(0, 0)
+		aura.LightEmission = 1
+		aura.LightInfluence = 0
+		aura.LockedToPart = false
+		aura.Parent = carrier
+
+		local sparkEmitter = Instance.new("ParticleEmitter")
+		sparkEmitter.Texture = SPARK_TEXTURE
+		sparkEmitter.Color = ColorSequence.new({ colorKeypoint(0, WHITE), colorKeypoint(1, BLUE[2]) })
+		sparkEmitter.Size = NumberSequence.new({ numberKeypoint(0, 9), numberKeypoint(1, 0) })
+		sparkEmitter.Transparency = NumberSequence.new({ numberKeypoint(0, 0), numberKeypoint(1, 1) })
+		sparkEmitter.Lifetime = NumberRange.new(0.3, 0.7)
+		sparkEmitter.Rate = 160
+		sparkEmitter.Speed = NumberRange.new(40, 160)
+		sparkEmitter.Shape = Enum.ParticleEmitterShape.Sphere
+		sparkEmitter.SpreadAngle = Vector2.new(180, 180)
+		sparkEmitter.Brightness = 3
+		sparkEmitter.LightEmission = 1
+		sparkEmitter.LightInfluence = 0
+		sparkEmitter.LockedToPart = false
+		sparkEmitter.Parent = carrier
+
+		expandingSphere(stage, earthSurfacePoint, 40, 520, 0.35, WHITE, 0, 1.6)
+		expandingSphere(stage, earthSurfacePoint, 60, 700, 0.5, BLUE[2], 0.25, 1.4)
+		expandingSphere(stage, earthSurfacePoint, 90, 900, 0.8, BLUE[1], 0.6, 1.2, 0.02)
+		addRing(stage, earthSurfacePoint, flightDirection, 30, 520, 0.7, BLUE[2], 22, 0, WHITE)
+		addRing(stage, earthSurfacePoint, tiltedNormal(flightDirection, 1.1, 1), 30, 420, 0.7, WHITE, 12, 0.05)
+		addRing(stage, earthSurfacePoint, tiltedNormal(flightDirection, -0.9, 2), 30, 360, 0.6, BLUE[1], 10, 0.1)
+		addRing(stage, earthSurfacePoint, flightDirection, 20, 820, 1.1, BLUE[3], 8, 0.18)
+		rayBurst(stage, earthSurfacePoint, { count = 40, startRadius = 30, length = 520, width = 7, life = 0.8, colors = PALETTE_BLUE.rays })
+		rayBurst(stage, earthSurfacePoint, { count = 16, startRadius = 40, length = 900, width = 4, life = 0.7, colors = PALETTE_BLUE.rays, delay = 0.04 })
+		burstParticles(stage, earthSurfacePoint, 60, {
+			texture = SPARK_TEXTURE,
+			color = ColorSequence.new({ colorKeypoint(0, WHITE), colorKeypoint(0.4, BLUE[2]), colorKeypoint(1, BLUE[3]) }),
+			size = NumberSequence.new({ numberKeypoint(0, 16), numberKeypoint(1, 0) }),
+			transparency = NumberSequence.new({ numberKeypoint(0, 0), numberKeypoint(1, 1) }),
+			lifetime = NumberRange.new(0.5, 1.2),
+			speed = NumberRange.new(400, 1300),
+			drag = 2.5,
+			brightness = 3,
+		}, 140)
+		burstParticles(stage, earthSurfacePoint, 80, {
+			color = ColorSequence.new({ colorKeypoint(0, BLUE[4]), colorKeypoint(1, BLUE[3]) }),
+			size = NumberSequence.new({ numberKeypoint(0, 90), numberKeypoint(1, 340) }),
+			transparency = NumberSequence.new({ numberKeypoint(0, 0.3), numberKeypoint(1, 1) }),
+			lifetime = NumberRange.new(0.5, 0.9),
+			speed = NumberRange.new(30, 160),
+			drag = 2,
+			zOffset = 1,
+		}, 12)
+
+		local pillarLength = 780
+		local pillarCFrame = CFrame.lookAt(earthSurfacePoint + flightDirection * (pillarLength / 2), earthSurfacePoint + flightDirection * pillarLength) * CFrame.Angles(0, PI / 2, 0)
+		local pillarCore = makePart(stage, Enum.PartType.Cylinder, Enum.Material.Neon, WHITE, vec3(pillarLength, 70, 70), pillarCFrame, 0.1)
+		local pillarGlow = makePart(stage, Enum.PartType.Cylinder, Enum.Material.Neon, BLUE[2], vec3(pillarLength, 160, 160), pillarCFrame, 0.5)
+		local pillarElapsed = 0
+		addEffect(function(deltaTime)
+			pillarElapsed += deltaTime
+			local alpha = math.min(pillarElapsed / 0.5, 1)
+			local thickness = lerp(70, 2, easeOutCubic(alpha))
+			pillarCore.Size = vec3(pillarLength, thickness, thickness)
+			pillarGlow.Size = vec3(pillarLength, thickness * 2.3, thickness * 2.3)
+			pillarCore.Transparency = 0.1 + 0.9 * alpha
+			pillarGlow.Transparency = 0.5 + 0.5 * alpha
+			if alpha >= 1 then
+				pillarCore:Destroy()
+				pillarGlow:Destroy()
+				return true
+			end
+			return false
+		end)
+
+		addShake(0.55, 0.7)
+		whiteAlpha = math.max(whiteAlpha, 0.9)
+		flashUntil = os.clock() + 0.03
+	end
+
+	local function passLens()
+		playSound("whoosh")
+		addShake(0.5, 2.0)
+		whiteAlpha = math.max(whiteAlpha, 0.8)
+	end
+
+	local function hitMoon()
+		holdUntil = os.clock() + 0.1
+		playSound("moonHit")
+		playSound("moonCrack", 1.5)
+		addShake(0.8, 1.4)
+		flashUntil = os.clock() + 0.04
+		whiteAlpha = math.max(whiteAlpha, 0.5)
+
+		enemyActive = false
+		if fallTrack then pcall(function() fallTrack:Stop(0) end) end
+		if enemyClone then
+			enemyClone:Destroy()
+			enemyClone = nil
+		end
+		if enemyCarrier then
+			pcall(function() enemyCarrier:Destroy() end)
+			enemyCarrier = nil
+		end
+		if enemyShell then
+			enemyShell:Destroy()
+			enemyShell = nil
+		end
+		for _, tail in ipairs(enemyTails) do
+			tail.part:Destroy()
+		end
+		enemyTails = {}
+
+		impactBurst(stage, impactPoint, 11, PALETTE_FIRE, flightDirection)
+		addRing(stage, impactPoint, flightDirection, 20, 760, 0.95, FIRE[2], 18, 0, FIRE[1])
+		addRing(stage, impactPoint, tiltedNormal(flightDirection, 1.0, 1), 20, 520, 0.9, FIRE[3], 12, 0.05)
+		addRing(stage, impactPoint, flightDirection, 10, 1000, 1.3, FIRE[4], 8, 0.15)
+		expandingSphere(stage, impactPoint, 40, 340, 0.4, WHITE, 0, 1.6)
+		rayBurst(stage, impactPoint, { count = 36, startRadius = 20, length = 520, width = 6, life = 0.7, colors = PALETTE_FIRE.rays })
+		spawnRockChunks(stage, random, impactPoint, 46, {
+			axis = towardCamera,
+			coneAngle = 1.2,
+			bigPower = 2,
+			sizeMin = 5,
+			sizeMax = 40,
+			scatterRadius = 40,
+			speedMin = 500,
+			speedMax = 1900,
+			lifeMin = 1.5,
+			lifeMax = 2.8,
+			smokeBudget = 4,
+		})
+
+		moonCrackDestroy = buildCrackNetwork(stage, moonCenter, MOON_RADIUS, towardCamera, {
+			seed = 77,
+			mainCount = 9,
+			maxAngle = 1.4,
+			stepAngle = 0.045,
+			width = 9,
+			jitter = 0.4,
+			branchChance = 0.22,
+			segmentLimit = 420,
+			hotColor = FIRE[1],
+			coolColor = FIRE[3],
+			haloColor = FIRE[4],
+			delay = 0.04,
+			spreadSpeed = 2.4,
+			fadeStart = 1e6,
+			fadeTime = 1,
+			surfaceOffset = 1.012,
+		})
+
+		moonGlowInner = makeBall(stage, moonCenter, MOON_RADIUS * 2 * 1.004, FIRE[3], 1)
+		moonGlowOuter = makeBall(stage, moonCenter, MOON_RADIUS * 2 * 1.16, FIRE[4], 1)
+		moonShaking = true
+
+		screenLayer.addShockRing(function() return projectToScreen(impactPoint) end, 40, camera.ViewportSize.Magnitude * 0.6, 0.6, FIRE[2], 8, 0)
+	end
+
+	local function boom()
+		slowMotionStart = os.clock()
+		playSound("moonBoom", 3)
+		addShake(1.1, 0)
+		addShake(0.8, 2.3)
+		flashUntil = os.clock() + 0.04
+		whiteAlpha = 1
+		whiteDecay = 1.5
+		moonShaking = false
+		if moonCrackDestroy then
+			moonCrackDestroy()
+			moonCrackDestroy = nil
+		end
+		if moonGlowInner then moonGlowInner:Destroy() moonGlowInner = nil end
+		if moonGlowOuter then moonGlowOuter:Destroy() moonGlowOuter = nil end
+		moonModel:Destroy()
+		lightKickStart = os.clock()
+
+		local R = MOON_RADIUS
+
+		expandingSphere(stage, moonCenter, 0.5 * R, 3.2 * R, 0.5, FIRE[1], 0, 1.5)
+		expandingSphere(stage, moonCenter, 0.6 * R, 3.9 * R, 0.8, FIRE[2], 0.1, 1.4)
+		expandingSphere(stage, moonCenter, 0.7 * R, 4.2 * R, 1.15, FIRE[3], 0.28, 1.3)
+		expandingSphere(stage, moonCenter, 0.8 * R, 4.2 * R, 1.7, FIRE[4], 0.5, 1.2)
+		expandingSphere(stage, moonCenter, 0.8 * R, 4.2 * R, 2.4, FIRE[5], 0.72, 1.1, 0.05)
+
+		local shockSphere = makePart(stage, Enum.PartType.Ball, Enum.Material.ForceField, FIRE[2], Vector3.one * R * 1.2, CFrame.new(moonCenter), 0.2)
+		local shockElapsed = 0
+		addEffect(function(deltaTime)
+			shockElapsed += deltaTime
+			local alpha = math.min(shockElapsed / 1.1, 1)
+			shockSphere.Size = Vector3.one * math.clamp(lerp(R * 1.2, MAX_PART_SIZE, easeOutExpo(alpha)), 0.05, MAX_PART_SIZE)
+			shockSphere.Transparency = 0.2 + 0.8 * alpha ^ 1.2
+			if alpha >= 1 then
+				shockSphere:Destroy()
+				return true
+			end
+			return false
+		end)
+
+		addRing(stage, moonCenter, flightDirection, 0.6 * R, 4.4 * R, 1.3, FIRE[2], 34, 0, FIRE[1])
+		addRing(stage, moonCenter, tiltedNormal(flightDirection, 1.1, 1), 0.6 * R, 3.6 * R, 1.5, FIRE[3], 26, 0.06)
+		addRing(stage, moonCenter, tiltedNormal(flightDirection, -0.8, 2), 0.6 * R, 3.0 * R, 1.7, FIRE[1], 20, 0.12)
+		addRing(stage, moonCenter, tiltedNormal(flightDirection, 0.35, 1), 0.5 * R, 5.0 * R, 1.9, FIRE[4], 16, 0.2)
+		addRing(stage, moonCenter, tiltedNormal(flightDirection, 1.45, 2), 0.5 * R, 4.0 * R, 1.6, FIRE[2], 14, 0.1)
+		addRing(stage, moonCenter, flightDirection, 0.4 * R, 6.2 * R, 2.4, FIRE[5], 10, 0.3)
+
+		rayBurst(stage, moonCenter, { count = 56, startRadius = 0.3 * R, length = 2.8 * R, width = 18, life = 1.4, colors = PALETTE_FIRE.rays })
+		rayBurst(stage, moonCenter, { count = 26, startRadius = 0.5 * R, length = 4.5 * R, width = 9, life = 1.1, colors = { FIRE[1], FIRE[2] }, delay = 0.05 })
+
+		spawnRockChunks(stage, random, moonCenter, 120, {
+			bigPower = 2.2,
+			sizeMin = 0.03 * R,
+			sizeMax = 0.2 * R,
+			scatterRadius = 0.9 * R,
+			speedMin = 450,
+			speedMax = 2600,
+			lifeMin = 2.4,
+			lifeMax = 3.8,
+			smokeBudget = 12,
+		})
+		spawnRockChunks(stage, random, moonCenter, 22, {
+			axis = towardCamera,
+			coneAngle = 0.55,
+			bigPower = 1.2,
+			sizeMin = 0.06 * R,
+			sizeMax = 0.22 * R,
+			scatterRadius = 0.5 * R,
+			speedMin = 700,
+			speedMax = 1700,
+			lifeMin = 2.2,
+			lifeMax = 3.2,
+			smokeBudget = 6,
+		})
+
+		local fireColor = ColorSequence.new({
+			colorKeypoint(0, FIRE[1]), colorKeypoint(0.25, FIRE[2]),
+			colorKeypoint(0.55, FIRE[3]), colorKeypoint(0.85, FIRE[4]), colorKeypoint(1, FIRE[5]),
+		})
+		burstParticles(stage, moonCenter, 1.7 * R, {
+			color = fireColor,
+			size = NumberSequence.new({ numberKeypoint(0, 260), numberKeypoint(0.4, 620), numberKeypoint(1, 980) }),
+			transparency = NumberSequence.new({ numberKeypoint(0, 0.1), numberKeypoint(0.5, 0.4), numberKeypoint(1, 1) }),
+			lifetime = NumberRange.new(1.2, 2.4),
+			speed = NumberRange.new(150, 850),
+			drag = 1.2,
+			lightEmission = 0.9,
+			rotSpeed = NumberRange.new(-40, 40),
+		}, 90)
+		burstParticles(stage, moonCenter, 1.7 * R, {
+			color = ColorSequence.new({ colorKeypoint(0, rgb(70, 60, 55)), colorKeypoint(1, rgb(22, 20, 20)) }),
+			size = NumberSequence.new({ numberKeypoint(0, 350), numberKeypoint(1, 1300) }),
+			transparency = NumberSequence.new({ numberKeypoint(0, 0.5), numberKeypoint(0.3, 0.35), numberKeypoint(1, 1) }),
+			lifetime = NumberRange.new(2.8, 4.4),
+			speed = NumberRange.new(100, 500),
+			drag = 0.8,
+			lightEmission = 0,
+			rotSpeed = NumberRange.new(-25, 25),
+			zOffset = -1,
+		}, 60)
+		burstParticles(stage, moonCenter, 1.2 * R, {
+			texture = SPARK_TEXTURE,
+			color = ColorSequence.new({ colorKeypoint(0, FIRE[1]), colorKeypoint(0.4, FIRE[2]), colorKeypoint(1, FIRE[4]) }),
+			size = NumberSequence.new({ numberKeypoint(0, 24), numberKeypoint(1, 0) }),
+			transparency = NumberSequence.new({ numberKeypoint(0, 0), numberKeypoint(1, 1) }),
+			lifetime = NumberRange.new(1.0, 2.4),
+			speed = NumberRange.new(900, 3400),
+			drag = 1.4,
+			brightness = 3,
+		}, 260)
+		burstParticles(stage, moonCenter, 1.4 * R, {
+			color = ColorSequence.new({ colorKeypoint(0, FIRE[2]), colorKeypoint(1, FIRE[5]) }),
+			size = NumberSequence.new({ numberKeypoint(0, 9), numberKeypoint(1, 0) }),
+			transparency = NumberSequence.new({ numberKeypoint(0, 0), numberKeypoint(0.7, 0.3), numberKeypoint(1, 1) }),
+			lifetime = NumberRange.new(2.5, 4.6),
+			speed = NumberRange.new(120, 700),
+			drag = 0.5,
+			brightness = 2,
+		}, 140)
+
+		local viewportDiagonal = camera.ViewportSize.Magnitude
+		local function moonScreenPoint() return projectToScreen(moonCenter) end
+		screenLayer.addShockRing(moonScreenPoint, 60, viewportDiagonal * 1.1, 1.0, FIRE[1], 12, 0)
+		screenLayer.addShockRing(moonScreenPoint, 40, viewportDiagonal * 0.8, 1.3, FIRE[2], 7, 0.12)
+	end
+
+	local function secondPulse()
+		local R = MOON_RADIUS
+		addShake(0.6, 3.1)
+		whiteAlpha = math.max(whiteAlpha, 0.45)
+		expandingSphere(stage, moonCenter, 0.6 * R, 4.0 * R, 0.7, FIRE[1], 0.2, 1.4)
+		addRing(stage, moonCenter, flightDirection, 0.5 * R, 5.4 * R, 1.4, FIRE[1], 22, 0, FIRE[2])
+		burstParticles(stage, moonCenter, 1.2 * R, {
+			texture = SPARK_TEXTURE,
+			color = ColorSequence.new({ colorKeypoint(0, FIRE[1]), colorKeypoint(1, FIRE[3]) }),
+			size = NumberSequence.new({ numberKeypoint(0, 20), numberKeypoint(1, 0) }),
+			transparency = NumberSequence.new({ numberKeypoint(0, 0), numberKeypoint(1, 1) }),
+			lifetime = NumberRange.new(1.0, 2.0),
+			speed = NumberRange.new(700, 2600),
+			drag = 1.3,
+			brightness = 3,
+		}, 160)
+	end
+
+	local events = {
+		{ time = T_CHARGE, run = beginCharge },
+		{ time = 0.45, run = startEarthCracks },
+		{ time = T_LAUNCH, run = launch },
+		{ time = T_PASS, run = passLens },
+		{ time = T_HIT, run = hitMoon },
+		{ time = T_BOOM, run = boom },
+		{ time = T_BOOM + 0.3, run = secondPulse },
+	}
+
+	local function cleanup()
+		if finished then return end
+		finished = true
+		if mainLoopConnection then
+			mainLoopConnection:Disconnect()
+			mainLoopConnection = nil
+		end
+		if fallTrack then pcall(function() fallTrack:Stop(0) end) end
+		effectClock = 1
+		clearEffects()
+		screenLayer.black.BackgroundTransparency = 0
+		screenLayer.white.BackgroundTransparency = 1
+		pcall(function() if onDone then onDone() end end)
+		local character = localPlayer.Character
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		camera.CameraType = Enum.CameraType.Custom
+		camera.FieldOfView = previousFieldOfView
+		if humanoid then camera.CameraSubject = humanoid end
+		for propertyName, value in pairs(savedLighting) do
+			pcall(function() Lighting[propertyName] = value end)
+		end
+		for _, effect in ipairs({ bloom, colorCorrection, blur, blankSky }) do
+			pcall(function() effect:Destroy() end)
+		end
+		for _, flashEffect in ipairs(flashCorrections) do
+			pcall(function() flashEffect:Destroy() end)
+		end
+		for _, child in ipairs(removedLightingChildren) do
+			pcall(function() child.Parent = Lighting end)
+		end
+		for _, postEffect in ipairs(disabledPostEffects) do
+			pcall(function() postEffect.Enabled = true end)
+		end
+		for _, gui in ipairs(hiddenGuis) do
+			pcall(function() gui.Enabled = true end)
+		end
+		for coreGuiType, enabled in pairs(coreGuiStates) do
+			pcall(function() StarterGui:SetCoreGuiEnabled(coreGuiType, enabled) end)
+		end
+		if controls then pcall(function() controls:Enable() end) end
+		pcall(function() StarterGui:SetCore("TopbarEnabled", true) end)
+		pcall(function() stage:Destroy() end)
+		if enemyClone then pcall(function() enemyClone:Destroy() end) end
+		playing = false
+		local fadeElapsed = 0
+		local fadeConnection
+		fadeConnection = RunService.RenderStepped:Connect(function(deltaTime)
+			fadeElapsed += deltaTime
+			screenLayer.black.BackgroundTransparency = smoothstep(fadeElapsed / 0.45)
+			if fadeElapsed >= 0.45 then
+				fadeConnection:Disconnect()
+				screenLayer.gui:Destroy()
+			end
+		end)
+	end
+
+	local speedLineColor = WHITE:Lerp(BLUE[4], 0.4)
+	local lastRealTime = os.clock()
+	mainLoopConnection = RunService.RenderStepped:Connect(function()
+		local now = os.clock()
+		local deltaTime = math.min(now - lastRealTime, 0.1)
+		lastRealTime = now
+		local loopSucceeded, loopError = pcall(function()
+			if now < holdUntil then
+				timeScale = 0.03
+			elseif slowMotionStart then
+				local sinceSlow = now - slowMotionStart
+				timeScale = sinceSlow < 0.3 and 0.2 or (sinceSlow < 1.0 and lerp(0.2, 1, smoothstep((sinceSlow - 0.3) / 0.7)) or 1)
+			else
+				timeScale = 1
+			end
+			storyTime += deltaTime * timeScale
+			effectClock = timeScale
+			hideGuis()
+
+			for _, event in ipairs(events) do
+				if not event.done and storyTime >= event.time then
+					event.done = true
+					event.run()
+				end
+			end
+
+			for _, star in ipairs(starfield) do
+				local twinkle = 0.7 + 0.3 * math.sin(storyTime * star.speed + star.phase)
+				star.part.Transparency = 1 - math.clamp(star.base * twinkle, 0, 1)
+			end
+
+			local earthShakeAmount
+			if storyTime < T_LAUNCH then
+				earthShakeAmount = 2.5 * smoothstep((storyTime - 0.4) / (T_LAUNCH - 0.4))
+			else
+				earthShakeAmount = 9 * math.exp(-(storyTime - T_LAUNCH) * 2.2)
+			end
+			earthModel:PivotTo(
+				CFrame.new(random:NextNumber(-1, 1) * earthShakeAmount, random:NextNumber(-1, 1) * earthShakeAmount, 0)
+				* CFrame.new(earthCenter) * CFrame.Angles(0, storyTime * 0.03, 0) * CFrame.new(-earthCenter) * earthBasePivot)
+
+			local rimStrength
+			if storyTime < T_LAUNCH then
+				rimStrength = smoothstep((storyTime - 0.3) / (T_LAUNCH - 0.3))
+			else
+				rimStrength = 1 - smoothstep((storyTime - T_LAUNCH) / 1.6)
+			end
+			earthRim.OutlineTransparency = 1 - 0.9 * rimStrength
+			earthRim.FillTransparency = 1 - 0.2 * rimStrength
+
+			if chargeCore and chargeHalo then
+				local chargeProgress = smoothstep((storyTime - T_CHARGE) / (T_LAUNCH - T_CHARGE))
+				local flicker = 1 + 0.18 * math.sin(storyTime * 55) + 0.1 * math.sin(storyTime * 23)
+				local coreDiameter = (10 + 160 * chargeProgress ^ 1.5) * flicker
+				chargeCore.Size = Vector3.one * coreDiameter
+				chargeHalo.Size = Vector3.one * coreDiameter * 2.4
+				chargeHalo.Transparency = 0.8 - 0.25 * chargeProgress
+			end
+
+			if enemyActive and enemyCarrier then
+				local enemyPosition = launchPoint + flightDirection * enemyDistance(storyTime)
+				local rollAngle = (storyTime - T_LAUNCH) * 2.4
+				local enemyOrientation = CFrame.lookAt(enemyPosition, enemyPosition - flightDirection) * CFrame.Angles(0, 0, rollAngle)
+				if enemyClone then
+					enemyClone:PivotTo(enemyOrientation)
+				else
+					enemyCarrier.CFrame = enemyOrientation
+				end
+				if enemyShell then
+					local pulse = 1 + 0.08 * math.sin(storyTime * 40)
+					enemyShell.Size = Vector3.one * 190 * pulse
+					enemyShell.CFrame = CFrame.new(enemyPosition)
+				end
+				local rushStrength = math.clamp((storyTime - T_LAUNCH) / accelerationTime, 0, 1)
+				for _, tail in ipairs(enemyTails) do
+					local tailLength = tail.length * (0.35 + 0.65 * rushStrength)
+					tail.part.CFrame = CFrame.new(enemyPosition - flightDirection * tailLength)
+				end
+			end
+
+			if moonShaking and moonGlowInner and moonGlowOuter then
+				local heatProgress = math.clamp((storyTime - T_HIT) / (T_BOOM - T_HIT), 0, 1)
+				moonGlowInner.Transparency = lerp(1, 0.45, heatProgress ^ 1.6)
+				moonGlowInner.Color = FIRE[4]:Lerp(FIRE[2], heatProgress)
+				moonGlowOuter.Transparency = lerp(1, 0.82, heatProgress ^ 1.3)
+				local jitterAmount = 2 + 9 * heatProgress
+				local jitterVector = vec3(random:NextNumber(-jitterAmount, jitterAmount), random:NextNumber(-jitterAmount, jitterAmount), random:NextNumber(-jitterAmount, jitterAmount))
+				moonModel:PivotTo(moonBasePivot * CFrame.new(jitterVector))
+				moonGlowInner.CFrame = CFrame.new(moonCenter + jitterVector)
+				moonGlowOuter.CFrame = CFrame.new(moonCenter + jitterVector)
+			end
+
+			local forwardToEarth = (earthCenter - ORIGIN).Unit
+			local driftPosition = ORIGIN + forwardToEarth * (26 * math.min(storyTime, T_LAUNCH))
+			local cameraPosition = driftPosition
+			local cameraRotation = cameraStartRotation
+			local fieldOfView = lerp(70, 63, smoothstep(storyTime / T_LAUNCH))
+			local rumble = 0.05 + 0.25 * smoothstep((storyTime - 0.4) / (T_LAUNCH - 0.4))
+			local blurSize = 0
+			local speedAmount = 0
+			local vignetteAmount = 0.38
+			local crackPhase = 0
+			local cameraRollExtra = 0
+
+			if storyTime >= T_LAUNCH and storyTime < T_WHIP then
+				local rushProgress = math.clamp((storyTime - T_LAUNCH) / accelerationTime, 0, 1)
+				fieldOfView = lerp(63, 94, rushProgress ^ 2)
+				rumble = 0.2 + 0.8 * rushProgress
+				blurSize = 10 * rushProgress ^ 2
+				speedAmount = smoothstep(rushProgress) ^ 1.3
+				vignetteAmount = 0.38 + 0.4 * rushProgress
+			elseif storyTime >= T_WHIP then
+				local whipProgress = math.clamp((storyTime - T_WHIP) / WHIP_DURATION, 0, 1)
+				local whipEase = 1 - (1 - whipProgress) ^ 3.5
+				local whipSwing = math.sin(PI * whipEase)
+				cameraPosition = driftPosition:Lerp(ORIGIN, whipEase)
+				cameraRotation = cameraStartRotation * CFrame.Angles(-0.1 * whipSwing, -PI * whipEase, 0.22 * whipSwing)
+				if whipProgress >= 1 then
+					cameraRotation = cameraEndRotation
+				else
+					cameraRotation = cameraRotation:Lerp(cameraEndRotation, whipEase ^ 4)
+				end
+				fieldOfView = lerp(94, 64, whipEase) + 20 * whipSwing
+				blurSize = 38 * whipSwing ^ 0.8
+				rumble = 0.3 * (1 - whipProgress)
+				speedAmount = (1 - whipEase) * 0.8
+				vignetteAmount = 0.7
+				if whipProgress >= 1 then
+					local chaseDuration = math.max(T_HIT - T_CHASE_START, 0.01)
+					local chaseProgress = math.clamp((storyTime - T_CHASE_START) / chaseDuration, 0, 1)
+					cameraPosition = ORIGIN + flightDirection * (300 * chaseProgress ^ 2)
+					fieldOfView = lerp(64, 56, smoothstep(chaseProgress))
+					speedAmount = 0.35 * smoothstep(chaseProgress)
+					rumble = 0.12 + 0.2 * chaseProgress
+					vignetteAmount = 0.55
+				end
+			end
+
+			if storyTime >= T_HIT then
+				local sinceHit = storyTime - T_HIT
+				crackPhase = math.clamp(sinceHit / (T_BOOM - T_HIT), 0, 1)
+				cameraPosition = ORIGIN + flightDirection * (300 + 90 * crackPhase)
+				fieldOfView = lerp(56, 44, smoothstep(crackPhase)) - 6 * math.exp(-sinceHit * 10)
+				rumble = 0.2 + 0.7 * crackPhase
+				speedAmount = 0
+				vignetteAmount = 0.45 + 0.25 * crackPhase
+				if storyTime >= T_BOOM then
+					local sinceBoom = storyTime - T_BOOM
+					cameraPosition = ORIGIN + flightDirection * (390 - 260 * easeOutCubic(sinceBoom / 1.6))
+					fieldOfView = 44 + 44 * smoothstep(sinceBoom / 0.4)
+					if sinceBoom > 0.4 then
+						fieldOfView = lerp(88, 72, smoothstep((sinceBoom - 0.4) / 1.8))
+					end
+					rumble = 0.2 + 0.6 * math.exp(-sinceBoom * 1.2)
+					vignetteAmount = 0.3
+					cameraRollExtra = 0.08 * math.sin(sinceBoom * 2.5) * math.exp(-sinceBoom * 0.8)
+				end
+			end
+
+			local shakeYaw, shakePitch, shakeRoll = explosionShake()
+			camera.CFrame = CFrame.new(cameraPosition) * cameraRotation.Rotation * CFrame.Angles(
+				math.noise(storyTime * 31, 0.3) * rumble * 0.035 + shakePitch,
+				math.noise(storyTime * 31, 10.3) * rumble * 0.035 + shakeYaw,
+				math.noise(storyTime * 27, 20.3) * rumble * 0.025 + shakeRoll + cameraRollExtra)
+			camera.FieldOfView = math.clamp(fieldOfView, 20, 115)
+			blur.Size = blurSize
+
+			local flashing = now < flashUntil
+			if flashing ~= flashOn then
+				flashOn = flashing
+				for _, flashEffect in ipairs(flashCorrections) do
+					flashEffect.Enabled = flashing
+				end
+			end
+
+			local bloomIntensity = 0.6
+			if storyTime >= T_HIT then bloomIntensity = 1.0 end
+			if storyTime >= T_LAUNCH and storyTime < T_PASS then bloomIntensity = 0.9 end
+			if lightKickStart then
+				local sinceKick = now - lightKickStart
+				bloomIntensity = 1.2 + 1.8 * math.exp(-sinceKick * 1.6)
+				Lighting.Brightness = BASE_BRIGHTNESS + 2.2 + 3 * math.exp(-sinceKick * 1.4)
+				colorCorrection.TintColor = WHITE:Lerp(rgb(255, 205, 160), math.exp(-sinceKick * 0.9))
+				colorCorrection.Contrast = 0.08 + 0.2 * math.exp(-sinceKick * 2)
+			end
+			bloom.Intensity = flashing and 0 or bloomIntensity
+
+			local viewportSize = camera.ViewportSize
+			screenLayer.setVignette(vignetteAmount)
+			screenLayer.setSpeedLines(speedAmount, storyTime, viewportSize, speedLineColor)
+
+			local flareWorldPosition, flareStrength, flareColor = nil, 0, WHITE
+			if storyTime < T_LAUNCH then
+				flareWorldPosition = earthSurfacePoint
+				flareStrength = 0.9 * smoothstep((storyTime - T_CHARGE) / (T_LAUNCH - T_CHARGE)) ^ 2
+				flareColor = BLUE[2]
+			elseif storyTime < T_PASS then
+				flareWorldPosition = earthSurfacePoint
+				flareStrength = math.exp(-(storyTime - T_LAUNCH) * 4)
+				flareColor = BLUE[2]
+			elseif storyTime >= T_BOOM then
+				flareWorldPosition = moonCenter
+				flareStrength = 1.1 * math.exp(-(storyTime - T_BOOM) * 0.9)
+				flareColor = FIRE[2]
+			elseif storyTime >= T_HIT then
+				flareWorldPosition = impactPoint
+				flareStrength = 0.3 + 0.6 * crackPhase
+				flareColor = FIRE[3]
+			end
+			local flareScreenPoint = nil
+			if flareWorldPosition and flareStrength > 0.01 then
+				flareScreenPoint = projectToScreen(flareWorldPosition)
+			end
+			screenLayer.setFlare(flareScreenPoint, flareStrength, flareColor, viewportSize)
+
+			whiteAlpha = math.max(0, whiteAlpha - deltaTime * whiteDecay)
+			screenLayer.white.BackgroundTransparency = 1 - whiteAlpha
+			blackAlpha = smoothstep((storyTime - (T_END - 0.5)) / 0.5)
+			screenLayer.black.BackgroundTransparency = 1 - blackAlpha
+
+			if storyTime >= T_END then cleanup() end
+		end)
+		if not loopSucceeded then
+			warn("[UppercutFinisher] cutscene error:", loopError)
+			cleanup()
+		end
+	end)
+end
+
+return {
+	BlueImpact = blueImpact,
+	CloneEnemy = cloneEnemy,
+	Cutscene = play,
+}
+end)()
