@@ -5752,6 +5752,11 @@ function PlayUltimateKamehameha()
 	local BEAM_DISTANCE = 24 * BEAM_SCALE   -- Attack 4 spawns it 24 studs ahead; scaled so it starts in the same spot relative to its size
 	local BEAM_DURATION = 3                 -- seconds the beam stays up before it starts fading
 	local BEAM_FADE     = 1                 -- seconds the fade-out takes
+	local BEAM_SHAKE_HOLD = 3               -- seconds the beam shake stays at full strength
+	local BEAM_SHAKE_FADE = 1               -- seconds it then takes to die down to nothing
+	local BEAM_SHAKE_POS  = 1.1             -- full-strength positional shake, in studs
+	local BEAM_SHAKE_ROT  = 0.05            -- full-strength rotational shake, in radians (~3 degrees)
+	local BEAM_SHAKE_SPEED = 24             -- how fast it rattles
 
 	-- Fires at 5.9s: the Attack 4 beam model (base version, no finisher), scaled up, held for BEAM_DURATION, then faded out
 	local function OnBeam()
@@ -5768,6 +5773,32 @@ function PlayUltimateKamehameha()
 				warn("[UKame] pause after resume failed")
 			end
 		end)
+
+		-- beam camera shake: full strength for BEAM_SHAKE_HOLD, then fades out over BEAM_SHAKE_FADE.
+		-- Runs right after the default camera script each frame, so it rides on top of the player's normal camera.
+		do
+			local shakeName = "UKameBeamShake"
+			pcall(RunService.UnbindFromRenderStep, RunService, shakeName)
+			local shakeT, shakePhase = 0, 0
+			RunService:BindToRenderStep(shakeName, Enum.RenderPriority.Camera.Value + 1, function(dt)
+				shakeT += dt
+				local amp
+				if shakeT < BEAM_SHAKE_HOLD then
+					amp = 1
+				elseif shakeT < BEAM_SHAKE_HOLD + BEAM_SHAKE_FADE then
+					amp = 1 - (shakeT - BEAM_SHAKE_HOLD) / BEAM_SHAKE_FADE
+				else
+					RunService:UnbindFromRenderStep(shakeName)
+					return
+				end
+				if cam.CameraType == Enum.CameraType.Scriptable then return end -- a script owns the camera (e.g. another cinematic); don't stack on it
+				shakePhase += dt * BEAM_SHAKE_SPEED
+				local function n(seed) return (math.noise(shakePhase, seed, 0.5) * 0.7 + math.noise(shakePhase * 2.3, seed + 9.1, 1.7) * 0.3) * 2 end
+				cam.CFrame = cam.CFrame
+					* CFrame.new(n(1.3) * BEAM_SHAKE_POS * amp, n(5.7) * BEAM_SHAKE_POS * amp, 0)
+					* CFrame.Angles(n(9.1) * BEAM_SHAKE_ROT * amp, n(13.3) * BEAM_SHAKE_ROT * amp, n(17.9) * BEAM_SHAKE_ROT * 0.6 * amp)
+			end)
+		end
 
 		local model = template:Clone()
 		local engineScaled = false
@@ -5879,8 +5910,6 @@ function PlayUltimateKamehameha()
 
 	local T = 0
 	local T0 = 0
-	local CAM_BLEND = 0.6   -- seconds the camera takes to glide from where it was to the cutscene shot (the sequence keeps running meanwhile)
-	local camStartCF, camStartFOV
 	local anims = {}
 	local function addAnim(f) anims[#anims + 1] = f end
 
@@ -6635,16 +6664,8 @@ function PlayUltimateKamehameha()
 		local rotAmp = shk + shakeI * 0.03
 		local shake = CFrame.Angles(n2(1.7) * rotAmp, n2(7.1) * rotAmp, n2(13.3) * (rotAmp * 0.5 + shakeI * 0.015))
 		local shakePos = CFrame.new(n2(21.3) * shakeI * 0.45, n2(31.7) * shakeI * 0.45, 0)
-		local camCF = CFrame.lookAt(pos, tgt) * shakePos * CFrame.Angles(0, 0, math.rad(roll)) * shake
-		if T < CAM_BLEND and camStartCF then
-			-- glide from the camera we had at the start to the live cutscene shot; lands exactly on the shot's CFrame at CAM_BLEND
-			local a = sstep(seg(T, 0, CAM_BLEND))
-			cam.CFrame = camStartCF:Lerp(camCF, a)
-			cam.FieldOfView = lerp(camStartFOV, fov, a)
-		else
-			cam.CFrame = camCF
-			cam.FieldOfView = fov
-		end
+		cam.CFrame = CFrame.lookAt(pos, tgt) * shakePos * CFrame.Angles(0, 0, math.rad(roll)) * shake
+		cam.FieldOfView = fov
 		local dist = (pos - tgt).Magnitude
 		dof.FocusDistance = dist
 		dof.InFocusRadius = math.clamp(dist * 0.45, 2.5, 18)
@@ -6739,7 +6760,6 @@ function PlayUltimateKamehameha()
 	end
 
 	---------------------------------------------------------------- run
-	camStartCF, camStartFOV = cam.CFrame, cam.FieldOfView
 	T0 = os.clock()
 	conn = RunService.RenderStepped:Connect(function(dt)
 		local ok, err = pcall(step, dt)
@@ -9176,6 +9196,10 @@ RunService:BindToRenderStep(FX_NAME, Enum.RenderPriority.Camera.Value + 1, camFx
 -- ===== main flight step =====
 local function step(dt)
 	if not flying then return end -- guard against a stray frame after stopFlying
+	if attack5Running then
+		stopFlying()
+		return
+	end
 	if dt > 0.1 then dt = 0.1 end
 	local now = os.clock()
 
@@ -9419,7 +9443,7 @@ rollButton.MouseButton1Click:Connect(function() doRoll(lastStrafe) end)
 
 -- ===== start / stop =====
 startFlying = function()
-	if flying then return end
+	if flying or attack5Running then return end
 	flying = true
 
 	if not fxActive then fovBase = camera.FieldOfView end
