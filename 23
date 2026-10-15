@@ -5879,6 +5879,8 @@ function PlayUltimateKamehameha()
 
 	local T = 0
 	local T0 = 0
+	local CAM_BLEND = 0.6   -- seconds the camera takes to glide from where it was to the cutscene shot (the sequence keeps running meanwhile)
+	local camStartCF, camStartFOV
 	local anims = {}
 	local function addAnim(f) anims[#anims + 1] = f end
 
@@ -6633,8 +6635,16 @@ function PlayUltimateKamehameha()
 		local rotAmp = shk + shakeI * 0.03
 		local shake = CFrame.Angles(n2(1.7) * rotAmp, n2(7.1) * rotAmp, n2(13.3) * (rotAmp * 0.5 + shakeI * 0.015))
 		local shakePos = CFrame.new(n2(21.3) * shakeI * 0.45, n2(31.7) * shakeI * 0.45, 0)
-		cam.CFrame = CFrame.lookAt(pos, tgt) * shakePos * CFrame.Angles(0, 0, math.rad(roll)) * shake
-		cam.FieldOfView = fov
+		local camCF = CFrame.lookAt(pos, tgt) * shakePos * CFrame.Angles(0, 0, math.rad(roll)) * shake
+		if T < CAM_BLEND and camStartCF then
+			-- glide from the camera we had at the start to the live cutscene shot; lands exactly on the shot's CFrame at CAM_BLEND
+			local a = sstep(seg(T, 0, CAM_BLEND))
+			cam.CFrame = camStartCF:Lerp(camCF, a)
+			cam.FieldOfView = lerp(camStartFOV, fov, a)
+		else
+			cam.CFrame = camCF
+			cam.FieldOfView = fov
+		end
 		local dist = (pos - tgt).Magnitude
 		dof.FocusDistance = dist
 		dof.InFocusRadius = math.clamp(dist * 0.45, 2.5, 18)
@@ -6729,6 +6739,7 @@ function PlayUltimateKamehameha()
 	end
 
 	---------------------------------------------------------------- run
+	camStartCF, camStartFOV = cam.CFrame, cam.FieldOfView
 	T0 = os.clock()
 	conn = RunService.RenderStepped:Connect(function(dt)
 		local ok, err = pcall(step, dt)
@@ -8642,7 +8653,7 @@ end)
 					PlayAttack4Anim()
 					local beamSfx -- kept so the finisher can fade it out with the beam
 					task.spawn(function()
-						beamSfx = GetGitSound("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/BeamSFX.mp3", "SFX", 2)
+						beamSfx = GetGitSound("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/copy_1C66F922-0AB3-45CE-BE26-86E1389DF4E4.mp3", "Attack4Beam", 2)
 						beamSfx:Play()
 					end)
 					task.spawn(function()
@@ -8720,10 +8731,8 @@ end)
 						local fadeDuration = 0.3
 
 						-- Finisher white overlay: only when the hitbox caught a target. Fades in exactly as long as the beam fades.
-						local overlayGui, overlayFrame, fadeSfx, sfxBase
+						local overlayGui, overlayFrame
 						if a4Hitbox.triggered and PlayPlanetExplosion then
-							fadeSfx = beamSfx -- the beam sound fades out together with the beam (only on a finisher)
-							sfxBase = fadeSfx and fadeSfx.Volume or 0
 							overlayGui = Instance.new("ScreenGui")
 							overlayGui.Name = "Attack4FinisherWhite"
 							overlayGui.IgnoreGuiInset = true                  -- ignore the topbar inset
@@ -8772,16 +8781,9 @@ end)
 							if overlayFrame then
 								overlayFrame.BackgroundTransparency = 1 - alpha -- same timing as the beam fade
 							end
-							if fadeSfx and fadeSfx.Parent then
-								fadeSfx.Volume = sfxBase * (1 - alpha) -- audio fades with the beam
-							end
 							if alpha >= 1 then
 								fadeConn:Disconnect()
 								if model and model.Parent then model:Destroy() end
-								if fadeSfx and fadeSfx.Parent then
-									fadeSfx:Stop()
-									fadeSfx:Destroy()
-								end
 								-- beam fully gone: start the cutscene, then fade the white screen out over 1 second
 								if overlayFrame then
 									task.spawn(PlayCutsceneWithTeleport)
