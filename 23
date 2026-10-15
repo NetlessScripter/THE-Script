@@ -163,6 +163,345 @@ function StartAttack4Hitbox(duration)
 	return state
 end
 
+ATTACK4_ZOOM_FOV             = 55
+ATTACK4_BURST_FOV            = 120
+ATTACK4_SETTLE_FOV           = 80
+ATTACK4_ZOOM_SECONDS         = 0.6
+ATTACK4_BURST_RISE_SECONDS   = 0.08
+ATTACK4_SETTLE_SECONDS       = 0.3
+ATTACK4_RESTORE_SECONDS      = 0.25
+ATTACK4_SHAKE_HOLD_SECONDS   = 0.6
+ATTACK4_SHAKE_FADE_SECONDS   = 0.4
+ATTACK4_SHAKE_POSITION       = 0.7
+ATTACK4_SHAKE_ROTATION       = 0.035
+ATTACK4_SHAKE_SPEED          = 24
+
+-- ================= ATTACK 4 CHARGE LIGHTING =================
+-- Same dark-blue grade Attack 5's cinematic uses (dimmed exposure + blue ambient, tint, contrast, bloom, depth of field),
+-- squeezed into Attack 4's 0.6s charge, plus Attack 5's lens flare sitting on the charge. Both build while the charge
+-- plays and fade back out once the beam spawns.
+ATTACK4_GRADE_RAMP_SECONDS    = 0.6  -- time to reach full strength (matches the charge)
+ATTACK4_GRADE_RELEASE_SECONDS = 0.4  -- time to fade back to normal after the beam spawns
+ATTACK4_GRADE_STRENGTH        = 1    -- multiplier on the whole grade (1 = same strength as Attack 5)
+ATTACK4_FLARE_STRENGTH        = 0.65 -- lens flare brightness (Attack 5 peaks at 0.65; 0 turns the flare off)
+
+attack4LightingController = nil
+
+function StartAttack4Lighting(focusPart, flareSourceFn)
+	local Lighting = game:GetService("Lighting")
+	local runService = game:GetService("RunService")
+	local camera = workspace.CurrentCamera
+
+	-- Attack spammed while a grade is still active: end the old one instantly but reuse ITS originals,
+	-- so we never "restore" to an already-darkened Lighting.
+	local orig
+	if attack4LightingController and not attack4LightingController.finished then
+		orig = attack4LightingController.orig
+		attack4LightingController.abort()
+	end
+	orig = orig or { exp = Lighting.ExposureCompensation, amb = Lighting.Ambient, oamb = Lighting.OutdoorAmbient }
+
+	local WHITE     = Color3.new(1, 1, 1)
+	local DARK_BLUE = Color3.fromRGB(25, 40, 95)
+	local TINT      = Color3.fromRGB(165, 205, 255)
+
+	local cc = Instance.new("ColorCorrectionEffect") cc.Name = "Attack4CC" cc.Parent = Lighting
+	local bloom = Instance.new("BloomEffect") bloom.Name = "Attack4Bloom" bloom.Intensity = 0 bloom.Size = 24 bloom.Threshold = 1 bloom.Parent = Lighting
+	local dof = Instance.new("DepthOfFieldEffect") dof.Name = "Attack4DOF" dof.FarIntensity = 0 dof.NearIntensity = 0 dof.FocusDistance = 20 dof.InFocusRadius = 12 dof.Parent = Lighting
+	local sun = Instance.new("SunRaysEffect") sun.Name = "Attack4Sun" sun.Intensity = 0 sun.Spread = 0.7 sun.Parent = Lighting
+
+	-- Lens flare (same emitter stack as Attack 5): sparkle emitters on a hidden rig, placed along the lens axis each frame.
+	local CYAN = Color3.fromRGB(120, 235, 255)
+	local BLUE = Color3.fromRGB(40, 170, 255)
+	local SPARK = "rbxasset://textures/particles/sparkles_main.dds"
+	local FLARE_DEPTH = 4
+	local FLARE_SCALE = FLARE_DEPTH / 13
+
+	local flareRig = Instance.new("Part")
+	flareRig.Name = "Attack4FlareRig"
+	flareRig.Size = Vector3.new(0.05, 0.05, 0.05)
+	flareRig.Anchored = true
+	flareRig.CanCollide = false
+	flareRig.CanQuery = false
+	flareRig.CanTouch = false
+	flareRig.CastShadow = false
+	flareRig.Massless = true
+	flareRig.Material = Enum.Material.Neon
+	flareRig.Transparency = 1
+	flareRig.Parent = workspace
+
+	local flareEm = {}
+	local function addFlare(col, pos, blend, s0, s1, t0, t1, q0, q1)
+		local att = Instance.new("Attachment")
+		att.Parent = flareRig
+		local e = Instance.new("ParticleEmitter")
+		e.Texture = SPARK
+		e.Rate = 0
+		e.Enabled = false
+		e.LockedToPart = true -- follows the attachment every frame instead of sitting where it was emitted
+		e.Speed = NumberRange.new(0)
+		e.RotSpeed = NumberRange.new(0)
+		e.Lifetime = NumberRange.new(0.05)
+		e.LightEmission = 1
+		e.LightInfluence = 0
+		e.ZOffset = -2.5
+		e.Orientation = Enum.ParticleOrientation.FacingCamera
+		e.Color = ColorSequence.new(col:Lerp(CYAN, blend))
+		e.Parent = att
+		flareEm[#flareEm + 1] = {e = e, att = att, pos = pos, s0 = s0 * FLARE_SCALE, s1 = s1 * FLARE_SCALE, t0 = t0, t1 = t1, q0 = q0, q1 = q1}
+	end
+	--          color  pos                  blend  size     transp     squash
+	addFlare(WHITE, Vector2.new(1, 1),       0.4,  6.5, 0,  0.25, 1, 5,  0)   -- wide soft body, tall middle
+	addFlare(WHITE, Vector2.new(1, 1),       0.15, 3.2, 0,  0,    1, 1.5, 0)  -- hot core
+	addFlare(CYAN,  Vector2.new(1, 1),       0.7,  4.8, 0,  0.12, 1, 9,  0)   -- thick stretched band
+	addFlare(WHITE, Vector2.new(1, 1),       0.3,  3.4, 0,  0.08, 1, 22, 0)   -- thin long streak through the middle
+	addFlare(CYAN,  Vector2.new(1, 1),       0.8,  3.0, 0,  0.2,  1, 32, 0)   -- extra-long anamorphic streak
+	addFlare(CYAN,  Vector2.new(-0.6, -0.6), 0.5,  1.2, 0,  0.45, 1, 4,  0)   -- ghosts along the lens axis
+	addFlare(WHITE, Vector2.new(-0.3, -0.3), 0.3,  0.8, 0,  0.5,  1, 3,  0)
+	addFlare(BLUE,  Vector2.new(-1.1, -1.1), 0.8,  1.7, 0,  0.55, 1, 2,  0)
+	addFlare(CYAN,  Vector2.new(0.5, 0.5),   0.6,  0.9, 0,  0.5,  1, 3,  0)
+	addFlare(WHITE, Vector2.new(-1.6, -1.6), 0.5,  0.7, 0,  0.6,  1, 2,  0)
+
+	local function lerp(a, b, t) return a + (b - a) * t end
+
+	local function updateFlare(strength)
+		if not flareSourceFn or strength <= 0.01 then return end
+		local source = flareSourceFn()
+		if not source then return end
+		local vs = camera.ViewportSize
+		local sp = camera:WorldToViewportPoint(source)
+		if sp.Z <= 0 then return end
+		local toSrc = source - camera.CFrame.Position
+		if toSrc.Magnitude < 0.01 then return end
+		local va = math.acos(math.clamp(camera.CFrame.LookVector:Dot(toSrc.Unit), -1, 1))
+		local vf = math.rad(camera.FieldOfView)
+		local ar = vs.X / vs.Y
+		local df = 2 * math.atan(math.tan(vf * 0.5) * math.sqrt(1 + ar * ar))
+		local aa = 1 - math.clamp(va / (df * 0.5), 0, 1)
+		local alpha = aa * strength
+		if alpha <= 0.001 then return end
+		local center = Vector2.new(vs.X, vs.Y) * 0.5
+		local off = Vector2.new(sp.X, sp.Y) - center
+		local ft = 1 - aa
+		for _, d in ipairs(flareEm) do
+			local es = center + Vector2.new(off.X * d.pos.X, off.Y * d.pos.Y)
+			local ray = camera:ViewportPointToRay(es.X, es.Y)
+			d.att.WorldPosition = ray.Origin + ray.Direction.Unit * FLARE_DEPTH
+			d.e.Size = NumberSequence.new(lerp(d.s0, d.s1, ft))
+			d.e.Squash = NumberSequence.new(-lerp(d.q0, d.q1, ft))
+			d.e.Transparency = NumberSequence.new(math.clamp(1 - ((1 - lerp(d.t0, d.t1, ft)) * alpha), 0, 1))
+			d.e:Emit(1)
+		end
+	end
+
+	local controller = { finished = false, orig = orig }
+	attack4LightingController = controller
+
+	local conn
+	local startTime = os.clock()
+	local lastGl = 0
+	local curGl = 0
+	local flareBind = "Attack4Flare"
+	local releaseStart, releaseFrom
+
+	local function sstep(x) x = math.clamp(x, 0, 1) return x * x * (3 - 2 * x) end
+
+	local function cleanup()
+		if controller.finished then return end
+		controller.finished = true
+		if conn then conn:Disconnect() end
+		pcall(runService.UnbindFromRenderStep, runService, flareBind)
+		Lighting.ExposureCompensation = orig.exp
+		Lighting.Ambient = orig.amb
+		Lighting.OutdoorAmbient = orig.oamb
+		for _, inst in ipairs({cc, bloom, dof, sun, flareRig}) do inst:Destroy() end
+	end
+
+	local function apply(gl)
+		local g = gl * ATTACK4_GRADE_STRENGTH
+		Lighting.ExposureCompensation = orig.exp - 0.8 * g
+		Lighting.Ambient = orig.amb:Lerp(DARK_BLUE, math.clamp(0.75 * g, 0, 1))
+		Lighting.OutdoorAmbient = orig.oamb:Lerp(DARK_BLUE, math.clamp(0.75 * g, 0, 1))
+		cc.TintColor = WHITE:Lerp(TINT, math.clamp(g, 0, 1))
+		cc.Contrast = 0.22 * g
+		cc.Saturation = 0.18 * g
+		cc.Brightness = -0.04 * g
+		bloom.Intensity = 0.45 * g
+		bloom.Size = 24 + 16 * gl
+		bloom.Threshold = 1 - 0.07 * gl
+		sun.Intensity = 0.05 * g
+		dof.FarIntensity = 0.45 * g
+	end
+
+	conn = runService.RenderStepped:Connect(function()
+		if controller.finished then return end
+		local now = os.clock()
+		local gl
+		if releaseStart then
+			local a = math.clamp((now - releaseStart) / ATTACK4_GRADE_RELEASE_SECONDS, 0, 1)
+			gl = releaseFrom * (1 - sstep(a))
+			if a >= 1 then cleanup() return end
+		else
+			gl = sstep((now - startTime) / ATTACK4_GRADE_RAMP_SECONDS)
+			lastGl = gl
+		end
+		apply(gl)
+		curGl = gl
+
+		-- keep the character sharp, blur the background (same idea as Attack 5's DOF)
+		if focusPart and focusPart.Parent then
+			local dist = (camera.CFrame.Position - focusPart.Position).Magnitude
+			dof.FocusDistance = dist
+			dof.InFocusRadius = math.clamp(dist * 0.45, 2.5, 18)
+		end
+	end)
+
+	-- The flare runs in the very last render step so it reads the final camera (zoom FOV + shake) and the arm's final
+	-- pose for this frame; updating earlier made it lag a frame behind the charge.
+	pcall(runService.UnbindFromRenderStep, runService, flareBind)
+	runService:BindToRenderStep(flareBind, Enum.RenderPriority.Last.Value, function()
+		if controller.finished then return end
+		updateFlare(ATTACK4_FLARE_STRENGTH * curGl) -- fades with the grade on release
+	end)
+
+	function controller.release()
+		if controller.finished or releaseStart then return end
+		releaseStart = os.clock()
+		releaseFrom = lastGl
+	end
+
+	function controller.abort()
+		cleanup()
+	end
+
+	task.delay(4, controller.release) -- failsafe: never leave the screen dark if release() is somehow never reached
+	return controller
+end
+
+attack4CameraController = nil
+
+function StartAttack4Camera()
+	local runService = game:GetService("RunService")
+	local camera = workspace.CurrentCamera
+	local bindName = "Attack4Camera"
+
+	local originalFov = camera.FieldOfView
+	if attack4CameraController and not attack4CameraController.finished then
+		originalFov = attack4CameraController.originalFov
+		attack4CameraController.finished = true
+	end
+	pcall(runService.UnbindFromRenderStep, runService, bindName)
+
+	local controller = { originalFov = originalFov, finished = false }
+	attack4CameraController = controller
+
+	local phase = "zoom"
+	local phaseStartTime = os.clock()
+	local phaseStartFov = originalFov
+	local lastFov = originalFov
+	local fovReleased = false
+	local shakeStartTime = nil
+	local shakePhase = 0
+
+	local function lerp(startValue, endValue, alpha)
+		return startValue + (endValue - startValue) * alpha
+	end
+	local function easeOut(alpha)
+		return 1 - (1 - alpha) * (1 - alpha)
+	end
+	local function easeInOut(alpha)
+		return -(math.cos(math.pi * alpha) - 1) / 2
+	end
+
+	local function finish()
+		controller.finished = true
+		pcall(runService.UnbindFromRenderStep, runService, bindName)
+	end
+
+	runService:BindToRenderStep(bindName, Enum.RenderPriority.Camera.Value + 2, function(deltaTime)
+		if controller.finished then
+			finish()
+			return
+		end
+
+		local now = os.clock()
+		local phaseElapsed = now - phaseStartTime
+
+		if not fovReleased then
+			local targetFov
+			if phase == "zoom" then
+				local alpha = math.clamp(phaseElapsed / ATTACK4_ZOOM_SECONDS, 0, 1)
+				targetFov = lerp(phaseStartFov, ATTACK4_ZOOM_FOV, easeInOut(alpha))
+			elseif phase == "burst" then
+				if phaseElapsed < ATTACK4_BURST_RISE_SECONDS then
+					local alpha = phaseElapsed / ATTACK4_BURST_RISE_SECONDS
+					targetFov = lerp(phaseStartFov, ATTACK4_BURST_FOV, easeOut(alpha))
+				else
+					local alpha = math.clamp((phaseElapsed - ATTACK4_BURST_RISE_SECONDS) / ATTACK4_SETTLE_SECONDS, 0, 1)
+					targetFov = lerp(ATTACK4_BURST_FOV, ATTACK4_SETTLE_FOV, easeOut(alpha))
+				end
+			else
+				local alpha = math.clamp(phaseElapsed / ATTACK4_RESTORE_SECONDS, 0, 1)
+				targetFov = lerp(phaseStartFov, originalFov, easeInOut(alpha))
+				if alpha >= 1 then
+					fovReleased = true
+					targetFov = originalFov
+				end
+			end
+			lastFov = targetFov
+			camera.FieldOfView = targetFov
+		end
+
+		local shakeActive = false
+		if shakeStartTime then
+			local shakeElapsed = now - shakeStartTime
+			local amplitude = 0
+			if shakeElapsed < ATTACK4_SHAKE_HOLD_SECONDS then
+				amplitude = 1
+			elseif shakeElapsed < ATTACK4_SHAKE_HOLD_SECONDS + ATTACK4_SHAKE_FADE_SECONDS then
+				amplitude = 1 - (shakeElapsed - ATTACK4_SHAKE_HOLD_SECONDS) / ATTACK4_SHAKE_FADE_SECONDS
+			end
+			if amplitude > 0 then
+				shakeActive = true
+				if camera.CameraType ~= Enum.CameraType.Scriptable then
+					shakePhase += deltaTime * ATTACK4_SHAKE_SPEED
+					local function noise(seed)
+						return (math.noise(shakePhase, seed, 0.5) * 0.7 + math.noise(shakePhase * 2.3, seed + 9.1, 1.7) * 0.3) * 2
+					end
+					camera.CFrame = camera.CFrame
+						* CFrame.new(noise(1.3) * ATTACK4_SHAKE_POSITION * amplitude, noise(5.7) * ATTACK4_SHAKE_POSITION * amplitude, 0)
+						* CFrame.Angles(
+							noise(9.1) * ATTACK4_SHAKE_ROTATION * amplitude,
+							noise(13.3) * ATTACK4_SHAKE_ROTATION * amplitude,
+							noise(17.9) * ATTACK4_SHAKE_ROTATION * 0.6 * amplitude
+						)
+				end
+			end
+		end
+
+		if fovReleased and not shakeActive then
+			finish()
+		end
+	end)
+
+	function controller.burst()
+		if controller.finished or phase ~= "zoom" then return end
+		phase = "burst"
+		phaseStartTime = os.clock()
+		phaseStartFov = lastFov
+		shakeStartTime = os.clock()
+	end
+
+	function controller.restore()
+		if controller.finished or phase == "restore" then return end
+		phase = "restore"
+		phaseStartTime = os.clock()
+		phaseStartFov = lastFov
+	end
+
+	return controller
+end
+
 -- ================= PLANET EXPLOSION V3 (embedded) =================
 -- PlayPlanetExplosion() runs the whole cinematic (camera takeover, ~7s). Fired by the Attack 4 finisher below.
 PlayPlanetExplosion = (function()
@@ -6131,6 +6470,7 @@ function PlayUltimateKamehameha()
 		att.Parent = flareRig
 		local e = emitter(att, SPARK, {
 			Enabled = false,
+			LockedToPart = true, -- particle follows the attachment every frame instead of sitting where it was emitted (that was the "catching up" look)
 			Speed = NumberRange.new(0), RotSpeed = NumberRange.new(0),
 			Lifetime = NumberRange.new(0.05),
 			LightEmission = 1, LightInfluence = 0, ZOffset = -2.5,
@@ -8669,6 +9009,8 @@ end)
 			track:Stop(0)
 
 			task.spawn(function()
+				local attack4Camera
+				local attack4Lighting
 				local ok, err = pcall(function()
 					PlayAttack4Anim()
 					local beamSfx -- kept so the finisher can fade it out with the beam
@@ -8682,14 +9024,20 @@ end)
 
 					-- Hitbox lives exactly as long as the charge (0.6s), 3 studs in front of us
 					local a4Hitbox = StartAttack4Hitbox(0.6)
+					attack4Camera = StartAttack4Camera()
+					attack4Lighting = StartAttack4Lighting(HumanoidRootPart, function() -- dark-blue grade + lens flare build during the charge
+						if RightArm and RightArm.Parent then return (RightArm.CFrame * CFrame.new(0, -1.35, 0)).Position end -- same spot the charge VFX sits
+					end)
 
 					-- Beam charge VFX for 0.6s, then spawn the model
 					Charge(0.6)
 					a4Hitbox.stop() -- charge is over: make sure the hitbox is gone
+					attack4Lighting.release() -- beam is about to spawn: fade the lighting back to normal
 
 					-- Clone the preloaded model instead of fetching it every time
 					local model = game.ReplicatedStorage._Attack4Assets.Attack4Model:Clone()
 					model.Parent = workspace
+					attack4Camera.burst()
 
 					-- Find a reference part to anchor the positioning
 					local refPart
@@ -8713,6 +9061,7 @@ end)
 
 					-- After 0.6 seconds: disable all particles then fade the whole model out
 					task.delay(0.6, function()
+						attack4Camera.restore()
 						-- the beam starts to fade right now. If the hitbox caught a low-health target, a white overlay fades in
 						-- over the same duration as the beam fade, and the cutscene starts once the beam is fully gone (see fade loop below).
 
@@ -8826,6 +9175,8 @@ end)
 
 				if not ok then
 					warn("[Attack4] Error:", err)
+					if attack4Camera then attack4Camera.restore() end
+					if attack4Lighting then attack4Lighting.abort() end
 				end
 				attack4Running = false
 			end)
