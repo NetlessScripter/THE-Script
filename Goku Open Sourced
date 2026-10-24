@@ -2587,6 +2587,69 @@ local ssjOnlyAnimIds = {
 local faceDecal = headPart:FindFirstChildWhichIsA("Decal")
 if faceDecal then faceDecal.Texture = ssjFaceId end
 
+-- Burst bubble that plays on every hair change, colored by the form we switch to
+local HAIR_BURST_SIZE = 11   -- final bubble diameter in studs
+local HAIR_BURST_TIME = 0.5  -- seconds the bubble takes to expand and fade
+local HAIR_BURST_COLORS = {
+    Base = Color3.fromRGB(255, 255, 255),
+    SSJB = Color3.fromRGB(0, 230, 255),
+    SSJ  = Color3.fromRGB(255, 235, 50),
+}
+
+local function PlayHairBurst(kind)
+    local color = HAIR_BURST_COLORS[kind]
+    if not color then return end
+
+    local function MakeSphere(diameter, transparency)
+        local p = Instance.new("Part")
+        p.Shape        = Enum.PartType.Ball
+        p.Material     = Enum.Material.Neon
+        p.Color        = color
+        p.Size         = Vector3.one * diameter
+        p.Transparency = transparency
+        p.CanCollide   = false
+        p.CanQuery     = false
+        p.CanTouch     = false
+        p.CastShadow   = false
+        p.Massless     = true
+        p.CFrame       = headPart.CFrame * CFrame.new(0, 0.6, 0)
+        p.Parent       = Workspace
+
+        local weld = Instance.new("WeldConstraint")
+        weld.Part0  = headPart
+        weld.Part1  = p
+        weld.Parent = p
+
+        Debris:AddItem(p, HAIR_BURST_TIME + 0.5)
+        return p
+    end
+
+    -- outer bubble: pops out fast, then fades
+    local bubble = MakeSphere(1.5, 0.35)
+    TweenService:Create(bubble, TweenInfo.new(HAIR_BURST_TIME, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out),
+        {Size = Vector3.one * HAIR_BURST_SIZE}):Play()
+    TweenService:Create(bubble, TweenInfo.new(HAIR_BURST_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+        {Transparency = 1}):Play()
+
+    -- inner flash: smaller and quicker
+    local core = MakeSphere(1, 0)
+    TweenService:Create(core, TweenInfo.new(HAIR_BURST_TIME * 0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+        {Size = Vector3.one * (HAIR_BURST_SIZE * 0.5), Transparency = 1}):Play()
+
+    -- a few sparks thrown outward
+    local sparks = Instance.new("ParticleEmitter")
+    sparks.Color         = ColorSequence.new(color)
+    sparks.LightEmission = 1
+    sparks.Rate          = 0
+    sparks.Lifetime      = NumberRange.new(0.3, 0.5)
+    sparks.Speed         = NumberRange.new(14, 24)
+    sparks.SpreadAngle   = Vector2.new(180, 180)
+    sparks.Size          = NumberSequence.new({NumberSequenceKeypoint.new(0, 0.5), NumberSequenceKeypoint.new(1, 0)})
+    sparks.Transparency  = NumberSequence.new({NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1)})
+    sparks.Parent        = bubble
+    sparks:Emit(16)
+end
+
 local ssjbColor = Color3.new(0.05, 0.45, 1.0)
 
 local ssjbActive = false
@@ -2660,6 +2723,7 @@ local function TriggerSSJBEmote()
             local oldHair = character:FindFirstChild("GokuSSJHair")
             if oldHair then
                 local oldLight = oldHair:FindFirstChildOfClass("PointLight")
+                if oldLight then oldLight.Parent = nil end
                 oldHair:Destroy()
                 local gokuHairForms = Workspace:FindFirstChild("GokuHairForms")
                 local ssbSource = gokuHairForms and gokuHairForms["Super saiyan Blue"] and gokuHairForms["Super saiyan Blue"]["Ssj blue (Original)"]
@@ -2679,9 +2743,10 @@ local function TriggerSSJBEmote()
                         oldLight.Color  = Color3.fromRGB(100, 180, 255)
                         oldLight.Parent = newHair
                     end
+                    pcall(PlayHairBurst, "SSJB")
                 end
             end
-            (function()
+            pcall(function()
                 for _, v3195 in pairs(character.FakeHead:GetChildren()) do
                     if v3195:IsA("Accessory") and v3195:FindFirstChild("Handle") and v3195:FindFirstChild("Handle"):FindFirstChild("HairAttachment") then
                         local l_Handle_50 = v3195:FindFirstChild("Handle")
@@ -2717,7 +2782,7 @@ local function TriggerSSJBEmote()
                     hairs = v3192,
                     destroy = v3191
                 }
-            end)()
+            end)
             task.delay(200, function()
                 for _, v3206 in pairs(v3191) do
                     TweenService:Create(v3206, TweenInfo.new(0.1), {
@@ -2856,7 +2921,6 @@ AddSSJHair()
 if ssjHair then hairLight.Parent = ssjHair end
 
 local ssjbRevertAnimIds = {
-    ["rbxassetid://11365563255"] = true,
     ["rbxassetid://12983333733"] = true,
     ["rbxassetid://13927612951"] = true,
 }
@@ -2866,6 +2930,7 @@ local function RevertSSJBHairToSSJ()
     if not oldHair or not oldHair:GetAttribute("IsSSJB") then return end
 
     local oldLight = oldHair:FindFirstChildOfClass("PointLight")
+    if oldLight then oldLight.Parent = nil end
     oldHair:Destroy()
 
     local gokuHairForms = Workspace:FindFirstChild("GokuHairForms")
@@ -2885,6 +2950,7 @@ local function RevertSSJBHairToSSJ()
         oldLight.Color  = Color3.fromRGB(255, 255, 150)
         oldLight.Parent = newHair
     end
+    pcall(PlayHairBurst, "SSJ")
 end
 
 local function DisableSSJBAura()
@@ -2913,6 +2979,206 @@ humanoid.AnimationPlayed:Connect(function(track)
         RevertSSJBHairToSSJ()
         DisableSSJBAura()
     end
+end)
+
+-- ============================================================
+--  SPIRIT BOMB FORM SWAP
+--  launch -> Base hair | orb done growing -> SSJB hair + aura | fall -> SSJ hair
+-- ============================================================
+local SPIRIT_BOMB_ANIM_ID   = "rbxassetid://11365563255"
+local SPIRIT_BOMB_GROW_DONE = 5.2   -- 3.1s wait + 2.1s orb grow
+local SPIRIT_BOMB_FALL      = 9.4   -- 5.2 + 0.8s drop + 3.4s explosion
+local SPIRIT_BOMB_JUMP_RISE = 15    -- studs above the start height that counts as the launch
+local SPIRIT_BOMB_BASE_Y    = -0.09 -- base hair Y offset from the head
+
+local spiritBombToken = 0
+local spiritBombAura  = {}
+
+local SPIRIT_BOMB_LIGHT_FADE = 2    -- seconds for the light to blend into the SSJB color
+local spiritBombLightTween
+
+
+local function SetSpiritBombHair(kind)
+    if spiritBombLightTween then
+        spiritBombLightTween:Cancel()
+        spiritBombLightTween = nil
+    end
+
+    local oldHair = character:FindFirstChild("GokuSSJHair")
+    local light = oldHair and oldHair:FindFirstChildWhichIsA("PointLight", true)
+    if light then light.Parent = nil end
+    if oldHair then oldHair:Destroy() end
+    if not light then
+        light = Instance.new("PointLight")
+        light.Color = Color3.fromRGB(255, 255, 150)
+        light.Range = 8
+        light.Brightness = 1
+    end
+
+    local newHair, root
+    if kind == "Base" then
+        newHair = hairModel.Base:Clone()
+        for _, name in ipairs({"Base normal", "Left base"}) do
+            local junk = newHair:FindFirstChild(name, true)
+            if junk then junk:Destroy() end
+        end
+        newHair.Name = "GokuSSJHair"
+        newHair.Parent = character
+
+        local cf = headPart.CFrame * CFrame.new(0, SPIRIT_BOMB_BASE_Y, 0)
+        if newHair:IsA("BasePart") then
+            root = newHair
+            newHair.CFrame = cf
+        else
+            newHair:PivotTo(cf)
+            root = newHair.PrimaryPart or newHair:FindFirstChildWhichIsA("BasePart", true)
+        end
+
+        local parts = newHair:GetDescendants()
+        table.insert(parts, newHair)
+        for _, d in ipairs(parts) do
+            if d:IsA("BasePart") then
+                d.Anchored   = false
+                d.CanCollide = false
+                d.Massless   = true
+                if d ~= root then
+                    local wc = Instance.new("WeldConstraint")
+                    wc.Part0  = root
+                    wc.Part1  = d
+                    wc.Parent = d
+                end
+            end
+        end
+        WeldToHead(root)
+    else
+        local source
+        if kind == "SSJB" then
+            source = hairModel["Super saiyan Blue"]["Ssj blue (Original)"]
+        else
+            source = hairModel["Super saiyan 1"]["Ssj dominated (Original)"]
+        end
+        newHair = source:Clone()
+        newHair.Name       = "GokuSSJHair"
+        newHair.Anchored   = false
+        newHair.CanCollide = false
+        newHair.CFrame     = headPart.CFrame * CFrame.new(0, 1.1, 0.5) * CFrame.Angles(0, math.rad(180), 0)
+        newHair.Parent     = character
+        if kind == "SSJB" then newHair:SetAttribute("IsSSJB", true) end
+        WeldToHead(newHair)
+        root = newHair
+    end
+    ssjHair = newHair
+
+    light.Enabled = true
+    light.Parent  = root
+    if kind == "SSJB" then
+        spiritBombLightTween = TweenService:Create(
+            light,
+            TweenInfo.new(SPIRIT_BOMB_LIGHT_FADE, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut),
+            {Color = Color3.fromRGB(100, 180, 255)}
+        )
+        spiritBombLightTween:Play()
+    elseif kind == "SSJ" then
+        light.Color = Color3.fromRGB(255, 255, 150)
+    end
+
+    pcall(PlayHairBurst, kind)
+end
+
+local function StopSpiritBombAura()
+    local objs = spiritBombAura
+    spiritBombAura = {}
+    for _, obj in ipairs(objs) do
+        for _, d in ipairs(obj:GetDescendants()) do
+            if d:IsA("ParticleEmitter") or d:IsA("PointLight") then
+                d.Enabled = false
+            end
+        end
+    end
+    task.delay(2, function()
+        for _, obj in ipairs(objs) do
+            if obj then obj:Destroy() end
+        end
+    end)
+end
+
+local function StartSpiritBombAura()
+    StopSpiritBombAura()
+
+    local holder = Instance.new("Folder")
+    holder.Name = "AuraHolder"
+    holder.Parent = character
+    table.insert(spiritBombAura, holder)
+
+    for _, src in pairs(ReplicatedStorage.Emotes.AuraReal:GetChildren()) do
+        local clone = src:Clone()
+        table.insert(spiritBombAura, clone)
+        if clone:IsA("Attachment") or clone:IsA("PointLight") then
+            clone.Parent = character.PrimaryPart
+        else
+            clone.Parent = character
+            local weld = Instance.new("Weld")
+            weld.Part0  = character.PrimaryPart
+            weld.Part1  = clone
+            weld.Parent = clone
+        end
+
+        local items = clone:GetDescendants()
+        table.insert(items, clone)
+        for _, d in ipairs(items) do
+            if d:IsA("ParticleEmitter") then
+                d.Color = ColorSequence.new({
+                    ColorSequenceKeypoint.new(0,   Color3.new(0.0,  0.2,  0.85)),
+                    ColorSequenceKeypoint.new(0.3, Color3.new(0.05, 0.45, 1.0)),
+                    ColorSequenceKeypoint.new(0.7, Color3.new(0.2,  0.7,  1.0)),
+                    ColorSequenceKeypoint.new(1,   Color3.new(0.6,  0.9,  1.0)),
+                })
+                d.Enabled = true
+            elseif d:IsA("PointLight") then
+                d.Brightness = d.Brightness * 1.3
+                d.Color      = Color3.new(0.1, 0.55, 1.0)
+                d.Enabled    = true
+            end
+        end
+    end
+end
+
+humanoid.AnimationPlayed:Connect(function(track)
+    if track.Animation.AnimationId ~= SPIRIT_BOMB_ANIM_ID then return end
+
+    spiritBombToken = spiritBombToken + 1
+    local myToken   = spiritBombToken
+    local startTime = os.clock()
+    local startY    = rootPart.Position.Y
+
+    StopSpiritBombAura()
+
+    -- 1) the moment we get launched upward -> Base hair, no aura
+    task.spawn(function()
+        while spiritBombToken == myToken and os.clock() - startTime < SPIRIT_BOMB_GROW_DONE do
+            if rootPart.Position.Y - startY >= SPIRIT_BOMB_JUMP_RISE then
+                ssjbActive = false
+                SetSpiritBombHair("Base")
+                DisableSSJBAura()
+                return
+            end
+            task.wait()
+        end
+    end)
+
+    -- 2) orb finished growing -> SSJB hair + aura
+    task.delay(SPIRIT_BOMB_GROW_DONE, function()
+        if spiritBombToken ~= myToken then return end
+        SetSpiritBombHair("SSJB")
+        StartSpiritBombAura()
+    end)
+
+    -- 3) we fall back down -> SSJ hair, aura off
+    task.delay(SPIRIT_BOMB_FALL, function()
+        if spiritBombToken ~= myToken then return end
+        SetSpiritBombHair("SSJ")
+        StopSpiritBombAura()
+    end)
 end)
 
 for _, accessory in ipairs(character:GetChildren()) do
