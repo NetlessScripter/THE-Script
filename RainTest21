@@ -1,0 +1,1467 @@
+local Settings = {
+	Rate = 5,
+	Size = 0.08,
+	Tint = Color3.fromRGB(226, 244, 255),
+	Fade = 1.5,
+	UpdateFreq = 1 / 45,
+}
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Player = Players.LocalPlayer
+local GameSettings = UserSettings().GameSettings
+
+local Camera = workspace.CurrentCamera
+while not Camera do
+	RunService.Heartbeat:Wait()
+	Camera = workspace.CurrentCamera
+end
+
+local UP_VEC = Vector3.new(0, 1, 0)
+local UNIT_VEC = Vector3.new(1, 1, 1)
+local EMPTY_VEC = Vector3.new(0, 0, 0)
+local DISTANT_CF = CFrame.new(0, 0, 1000000)
+
+local function qualityAllowsGlass()
+	local quality = GameSettings.SavedQualityLevel.Value
+	return quality >= 8 or quality == 0
+end
+
+local GlassGraphics = qualityAllowsGlass()
+GameSettings:GetPropertyChangedSignal("SavedQualityLevel"):Connect(function()
+	GlassGraphics = qualityAllowsGlass()
+end)
+
+local IgnoredInstances = {}
+
+local function addToIgnore(instance)
+	if not instance or IgnoredInstances[instance] then
+		return
+	end
+
+	IgnoredInstances[instance] = true
+	instance.AncestryChanged:Connect(function()
+		if not instance:IsDescendantOf(game) then
+			IgnoredInstances[instance] = nil
+		end
+	end)
+end
+
+local function getIgnoreList()
+	local list = {}
+	for instance in pairs(IgnoredInstances) do
+		if instance:IsDescendantOf(game) then
+			table.insert(list, instance)
+		else
+			IgnoredInstances[instance] = nil
+		end
+	end
+	return list
+end
+
+addToIgnore(Player.Character)
+Player.CharacterAdded:Connect(addToIgnore)
+
+local ScreenDroplets = Instance.new("Folder")
+ScreenDroplets.Name = "ScreenDroplets"
+ScreenDroplets.Parent = Camera
+addToIgnore(ScreenDroplets)
+
+workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+	local newCamera = workspace.CurrentCamera
+	if newCamera then
+		Camera = newCamera
+		ScreenDroplets.Parent = Camera
+	end
+end)
+
+local Animations = {}
+local Offsets = {}
+local CameraCF = Camera.CFrame
+
+RunService:BindToRenderStep("ScreenRainUpdate", Enum.RenderPriority.Camera.Value + 1, function()
+	Camera = workspace.CurrentCamera or Camera
+	CameraCF = Camera.CFrame
+
+	local droplets = {}
+	local dropletCFrames = {}
+	for droplet, offset in pairs(Offsets) do
+		if droplet.Parent then
+			table.insert(droplets, droplet)
+			table.insert(dropletCFrames, CameraCF * offset)
+		else
+			Offsets[droplet] = nil
+			Animations[droplet] = nil
+		end
+	end
+
+	if #droplets > 0 then
+		workspace:BulkMoveTo(droplets, dropletCFrames, Enum.BulkMoveMode.FireCFrameChanged)
+	end
+end)
+
+local function createObjectPool(object, initialAmount)
+	local pool = {
+		Template = object:Clone(),
+		Available = {},
+	}
+
+	for _ = 1, math.max(1, math.floor(initialAmount)) do
+		table.insert(pool.Available, pool.Template:Clone())
+	end
+
+	function pool:Get()
+		local objectIndex = #self.Available
+		local pooledObject = self.Available[objectIndex]
+		if pooledObject then
+			table.remove(self.Available, objectIndex)
+			return pooledObject
+		end
+		return self.Template:Clone()
+	end
+
+	function pool:Return(objectToReturn)
+		objectToReturn.CFrame = DISTANT_CF
+		table.insert(self.Available, objectToReturn)
+	end
+
+	return pool
+end
+
+local DropletPrefab = Instance.new("Part")
+DropletPrefab.Name = "Droplet"
+DropletPrefab.Material = Enum.Material.Glass
+DropletPrefab.CastShadow = false
+DropletPrefab.CanCollide = false
+DropletPrefab.CanQuery = false
+DropletPrefab.CanTouch = false
+DropletPrefab.Anchored = true
+DropletPrefab.Transparency = 0.5
+DropletPrefab.Color = Settings.Tint
+DropletPrefab.Size = UNIT_VEC
+
+local MeshPrefab = Instance.new("SpecialMesh")
+MeshPrefab.Name = "Mesh"
+MeshPrefab.MeshType = Enum.MeshType.Sphere
+MeshPrefab.Parent = DropletPrefab
+
+local DropletPool = createObjectPool(DropletPrefab, (Settings.Rate * Settings.Fade) * 3)
+DropletPrefab:Destroy()
+
+local function cleanup(object)
+	Animations[object] = nil
+	Offsets[object] = nil
+	DropletPool:Return(object)
+end
+
+local function underObject(position, length)
+	local remaining = length or 120
+	local origin = position
+	local ignoreList = getIgnoreList()
+	local raycastParams = RaycastParams.new()
+	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+	raycastParams.FilterDescendantsInstances = ignoreList
+	raycastParams.IgnoreWater = true
+
+	for _ = 1, 32 do
+		local result = workspace:Raycast(origin, UP_VEC * remaining, raycastParams)
+		if not result then
+			return false
+		end
+
+		local hit = result.Instance
+		if not hit:IsA("BasePart") or hit.Transparency < 1 then
+			return true
+		end
+
+		table.insert(ignoreList, hit)
+		raycastParams.FilterDescendantsInstances = ignoreList
+		remaining -= (result.Position - origin).Magnitude + 0.01
+		if remaining <= 0 then
+			return false
+		end
+		origin = result.Position + UP_VEC * 0.01
+	end
+
+	return false
+end
+
+local function createDroplet()
+	local scale = Settings.Size * (0.8 + math.random() * 0.4)
+	local mainOffset = CFrame.new(math.random() * 2.4 - 1.2, math.random() * 2 - 1, -1)
+
+	local function addDroplet(partScale, offset)
+		local droplet = DropletPool:Get()
+		local mesh = droplet:FindFirstChild("Mesh")
+		mesh.Scale = Vector3.new(partScale, partScale, partScale)
+		mesh.Offset = EMPTY_VEC
+		droplet.Color = Settings.Tint
+		droplet.Transparency = 0.7
+		Offsets[droplet] = offset
+		Animations[droplet] = {
+			startClock = os.clock(),
+			scale = partScale,
+			stretch = (0.5 + math.random() * 0.5) * partScale,
+			mesh = mesh,
+		}
+		droplet.Parent = ScreenDroplets
+	end
+
+	addDroplet(scale, mainOffset)
+
+	for _ = 1, math.random(1, 4) do
+		local extrusionScale = math.max(scale / 1.5 + ((math.random() * 2 - 1) * (scale / 3)), scale * 0.1)
+		local radius = extrusionScale * 0.6
+		local extrusionOffset = mainOffset * CFrame.new(math.random() * 2 * radius - radius, math.random() * 2 * radius - radius, 0)
+		addDroplet(extrusionScale, extrusionOffset)
+	end
+end
+
+task.spawn(function()
+	local accumulatedChance = 0
+	local lastCheck = os.clock()
+
+	while true do
+		task.wait(math.max(Settings.UpdateFreq, 1 / 240))
+		local now = os.clock()
+
+		for droplet, data in pairs(Animations) do
+			local elapsed = now - data.startClock
+			if elapsed >= Settings.Fade then
+				cleanup(droplet)
+			else
+				local alpha = elapsed / Settings.Fade
+				local y = data.scale + data.stretch * alpha * alpha * alpha * alpha
+				droplet.Transparency = 0.7 + 0.3 * alpha * alpha
+				data.mesh.Scale = Vector3.new(data.scale, y, data.scale)
+				data.mesh.Offset = Vector3.new(0, y / -2, 0)
+			end
+		end
+
+		if GlassGraphics and CameraCF.LookVector.Y > -0.4 and not underObject(CameraCF.Position) then
+			accumulatedChance += (now - lastCheck) * Settings.Rate
+			local count = math.floor(accumulatedChance)
+			for _ = 1, count do
+				createDroplet()
+			end
+			accumulatedChance %= 1
+		else
+			accumulatedChance %= 1
+		end
+
+		lastCheck = now
+	end
+end)
+
+--!nonstrict
+-- RealRain v4 | client | glass droplets that sit / slide / drip off parts, bodies, accessories, special meshes
+-- + falling glass drops + settings panel. API: getgenv().RealRain
+-- v4: physically based. Drop sizes, fall speeds, wind slant, sliding, pinning and drips are computed in SI units
+--     (see the PHYSICS section) and follow Workspace.Gravity. Default preset: HIGH.
+
+local env = (getgenv and getgenv()) or _G
+if env.RealRain then pcall(env.RealRain.Destroy) end
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+local AssetService = game:GetService("AssetService")
+local plr = Players.LocalPlayer
+
+local rng = Random.new()
+local V3 = Vector3.new
+local floor, max, min, sqrt, sin, cos, exp, pi, rad = math.floor, math.max, math.min, math.sqrt, math.sin, math.cos, math.exp, math.pi, math.rad
+local ZERO = Vector3.zero
+local function rand(a, b) return a + (b - a) * rng:NextNumber() end
+local function clamp(x, a, b) return x < a and a or (x > b and b or x) end
+local function rem(t, i) t[i] = t[#t]; t[#t] = nil end
+
+---------------------------------------------------------------- config
+local CFG = {
+	Enabled = true, Rate = 110, MaxParts = 1400, Material = "Glass", WaterColor = 1, CastShadow = false, AutoQuality = true, TargetFPS = 42,
+	WorldScale = 3.571, Intensity = 30, DropMinMM = 0.6, DropMaxMM = 5.8, Shutter = 0.02,
+	FallRate = 1700, MaxFall = 1900, FallWidth = 0.035, FallTrans = 0.95, FallSplash = 0.06,
+	FallNearRadius = 24, FallFarRadius = 70, FallNearShare = 0.6,
+	DropSize = 0.08, NominalDiameter = 3, SizeMin = 0.6, SizeMax = 1.4, TransMin = 0.5, TransMax = 0.75, Flatness = 0.5, AppearTime = 0.12,
+	SlideChance = 0.4, MaxSliders = 80, MinFlow = 0.15, SlideStretch = 0.6, Hysteresis = 1, ContactFriction = 0.15, FilmThickness = 12,
+	StaticLifeMin = 1.5, StaticLifeMax = 3, SliderLifeMin = 2, SliderLifeMax = 4,
+	Trails = true, StepMin = 0.04, StepMax = 0.09, WidthMin = 0.4, WidthMax = 0.7, AgeTaper = 0.5, TrailLifeMin = 1, TrailLifeMax = 2,
+	Drips = true, DetachAngle = -0.4, Relanding = true,
+	AreaRadius = 30, BodyRate = 120,
+	Wind = false, WindDir = 0, WindStrength = 6, Gustiness = 0.4, GustSpeed = 0.6, SlideInfluence = 0.3,
+	Wobble = 0.2, WobbleSpeed = 8, NormalSmoothing = 0.3, SeamForgive = 0.15, SurfaceSnap = 0.15,
+	PreciseMesh = true,
+	Shelter = true, RoofHeight = 50,
+}
+local PRESETS = {
+	LOW = { Rate = 45, MaxParts = 450, FallRate = 500, MaxFall = 600, MaxSliders = 20, Trails = false, PreciseMesh = false },
+	MEDIUM = { Rate = 75, MaxParts = 800, FallRate = 1000, MaxFall = 1200, MaxSliders = 45, Trails = true, PreciseMesh = true },
+	HIGH = { Rate = 110, MaxParts = 1400, FallRate = 1700, MaxFall = 1900, MaxSliders = 80, Trails = true, PreciseMesh = true },
+	ULTRA = { Rate = 170, MaxParts = 2400, FallRate = 2400, MaxFall = 2600, MaxSliders = 130, Trails = true, PreciseMesh = true },
+}
+local MATS = { "Glass", "Ice", "SmoothPlastic", "Plastic", "ForceField", "Neon" }
+local COLORS = {
+	Color3.fromRGB(205, 228, 247), Color3.fromRGB(255, 255, 255), Color3.fromRGB(120, 190, 255),
+	Color3.fromRGB(150, 240, 170), Color3.fromRGB(255, 175, 135),
+}
+
+-- contact-angle hysteresis (cos receding - cos advancing) per surface: how hard the surface pins a bead.
+-- smooth hard surfaces are low (beads run), rough / absorbent ones are high (beads sit or soak in).
+local HYST = {
+	Glass = 0.20, Ice = 0.18, Glacier = 0.20, Foil = 0.25, Metal = 0.30, SmoothPlastic = 0.30, Neon = 0.30, ForceField = 0.30,
+	CeramicTiles = 0.30, Plastic = 0.35, Marble = 0.35, DiamondPlate = 0.45, Granite = 0.45,
+	Wood = 0.60, WoodPlanks = 0.60, Slate = 0.60, Rubber = 0.70, ClayRoofTiles = 0.70, CorrodedMetal = 0.75,
+	Concrete = 0.80, RoofShingles = 0.80, Leather = 0.80, Plaster = 0.90, Brick = 0.90, Asphalt = 0.90, Pavement = 0.90,
+	Basalt = 0.90, Rock = 0.90, Limestone = 0.90, Cobblestone = 0.90, Pebble = 0.90, CrackedLava = 1.0,
+	Sandstone = 1.4, Cardboard = 1.6, Grass = 1.6, LeafyGrass = 1.6, Fabric = 2.5, Carpet = 2.5,
+	Sand = 3, Ground = 3, Mud = 3, Salt = 3, Snow = 3,
+}
+
+---------------------------------------------------------------- state
+local alive = true
+local conns = {}
+local now, dt = os.clock(), 1 / 60
+local q, fpsAvg = 1, 60
+local cam = Workspace.CurrentCamera
+local camPos, flatLook = ZERO, ZERO
+local W, rainDir = ZERO, V3(0, -1, 0)
+local rays, rayCap, splashN = 0, 50, 0
+local camSh = false
+
+local rainF = Instance.new("Folder"); rainF.Name = "RealRain"; rainF.Parent = Workspace
+local proxyF = Instance.new("Folder"); proxyF.Name = "RealRainProxies"; proxyF.Parent = Workspace
+
+local rp, sp = RaycastParams.new(), RaycastParams.new()
+rp.FilterType = Enum.RaycastFilterType.Exclude
+sp.FilterType = Enum.RaycastFilterType.Exclude
+local excl, proxyOf, models = {}, {}, {}
+local filtersDirty = true
+
+local function setFilters()
+	local a = { rainF }
+	if cam then a[#a + 1] = cam end
+	for i = #excl, 1, -1 do
+		if excl[i].Parent == nil then rem(excl, i) else a[#a + 1] = excl[i] end
+	end
+	rp.FilterDescendantsInstances = a
+	local b = { rainF, proxyF }
+	if cam then b[#b + 1] = cam end
+	for _, m in ipairs(models) do b[#b + 1] = m end
+	sp.FilterDescendantsInstances = b
+	filtersDirty = false
+end
+
+local function ray(o, d)
+	rays += 1
+	local r = Workspace:Raycast(o, d, rp)
+	if r then
+		local i = r.Instance
+		local base = proxyOf[i] or i
+		if base.Transparency > 0.9 or base.LocalTransparencyModifier > 0.9 then return nil end
+	end
+	return r
+end
+
+local function sheltered(p)
+	if not CFG.Shelter then return false end
+	local r = Workspace:Raycast(p, -rainDir * CFG.RoofHeight, sp)
+	return r ~= nil and r.Instance.Transparency < 0.8
+end
+
+local function perp(n)
+	local a = n:Cross(Vector3.yAxis)
+	if a.Magnitude < 0.1 then a = n:Cross(Vector3.xAxis) end
+	return a.Unit
+end
+local function frame(pos, up, dir)
+	local x = dir and (dir - up * dir:Dot(up)) or nil
+	if not x or x.Magnitude < 1e-4 then x = perp(up) else x = x.Unit end
+	return CFrame.fromMatrix(pos, x, up)
+end
+
+---------------------------------------------------------------- physics (SI based)
+-- Everything dynamic is evaluated in SI units and converted to studs with two numbers:
+--   WorldScale  studs per metre (Roblox convention: 1 stud = 0.28 m = 3.571 studs/m)
+--   time scale  chosen so that Workspace.Gravity equals 9.81 m/s^2 in that unit system. Falling drops, drips and sliding
+--               beads therefore obey the same gravity as every other part in the game, and follow it if a game changes it.
+-- Models: Marshall-Palmer drop sizes, Atlas et al. terminal speeds, quadratic air drag (wind = relative velocity),
+-- Furmidge's sliding condition for a bead on a plate (gravity vs contact-line pinning) with viscous contact-line friction.
+local G0, RHO_W, GAMMA, K_WIND = 9.81, 1000, 0.072, 9.0e-4
+local REF_SPEED = 72 -- fall speed (studs/s) that FallRate / MaxFall were tuned at; keeps the visual rain density unchanged
+local GE = Workspace.Gravity
+local LS, TS, VS, AS = 3.571, 2.366, 8.452, 20 -- studs/m, rate scale, velocity scale (studs/s per m/s), acceleration scale
+local lamV, meanD, rainSpeed = 2, 2, REF_SPEED
+
+local function terminalSpeed(dmm) -- m/s for a drop of dmm millimetres (Atlas et al. 1973 fit to Gunn & Kinzer)
+	if dmm < 0.3 then dmm = 0.3 end
+	return 9.65 - 10.3 * exp(-0.6 * dmm)
+end
+
+local function sampleDiameter() -- mm; mass-weighted Marshall-Palmer (the drops that actually carry the rain) = Gamma(4, 1/lambda)
+	local theta = 1 / lamV
+	for _ = 1, 4 do
+		local d = -theta * math.log(rng:NextNumber() * rng:NextNumber() * rng:NextNumber() * rng:NextNumber() + 1e-9)
+		if d >= CFG.DropMinMM and d <= CFG.DropMaxMM then return d end
+	end
+	return meanD
+end
+
+local function updatePhysics()
+	GE = max(Workspace.Gravity, 1)
+	LS = max(CFG.WorldScale, 0.1)
+	AS = GE / G0
+	TS = sqrt(AS / LS)
+	VS = LS * TS
+	lamV = 4.1 * max(CFG.Intensity, 0.1) ^ (-0.21) -- Marshall-Palmer slope (1/mm)
+	meanD = clamp(4 / lamV, CFG.DropMinMM, CFG.DropMaxMM)
+end
+
+-- accelerations on a bead sitting on a surface with normal n (studs/s^2): the driving push along the surface, and the pinning threshold
+local function forces(n, Dm, hyst, flow, out)
+	local drive = V3(0, -GE, 0)
+	drive = drive - n * drive:Dot(n)
+	if W.X ~= 0 or W.Z ~= 0 then -- aerodynamic drag of the wind on the bead (reduced by the boundary layer: SlideInfluence)
+		local wt = W - n * W:Dot(n)
+		local wm = wt.Magnitude
+		if wm > 1e-3 then
+			local u = wm / VS * CFG.SlideInfluence
+			drive = drive + wt * ((K_WIND * u * u / Dm * AS) / wm)
+		end
+	end
+	if flow then -- small tops: water films over the rim, so no pinning and a gentle push toward the edge
+		if drive.Magnitude < GE * 0.2 then drive = drive + out * (GE * 0.3) end
+		return drive, 0
+	end
+	return drive, 6 * GAMMA * hyst / (pi * RHO_W * Dm * Dm) * AS -- Furmidge: m*g*sin(a) > gamma*w*(cos_r - cos_a), w ~ D
+end
+
+---------------------------------------------------------------- bead pool (every droplet / trail / drip is one of these)
+local free, beads = {}, {}
+local MAT, COL = Enum.Material.Glass, COLORS[1]
+
+local function newBead()
+	local p = Instance.new("Part")
+	p.Anchored = true; p.CanCollide = false; p.CanTouch = false; p.CanQuery = false
+	p.CastShadow = CFG.CastShadow; p.Material = MAT; p.Color = COL
+	p.Size = V3(0.05, 0.05, 0.05)
+	local m = Instance.new("SpecialMesh"); m.MeshType = Enum.MeshType.Sphere; m.Parent = p
+	beads[#beads + 1] = p
+	return p
+end
+local function getBead()
+	local p = table.remove(free)
+	if p then return p end
+	if #beads >= CFG.MaxParts then return nil end
+	return newBead()
+end
+local function drop(p) p.Parent = nil; free[#free + 1] = p end
+
+local mvP, mvC, mvN = {}, {}, 0
+local function mv(p, cf) mvN += 1; mvP[mvN] = p; mvC[mvN] = cf end
+
+local S, L, T, D, V = {}, {}, {}, {}, {} -- statics, sliders, trails, drips, vanishing
+local function vanish(p, size) V[#V + 1] = { p = p, t0 = now, sz = size } end
+
+---------------------------------------------------------------- splash particles
+local splashes, splashI = {}, 0
+for i = 1, 16 do
+	local a = Instance.new("Attachment"); a.Parent = Workspace.Terrain
+	local e = Instance.new("ParticleEmitter")
+	e.Enabled = false; e.Rate = 0
+	e.Lifetime = NumberRange.new(0.16, 0.3)
+	e.Speed = NumberRange.new(3, 7)
+	e.SpreadAngle = Vector2.new(55, 55)
+	e.Acceleration = V3(0, -60, 0)
+	e.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.07), NumberSequenceKeypoint.new(1, 0.02) })
+	e.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.35), NumberSequenceKeypoint.new(1, 1) })
+	e.Color = ColorSequence.new(Color3.fromRGB(225, 238, 250))
+	e.LightEmission = 0.2; e.LockedToPart = false
+	e.Parent = a
+	splashes[i] = { a = a, e = e }
+end
+local function splash(pos, n, cnt)
+	if splashN >= 6 or not CFG.Enabled then return end
+	splashN += 1
+	splashI = splashI % #splashes + 1
+	local s = splashes[splashI]
+	s.a.WorldCFrame = frame(pos + n * 0.02, n)
+	s.e:Emit(cnt or 2)
+end
+
+local pGE, pLS = 0, 0
+local function syncSplash() -- ejected droplets are ballistic too: world gravity, ~0.6-1.8 m/s ejection, flight time follows
+	local flight = 2.2 * VS / GE
+	for _, s in ipairs(splashes) do
+		s.e.Acceleration = V3(0, -GE, 0)
+		s.e.Speed = NumberRange.new(0.6 * VS, 1.8 * VS)
+		s.e.Lifetime = NumberRange.new(flight * 0.5, flight * 1.5)
+	end
+end
+
+---------------------------------------------------------------- droplets
+local newDrop, startDrip, isBodyPart
+local ap = 0.12
+
+function newDrop(res, sizeMul)
+	local inst, n, pos = res.Instance, res.Normal, res.Position
+	if res.Material == Enum.Material.Water then return end
+	local dist = (pos - camPos).Magnitude
+	if dist > 85 then return end
+	if n.Y > 0.3 and rng:NextNumber() < 0.5 then splash(pos, n, 2) end
+	local p = getBead()
+	if not p then return end
+	local f = rand(CFG.SizeMin, CFG.SizeMax) * (sizeMul or 1) -- one random factor drives the drawn size and the physical diameter
+	local sz = CFG.DropSize * f * (1 + dist / 40)
+	local Dm = CFG.NominalDiameter * f * 0.001 -- bead diameter in metres
+	local fl = CFG.Flatness
+	local tr = rand(CFG.TransMin, CFG.TransMax)
+	p.Transparency = tr
+	p.Size = V3(sz, sz * fl, sz) * 0.25
+	local cf = frame(pos + n * (sz * fl * 0.2), n)
+	p.CFrame = cf
+	p.Parent = rainF
+
+	local host, hcf = nil, nil
+	if not inst.Anchored then host = inst; hcf = inst.CFrame end
+
+	-- can this bead run? gravity along the surface (+ wind) has to beat the contact-line pinning of its material
+	if #L < CFG.MaxSliders * q and dist < 60 and rng:NextNumber() < CFG.SlideChance then
+		local body = isBodyPart(proxyOf[inst] or inst)
+		local hBase = body and 0.45 or (HYST[res.Material.Name] or 0.5)
+		local hyst = hBase * CFG.Hysteresis * rand(0.75, 1.3)
+		local small = n.Y > 0.5 and inst.Size.Magnitude < 14 and hBase < 1.2
+		local out = pos - inst.Position
+		out = out - n * out:Dot(n)
+		out = out.Magnitude > 1e-3 and out.Unit or perp(n)
+		local drive, pin = forces(n, Dm, hyst, small, out)
+		if drive.Magnitude > pin * 1.1 or n.Y < CFG.DetachAngle then
+			local V0 = pi * Dm * Dm * Dm / 6
+			local s = {
+				p = p, pos = pos, nrm = n, vel = ZERO, sz = sz, sz0 = sz, fl = fl, tr = tr,
+				sw = sz * rand(CFG.WidthMin, CFG.WidthMax), th = sz * fl * 0.6,
+				tail = pos, born = now, life = rand(CFG.SliderLifeMin, CFG.SliderLifeMax),
+				acc = 0, nxt = rand(CFG.StepMin, CFG.StepMax), ph = rand(0, 6.28),
+				out = out, flow = small, slow = 0, host = host, hcf = hcf, hi = inst,
+				segMax = max(sz * 5, 0.25),
+				Dm = Dm, Dm0 = Dm, V = V0, V0 = V0, hyst = hyst,
+			}
+			s.sw0 = s.sw
+			if CFG.Trails then
+				local seg = getBead()
+				if seg then
+					seg.Transparency = min(1, tr + 0.12); seg.Size = V3(0.01, 0.01, 0.01)
+					seg.CFrame = cf; seg.Parent = rainF
+					s.seg = seg
+				end
+			end
+			L[#L + 1] = s
+			return
+		end
+	end
+	S[#S + 1] = {
+		p = p, pos = pos, nrm = n, sz = sz, fl = fl, cf = cf, born = now,
+		life = rand(CFG.StaticLifeMin, CFG.StaticLifeMax), host = host, hcf = hcf,
+	}
+end
+
+function startDrip(pos, vel, sz, bead, Dm)
+	if not CFG.Drips or #D >= 60 then
+		vanish(bead, bead.Size)
+		return
+	end
+	D[#D + 1] = { p = bead, pos = pos, vel = vel, sz = sz, born = now, vt = terminalSpeed((Dm or 0.003) * 1000) }
+end
+
+local function segCF(s, a, b)
+	local d = b - a
+	local l = d.Magnitude
+	if l < 1e-4 then return nil, nil end
+	return V3(l + s.sw, s.th, s.sw), frame((a + b) * 0.5 + s.nrm * (s.th * 0.25), s.nrm, d / l)
+end
+
+local function stampTrail(s, keep)
+	local seg = s.seg
+	if not seg then return end
+	local size, cf = segCF(s, s.tail, s.pos)
+	if not size then
+		if not keep then drop(seg); s.seg = nil end
+		return
+	end
+	seg.Size = size; seg.CFrame = cf
+	T[#T + 1] = {
+		p = seg, born = now, life = rand(CFG.TrailLifeMin, CFG.TrailLifeMax), len = size.X, th = s.th, sw = s.sw,
+		t0 = seg.Transparency, nu = now + 0.1, host = s.host, hcf = s.hcf, cf = cf,
+	}
+	s.seg = nil
+	if keep then
+		local nb = getBead()
+		if nb then
+			nb.Transparency = min(1, s.tr + 0.12); nb.Size = V3(0.01, 0.01, 0.01)
+			nb.CFrame = cf; nb.Parent = rainF
+			s.seg = nb
+		end
+	end
+	s.tail = s.pos
+end
+
+local function finishSlider(s)
+	stampTrail(s, false)
+	vanish(s.p, s.p.Size)
+end
+
+-- returns 0 = keep, 1 = end, 2 = became a drip
+local function stepSlider(s, h)
+	local n, pos = s.nrm, s.pos
+
+	-- pendant bead: on an underside it hangs, elongates as it swells, then pinches off from rest
+	if not s.hang and n.Y < CFG.DetachAngle then
+		stampTrail(s, false)
+		s.hang = now; s.hangT = rand(0.12, 0.4); s.fl0 = s.fl; s.vel = ZERO
+	end
+	if s.hang then
+		local k = clamp((now - s.hang) / s.hangT, 0, 1)
+		s.fl = s.fl0 + (1.15 - s.fl0) * k * k
+		if k >= 1 then
+			startDrip(pos + n * 0.02, ZERO, s.sz, s.p, s.Dm)
+			return 2
+		end
+		return 0
+	end
+
+	-- force balance along the surface: gravity + wind shear - contact-line pinning, resisted by contact-line friction
+	local drive, pin = forces(n, s.Dm, s.hyst, s.flow, s.out)
+	local dm = drive.Magnitude
+	local net = dm > pin and drive * (1 - pin / dm) or ZERO
+	local cE = 6 * CFG.ContactFriction / (pi * RHO_W * s.Dm * s.Dm) * TS
+	local v = (s.vel + net * h) / (1 + cE * h)
+	v = v - n * v:Dot(n)
+	local spd = v.Magnitude
+	if spd < CFG.MinFlow then s.slow += h else s.slow = 0 end
+	if s.slow > 0.4 then return 1 end
+
+	local d = v * h
+	if spd > 0.02 then
+		d = d + n:Cross(v / spd) * (sin(now * CFG.WobbleSpeed + s.ph) * CFG.Wobble * spd * h)
+	end
+	local dl = d.Magnitude
+	if dl < 1e-5 then s.vel = v; return 0 end
+	local dir = d / dl
+	local snap = CFG.SurfaceSnap
+	local np = pos + d
+	local res
+
+	-- obstacle ahead (inner corner / wall)
+	res = ray(pos + n * snap, dir * (dl + s.sz * 0.6))
+	if res and res.Normal:Dot(n) < 0.95 then
+		np = res.Position
+	else
+		res = ray(np + n * snap, -n * (snap * 2 + s.sz))
+		if not res then
+			res = ray(np + dir * CFG.SeamForgive + n * snap, -n * (snap * 2 + s.sz))
+		end
+		if not res then
+			-- wrap around the edge onto the side face
+			res = ray(np - n * 0.3, -dir * (dl + 0.4))
+		end
+		if not res then
+			-- ran off an edge: the bead leaves with the speed it had
+			stampTrail(s, false)
+			startDrip(np + n * 0.01, v, s.sz, s.p, s.Dm)
+			return 2
+		end
+	end
+
+	local rn = res.Normal
+	local nn
+	if n:Dot(rn) > 0.5 then
+		nn = n * CFG.NormalSmoothing + rn * (1 - CFG.NormalSmoothing)
+		nn = nn.Magnitude > 1e-3 and nn.Unit or rn
+	else
+		nn = rn
+	end
+	s.pos = res.Position; s.nrm = nn
+	s.vel = v - nn * v:Dot(nn)
+	local hi = res.Instance
+	if hi ~= s.hi then
+		s.hi = hi
+		if hi.Anchored then s.host = nil; s.hcf = nil else s.host = hi; s.hcf = hi.CFrame end
+	end
+
+	-- the moving bead leaves a thin film behind it: it loses volume, shrinks, and stops once pinning wins (pinning grows as 1/D^2)
+	local ds = (res.Position - pos).Magnitude / LS
+	s.V -= 0.5 * s.Dm * CFG.FilmThickness * 1e-6 * ds
+	if s.V < s.V0 * 0.166 then return 1 end
+	s.Dm = (6 * s.V / pi) ^ (1 / 3)
+	local sh = s.Dm / s.Dm0
+	s.sz = s.sz0 * sh; s.th = s.sz * s.fl * 0.6; s.sw = s.sw0 * sh
+
+	if s.seg and (s.pos - s.tail).Magnitude >= s.segMax then stampTrail(s, true) end
+	return 0
+end
+
+local function drawSlider(s)
+	local age = now - s.born
+	local k = min(1, 0.25 + 0.75 * age / ap)
+	local spd = s.vel.Magnitude
+	local dir = spd > 0.02 and s.vel / spd or s.out
+	local pp = s.pos + s.vel * s.acc
+	local n = s.nrm
+	local st = 1 + CFG.SlideStretch * clamp(spd / 3, 0, 1) * 2
+	s.p.Size = V3(s.sz * st, s.sz * s.fl, s.sz) * k
+	mv(s.p, frame(pp + n * (s.sz * s.fl * 0.2), n, dir))
+	if s.seg then
+		local size, cf = segCF(s, s.tail, pp)
+		if size then s.seg.Size = size; mv(s.seg, cf) end
+	end
+end
+
+---------------------------------------------------------------- precise characters (accessories / special meshes)
+local queued, pq = {}, {}
+local function scanChar(m)
+	if not CFG.PreciseMesh then return end
+	for _, d in ipairs(m:GetDescendants()) do
+		if not queued[d] then
+			if d:IsA("MeshPart") and d.MeshId ~= "" then
+				queued[d] = true
+				pq[#pq + 1] = { part = d, id = d.MeshId }
+			elseif d:IsA("SpecialMesh") and d.MeshType == Enum.MeshType.FileMesh and d.MeshId ~= "" and d.Parent and d.Parent:IsA("BasePart") then
+				queued[d] = true
+				pq[#pq + 1] = { part = d.Parent, id = d.MeshId, sm = d }
+			end
+		end
+	end
+end
+
+local function makeProxy(job)
+	local orig = job.part
+	if not orig.Parent or not CFG.PreciseMesh then return end
+	local mp = AssetService:CreateMeshPartAsync(Content.fromUri(job.id), { CollisionFidelity = Enum.CollisionFidelity.PreciseConvexDecomposition })
+	if not alive or not orig:IsDescendantOf(Workspace) then mp:Destroy(); return end
+	local off = CFrame.identity
+	if job.sm then
+		mp.Size = mp.Size * job.sm.Scale
+		off = CFrame.new(job.sm.Offset)
+	else
+		mp.Size = orig.Size
+	end
+	mp.CFrame = orig.CFrame * off
+	mp.Anchored = false; mp.CanCollide = false; mp.CanQuery = true; mp.CanTouch = false
+	mp.Massless = true; mp.Transparency = 1; mp.CastShadow = false
+	mp.Parent = proxyF
+	local w = Instance.new("WeldConstraint"); w.Part0 = orig; w.Part1 = mp; w.Parent = mp
+	proxyOf[mp] = orig
+	excl[#excl + 1] = orig
+	filtersDirty = true
+	orig.Destroying:Connect(function()
+		proxyOf[mp] = nil
+		mp:Destroy()
+		filtersDirty = true
+	end)
+end
+
+task.spawn(function()
+	while alive do
+		local job = table.remove(pq, 1)
+		if job then
+			pcall(makeProxy, job)
+			task.wait(0.12)
+		else
+			task.wait(0.4)
+		end
+	end
+end)
+
+---------------------------------------------------------------- characters / sheltered
+local chars, nextChars, nextScan = {}, 0, 0
+local function refreshChars()
+	local list, ms = {}, {}
+	for _, pl in ipairs(Players:GetPlayers()) do
+		local c = pl.Character
+		local r = c and c:FindFirstChild("HumanoidRootPart")
+		if r then
+			ms[#ms + 1] = c
+			if pl == plr or (r.Position - camPos).Magnitude < 55 then
+				list[#list + 1] = { m = c, r = r, loc = pl == plr, sh = false }
+			end
+		end
+	end
+	models = ms
+	filtersDirty = true
+	setFilters()
+	for _, c in ipairs(list) do c.sh = sheltered(c.r.Position + V3(0, 3, 0)) end
+	chars = list
+	if now >= nextScan then
+		nextScan = now + 2
+		for i = 1, min(#list, 6) do scanChar(list[i].m) end
+	end
+end
+
+---------------------------------------------------------------- falling drops
+local fallParts, fallFree, fallDrops = {}, {}, {}
+local fallSpawnAccumulator = 0
+local bodyDropAccumulator = 0
+local bodyPartCache = setmetatable({}, { __mode = "k" })
+
+function isBodyPart(instance)
+	local cached = bodyPartCache[instance]
+	if cached ~= nil then return cached end
+	local model = instance:FindFirstAncestorOfClass("Model")
+	local result = model ~= nil and model:FindFirstChildOfClass("Humanoid") ~= nil
+	bodyPartCache[instance] = result
+	return result
+end
+
+local function newFallDrop()
+	local part = Instance.new("Part")
+	part.Shape = Enum.PartType.Cylinder
+	part.Anchored = true; part.CanCollide = false; part.CanTouch = false; part.CanQuery = false
+	part.CastShadow = false; part.Material = MAT; part.Color = COL; part.Transparency = CFG.FallTrans
+	part.Size = V3(1, 0.05, 0.05)
+	fallParts[#fallParts + 1] = part
+	return { part = part }
+end
+
+local function fallRaycast(origin, direction)
+	local unit = direction.Unit
+	for _ = 1, 3 do
+		local result = Workspace:Raycast(origin, direction, rp)
+		if not result then return nil end
+		local base = proxyOf[result.Instance] or result.Instance
+		if base.Transparency <= 0.9 and base.LocalTransparencyModifier <= 0.9 then return result end
+		local advance = (result.Position - origin).Magnitude + 0.05
+		if advance >= direction.Magnitude then return nil end
+		origin = origin + unit * advance
+		direction = unit * (direction.Magnitude - advance)
+	end
+	return nil
+end
+
+local function spawnFallDrop(aimPoint)
+	local target = aimPoint
+	if not target then
+		local nearZone = rng:NextNumber() < CFG.FallNearShare
+		local zoneRadius = nearZone and CFG.FallNearRadius or CFG.FallFarRadius
+		local angle = rand(0, 2 * pi)
+		local offsetDistance = zoneRadius * sqrt(rng:NextNumber())
+		local center = camPos + flatLook * (zoneRadius * (nearZone and 0.35 or 0.5))
+		target = V3(center.X + cos(angle) * offsetDistance, camPos.Y, center.Z + sin(angle) * offsetDistance)
+	end
+	-- every drop has its own size, hence its own terminal speed; horizontally it moves with the air, so bigger drops fall steeper in wind
+	local diameter = sampleDiameter()
+	local velocity = V3(W.X, -terminalSpeed(diameter) * VS * rand(0.97, 1.03), W.Z)
+	local speed = velocity.Magnitude
+	local direction = velocity / speed
+	local startHeight = CFG.RoofHeight
+	local origin = target - direction * startHeight
+	local travelLimit = startHeight + 60
+	local hit = fallRaycast(origin, direction * travelLimit)
+	local travel = hit and (hit.Position - origin).Magnitude or travelLimit
+	local cameraDistance = (target - camPos).Magnitude
+	local length = speed * CFG.Shutter * (1 + cameraDistance / 60) -- motion-blur streak = speed x exposure time
+	local width = CFG.FallWidth * (diameter / 2) * (1 + cameraDistance / 35)
+	local lifetime = (travel - length * 0.5) / speed
+	if lifetime <= 0.02 then return end
+
+	local fallDrop = table.remove(fallFree) or newFallDrop()
+	local part = fallDrop.part
+	local rotation = CFrame.fromMatrix(ZERO, direction, direction:Cross(Vector3.xAxis).Unit)
+	local birth = now - rand(0, dt)
+	part.Size = V3(length, width, width)
+	part.Transparency = 1 - (1 - CFG.FallTrans) * clamp(diameter / 2, 0.35, 2) -- a streak's brightness scales with the drop's diameter
+	part.CFrame = rotation + (origin + velocity * (now - birth))
+	part.Parent = rainF
+	fallDrop.origin = origin
+	fallDrop.velocity = velocity
+	fallDrop.rotation = rotation
+	fallDrop.birth = birth
+	fallDrop.lifetime = lifetime
+	local hitBase = hit and (proxyOf[hit.Instance] or hit.Instance)
+	fallDrop.onBody = hitBase ~= nil and isBodyPart(hitBase)
+	fallDrop.landing = not fallDrop.onBody and hit and hit.Material ~= Enum.Material.Water and hit.Normal.Y > 0.3 and hit.Position or nil
+	fallDrop.normal = fallDrop.landing and hit.Normal or nil
+	fallDrops[#fallDrops + 1] = fallDrop
+end
+
+
+---------------------------------------------------------------- gui
+local function parentGui(g)
+	local ok = pcall(function() g.Parent = gethui and gethui() or plr:WaitForChild("PlayerGui") end)
+	if not ok then g.Parent = plr:WaitForChild("PlayerGui") end
+end
+---------------------------------------------------------------- spawn rays
+local function areaRay()
+	local R = CFG.AreaRadius
+	local a, r = rand(0, 2 * pi), R * sqrt(rng:NextNumber())
+	local c = camPos + flatLook * (R * 0.4)
+	local target = V3(c.X + cos(a) * r, camPos.Y, c.Z + sin(a) * r)
+	local H = CFG.RoofHeight
+	local vel = V3(W.X, -terminalSpeed(sampleDiameter()) * VS, W.Z)
+	local dir = vel.Unit
+	local res = ray(target - dir * H, dir * (H + 90))
+	if res and not isBodyPart(proxyOf[res.Instance] or res.Instance) then newDrop(res, 1) end
+end
+
+---------------------------------------------------------------- main update
+local spawnAcc, nextCam = 0, 0
+local function update(delta)
+	dt = clamp(delta, 1 / 240, 0.1)
+	now = os.clock()
+	rays, splashN = 0, 0
+	cam = Workspace.CurrentCamera
+	if not cam then return end
+	local cf = cam.CFrame
+	camPos = cf.Position
+	local lk = cf.LookVector
+	flatLook = V3(lk.X, 0, lk.Z)
+	flatLook = flatLook.Magnitude > 0.01 and flatLook.Unit or ZERO
+
+	-- quality governor
+	fpsAvg += (1 / dt - fpsAvg) * 0.04
+	if CFG.AutoQuality then
+		if fpsAvg < CFG.TargetFPS then q = max(0.3, q - dt * 0.15)
+		elseif fpsAvg > CFG.TargetFPS + 8 then q = min(1, q + dt * 0.05) end
+	else q = 1 end
+	rayCap = floor(40 * q) + 10
+
+	-- physics scales follow Workspace.Gravity / WorldScale / Intensity live
+	updatePhysics()
+	if GE ~= pGE or LS ~= pLS then pGE, pLS = GE, LS; syncSplash() end
+
+	-- wind: horizontal air velocity (m/s -> studs/s). Drops move with the air sideways and fall at their own terminal speed
+	if CFG.Wind then
+		local a = rad(CFG.WindDir)
+		local gust = 1 + CFG.Gustiness * math.noise(now * CFG.GustSpeed, 17.3) * 2
+		W = V3(sin(a), 0, cos(a)) * (CFG.WindStrength * max(gust, 0) * VS)
+	else W = ZERO end
+	local rainVel = V3(W.X, -terminalSpeed(meanD) * VS, W.Z) -- representative drop: used for roof checks and the density scaling
+	rainDir = rainVel.Unit
+	rainSpeed = rainVel.Magnitude
+
+	if filtersDirty then setFilters() end
+	if now >= nextChars then nextChars = now + 0.5; refreshChars() end
+	if now >= nextCam then nextCam = now + 0.25; camSh = sheltered(camPos) end
+	ap = max(CFG.AppearTime, 0.02)
+
+	-- spawn
+	if CFG.Enabled and not camSh then
+		local want = CFG.Rate * q * dt + spawnAcc
+		local n = floor(want)
+		spawnAcc = want - n
+		for _ = 1, min(n, 8) do
+			if rays >= rayCap then break end
+			areaRay()
+		end
+	else spawnAcc = 0 end
+
+	-- statics
+	for i = #S, 1, -1 do
+		local o = S[i]
+		local age = now - o.born
+		if age >= o.life then
+			vanish(o.p, V3(o.sz, o.sz * o.fl, o.sz)); rem(S, i)
+		else
+			if age < ap then
+				o.p.Size = V3(o.sz, o.sz * o.fl, o.sz) * (0.25 + 0.75 * age / ap)
+			elseif not o.full then
+				o.p.Size = V3(o.sz, o.sz * o.fl, o.sz); o.full = true
+			end
+			local h = o.host
+			if h then
+				if h.Parent == nil then
+					drop(o.p); rem(S, i)
+				else
+					local c = h.CFrame
+					if c ~= o.hcf then
+						local d = c * o.hcf:Inverse()
+						o.hcf = c; o.cf = d * o.cf
+						mv(o.p, o.cf)
+					end
+				end
+			end
+		end
+	end
+
+	-- sliders
+	for i = #L, 1, -1 do
+		local s = L[i]
+		local status = 0
+		local h = s.host
+		if h then
+			if h.Parent == nil then
+				status = 1
+			else
+				local c = h.CFrame
+				if c ~= s.hcf then
+					local d = c * s.hcf:Inverse()
+					s.hcf = c
+					s.pos = d * s.pos; s.tail = d * s.tail
+					s.nrm = d:VectorToWorldSpace(s.nrm)
+					s.vel = d:VectorToWorldSpace(s.vel)
+					s.out = d:VectorToWorldSpace(s.out)
+				end
+			end
+		end
+		if status == 0 then
+			if now - s.born > s.life then
+				status = 1
+			else
+				s.acc += dt
+				if s.acc >= s.nxt and rays < rayCap then
+					local hh = min(s.acc, 0.15)
+					s.acc = 0; s.nxt = rand(CFG.StepMin, CFG.StepMax)
+					status = stepSlider(s, hh)
+				end
+			end
+		end
+		if status == 1 then finishSlider(s); rem(L, i)
+		elseif status == 2 then rem(L, i)
+		else drawSlider(s) end
+	end
+
+	-- trails
+	for i = #T, 1, -1 do
+		local t = T[i]
+		local age = now - t.born
+		if age >= t.life then
+			drop(t.p); rem(T, i)
+		else
+			local h = t.host
+			if h then
+				if h.Parent == nil then
+					drop(t.p); rem(T, i); continue
+				end
+				local c = h.CFrame
+				if c ~= t.hcf then
+					local d = c * t.hcf:Inverse()
+					t.hcf = c; t.cf = d * t.cf
+					mv(t.p, t.cf)
+				end
+			end
+			if now >= t.nu then
+				local f = age / t.life
+				local k = 1 - CFG.AgeTaper * f
+				t.p.Size = V3(t.len, t.th * k, t.sw * k)
+				t.p.Transparency = t.t0 + (1 - t.t0) * f * f * f
+				t.nu = now + t.life / 10
+			end
+		end
+	end
+
+	-- drips: ballistic under world gravity, with quadratic air drag toward each bead's own terminal speed (relative to the wind)
+	for i = #D, 1, -1 do
+		local d = D[i]
+		local h = min(dt, 0.05)
+		local vtE = d.vt * VS
+		local c = GE * (d.vel - W).Magnitude / (vtE * vtE)
+		local v = (d.vel + (V3(0, -GE, 0) + W * c) * h) / (1 + c * h)
+		local rel = v - W -- speed through the air can't overshoot terminal speed on a long frame (a bead dropped into a gust may start above it)
+		local relMax = max(vtE * 1.1, (d.vel - W).Magnitude)
+		local relMag = rel.Magnitude
+		if relMag > relMax then v = W + rel * (relMax / relMag) end
+		local spd = v.Magnitude
+		local step = v * h
+		local done = false
+		if now - d.born > 3.5 or d.pos.Y < camPos.Y - 160 then
+			done = true
+		else
+			local res = nil
+			if rays < rayCap + 25 then res = ray(d.pos, step + v.Unit * d.sz) end
+			if res then
+				if res.Material ~= Enum.Material.Water then
+					splash(res.Position, res.Normal, 2)
+					if CFG.Relanding then newDrop(res, 1.1) end
+				end
+				done = true
+			else
+				d.pos = d.pos + step; d.vel = v
+				local dirv = v / max(spd, 1e-3)
+				d.p.Size = V3(d.sz + spd * CFG.Shutter, d.sz * 0.9, d.sz * 0.9) -- motion blur grows with speed
+				mv(d.p, frame(d.pos, perp(dirv), dirv))
+			end
+		end
+		if done then drop(d.p); rem(D, i) end
+	end
+
+
+	-- vanishing
+	for i = #V, 1, -1 do
+		local v = V[i]
+		local k = 1 - (now - v.t0) / 0.18
+		if k <= 0 then drop(v.p); rem(V, i) else v.p.Size = v.sz * k end
+	end
+
+	if CFG.Enabled and not camSh then
+		local wantedDrops = CFG.FallRate * q * dt * (rainSpeed / REF_SPEED) + fallSpawnAccumulator
+		local spawnCount = floor(wantedDrops)
+		fallSpawnAccumulator = wantedDrops - spawnCount
+		for _ = 1, min(spawnCount, 100) do
+			if #fallDrops >= CFG.MaxFall then break end
+			spawnFallDrop()
+		end
+
+		if #chars > 0 then
+			local wantedBodyDrops = CFG.BodyRate * q * dt * min(#chars, 6) + bodyDropAccumulator
+			local bodySpawnCount = floor(wantedBodyDrops)
+			bodyDropAccumulator = wantedBodyDrops - bodySpawnCount
+			for _ = 1, min(bodySpawnCount, 60) do
+				if #fallDrops >= CFG.MaxFall then break end
+				local character = chars[rng:NextInteger(1, #chars)]
+				local cameraInsideLocal = character.loc and (camPos - character.r.Position).Magnitude < 2.2
+				if not character.sh and not cameraInsideLocal then
+					spawnFallDrop(character.r.Position + V3(rand(-1.7, 1.7), 0, rand(-1.7, 1.7)))
+				end
+			end
+		end
+	else
+		fallSpawnAccumulator = 0
+		bodyDropAccumulator = 0
+	end
+
+	for dropIndex = #fallDrops, 1, -1 do
+		local fallDrop = fallDrops[dropIndex]
+		local age = now - fallDrop.birth
+		if age >= fallDrop.lifetime then
+			if fallDrop.onBody then
+				local fallDirection = fallDrop.velocity.Unit
+				local currentPosition = fallDrop.origin + fallDrop.velocity * age
+				local bodyHit = fallRaycast(currentPosition - fallDirection * 1.2, fallDirection * 4)
+				if bodyHit and isBodyPart(proxyOf[bodyHit.Instance] or bodyHit.Instance)
+					and (bodyHit.Position - camPos).Magnitude > 2.2 then
+					newDrop(bodyHit, 1)
+				end
+			end
+			if fallDrop.landing and rng:NextNumber() < CFG.FallSplash then
+				splash(fallDrop.landing, fallDrop.normal, 1)
+			end
+			fallDrop.part.Parent = nil
+			fallFree[#fallFree + 1] = fallDrop
+			rem(fallDrops, dropIndex)
+		else
+			mv(fallDrop.part, fallDrop.rotation + (fallDrop.origin + fallDrop.velocity * age))
+		end
+	end
+
+	-- apply moves
+	if mvN > 0 then
+		Workspace:BulkMoveTo(mvP, mvC, Enum.BulkMoveMode.FireCFrameChanged)
+		table.clear(mvP); table.clear(mvC); mvN = 0
+	end
+end
+
+local errd = false
+conns[#conns + 1] = RunService.RenderStepped:Connect(function(delta)
+	if not alive then return end
+	local ok, err = pcall(update, delta)
+	if not ok and not errd then errd = true; warn("RealRain:", err) end
+end)
+
+---------------------------------------------------------------- look / hooks
+local function applyLook()
+	MAT = Enum.Material[CFG.Material]
+	COL = COLORS[CFG.WaterColor] or COLORS[1]
+	for _, p in ipairs(beads) do
+		p.Material = MAT; p.Color = COL; p.CastShadow = CFG.CastShadow
+	end
+	for _, part in ipairs(fallParts) do
+		part.Material = MAT; part.Color = COL; part.Transparency = CFG.FallTrans
+	end
+end
+
+local ctrls = {}
+local HOOKS = {
+	Material = applyLook, WaterColor = applyLook, CastShadow = applyLook, FallTrans = applyLook,
+	PreciseMesh = function(v)
+		if v then nextScan = 0; for _, c in ipairs(chars) do scanChar(c.m) end end
+	end,
+}
+local function set(key, v)
+	CFG[key] = v
+	local h = HOOKS[key]
+	if h then h(v) end
+	local c = ctrls[key]
+	if c then c() end
+end
+local function preset(name)
+	local p = PRESETS[name]
+	if not p then return end
+	for k, v in pairs(p) do set(k, v) end
+end
+
+---------------------------------------------------------------- panel
+local UI = {
+	{ "GENERAL" },
+	{ "Enabled", "Rain Enabled", "bool" },
+	{ "Rate", "Rain Rate", 10, 400, 5 },
+	{ "MaxParts", "Max Parts", 200, 4000, 50 },
+	{ "Material", "Material", "choice", MATS },
+	{ "WaterColor", "Water Color", "color" },
+	{ "CastShadow", "Cast Shadow (LAGS!)", "bool" },
+	{ "AutoQuality", "Auto Quality", "bool" },
+	{ "TargetFPS", "Target FPS", 20, 60, 1 },
+	{ "PHYSICS" },
+	{ "WorldScale", "World Scale (studs/m)", 1, 20, 0.1 },
+	{ "Intensity", "Rain Intensity (mm/h)", 1, 150, 1 },
+	{ "Shutter", "Motion Blur (sec)", 0.005, 0.06, 0.005 },
+	{ "FALLING RAIN" },
+	{ "FallRate", "Fall Rate", 0, 5000, 50 },
+	{ "MaxFall", "Max Falling Drops", 200, 5000, 100 },
+	{ "FallWidth", "Drop Width", 0.02, 0.3, 0.01 },
+	{ "FallTrans", "Drop Transparency", 0, 1, 0.05 },
+	{ "FallSplash", "Impact Splash", 0, 0.5, 0.01 },
+	{ "FallNearRadius", "Near Radius", 8, 60, 1 },
+	{ "FallFarRadius", "Far Radius", 20, 120, 1 },
+	{ "FallNearShare", "Near Share", 0, 1, 0.05 },
+	{ "DROPLET" },
+	{ "DropSize", "Droplet Size (visual)", 0.02, 0.3, 0.01 },
+	{ "NominalDiameter", "Bead Diameter (mm)", 1, 6, 0.1 },
+	{ "SizeMin", "Size Min", 0.2, 1, 0.05 },
+	{ "SizeMax", "Size Max", 1, 3, 0.05 },
+	{ "TransMin", "Transparency Min", 0, 1, 0.05 },
+	{ "TransMax", "Transparency Max", 0, 1, 0.05 },
+	{ "Flatness", "Flatness", 0.1, 1, 0.05 },
+	{ "AppearTime", "Appear Time", 0.02, 0.5, 0.01 },
+	{ "SLIDING" },
+	{ "SlideChance", "Slide Chance", 0, 1, 0.05 },
+	{ "MaxSliders", "Max Sliders", 0, 300, 5 },
+	{ "Hysteresis", "Surface Stickiness", 0.25, 3, 0.05 },
+	{ "ContactFriction", "Slide Resistance (Pa.s)", 0.05, 1, 0.01 },
+	{ "FilmThickness", "Trail Film (um)", 2, 40, 1 },
+	{ "MinFlow", "Min Flow Speed", 0, 1, 0.05 },
+	{ "SlideStretch", "Slide Stretch", 0, 2, 0.05 },
+	{ "StaticLifeMin", "Static Life Min", 0.5, 10, 0.5 },
+	{ "StaticLifeMax", "Static Life Max", 0.5, 10, 0.5 },
+	{ "SliderLifeMin", "Slider Life Min", 0.5, 10, 0.5 },
+	{ "SliderLifeMax", "Slider Life Max", 0.5, 10, 0.5 },
+	{ "TRAILS" },
+	{ "Trails", "Trails Enabled", "bool" },
+	{ "StepMin", "Step Min", 0.02, 0.2, 0.005 },
+	{ "StepMax", "Step Max", 0.02, 0.3, 0.005 },
+	{ "WidthMin", "Width Min", 0.1, 1, 0.05 },
+	{ "WidthMax", "Width Max", 0.1, 1.5, 0.05 },
+	{ "AgeTaper", "Age Taper", 0, 1, 0.05 },
+	{ "TrailLifeMin", "Trail Life Min", 0.2, 6, 0.1 },
+	{ "TrailLifeMax", "Trail Life Max", 0.2, 6, 0.1 },
+	{ "DRIPS" },
+	{ "Drips", "Drips Enabled", "bool" },
+	{ "DetachAngle", "Detach Angle", -1, 0.5, 0.05 },
+	{ "Relanding", "Relanding", "bool" },
+	{ "AREA" },
+	{ "AreaRadius", "Radius", 8, 80, 1 },
+	{ "BodyRate", "Body Hit Rate", 0, 400, 5 },
+	{ "WIND" },
+	{ "Wind", "Wind Enabled", "bool" },
+	{ "WindDir", "Direction (deg)", 0, 360, 5 },
+	{ "WindStrength", "Speed (m/s)", 0, 30, 0.5 },
+	{ "Gustiness", "Gustiness", 0, 1, 0.05 },
+	{ "GustSpeed", "Gust Speed", 0.1, 3, 0.1 },
+	{ "SlideInfluence", "Surface Wind Exposure", 0, 1, 0.05 },
+	{ "REALISM" },
+	{ "Wobble", "Wobble", 0, 1, 0.05 },
+	{ "WobbleSpeed", "Wobble Speed", 0, 20, 1 },
+	{ "NormalSmoothing", "Normal Smoothing", 0, 0.9, 0.05 },
+	{ "SeamForgive", "Seam Forgive", 0, 0.5, 0.05 },
+	{ "SurfaceSnap", "Surface Snap", 0.05, 0.5, 0.01 },
+	{ "PRECISION" },
+	{ "PreciseMesh", "Precise Meshes (bodies)", "bool" },
+	{ "SHELTER" },
+	{ "Shelter", "Roof Blocks Rain", "bool" },
+	{ "RoofHeight", "Roof Check Height", 10, 200, 5 },
+}
+
+local panel, panelBtn, fpsLbl
+local function buildPanel()
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "RealRainUI"; gui.ResetOnSpawn = false; gui.IgnoreGuiInset = true; gui.DisplayOrder = 50
+	parentGui(gui)
+	panel = gui
+
+	local function corner(o, r) local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, r); c.Parent = o end
+	local function label(parent, text, size, color, font)
+		local l = Instance.new("TextLabel")
+		l.BackgroundTransparency = 1; l.Text = text; l.TextSize = size; l.TextColor3 = color
+		l.Font = font or Enum.Font.Gotham; l.TextXAlignment = Enum.TextXAlignment.Left; l.Parent = parent
+		return l
+	end
+
+	local root = Instance.new("Frame")
+	root.AnchorPoint = Vector2.new(1, 0.5); root.Position = UDim2.new(1, -8, 0.5, 0); root.Size = UDim2.new(0, 300, 0.92, 0)
+	root.BackgroundColor3 = Color3.fromRGB(16, 18, 24); root.BorderSizePixel = 0; root.Parent = gui
+	corner(root, 8)
+	local rs = Instance.new("UIStroke"); rs.Color = Color3.fromRGB(45, 50, 62); rs.Parent = root
+
+	local title = label(root, "RAIN SETTINGS", 16, Color3.new(1, 1, 1), Enum.Font.GothamBold)
+	title.Position = UDim2.fromOffset(12, 6); title.Size = UDim2.fromOffset(150, 24)
+	fpsLbl = label(root, "60 FPS", 13, Color3.fromRGB(80, 220, 120), Enum.Font.GothamBold)
+	fpsLbl.Position = UDim2.new(1, -112, 0, 6); fpsLbl.Size = UDim2.fromOffset(70, 24); fpsLbl.TextXAlignment = Enum.TextXAlignment.Right
+	local x = Instance.new("TextButton")
+	x.Text = "X"; x.Font = Enum.Font.GothamBold; x.TextSize = 14; x.TextColor3 = Color3.fromRGB(200, 205, 215)
+	x.BackgroundColor3 = Color3.fromRGB(34, 38, 48); x.Size = UDim2.fromOffset(28, 24); x.Position = UDim2.new(1, -36, 0, 6)
+	x.AutoButtonColor = true; x.Parent = root; corner(x, 6)
+
+	local pr = Instance.new("Frame")
+	pr.BackgroundTransparency = 1; pr.Position = UDim2.fromOffset(8, 36); pr.Size = UDim2.new(1, -16, 0, 28); pr.Parent = root
+	local pl = Instance.new("UIListLayout"); pl.FillDirection = Enum.FillDirection.Horizontal; pl.Padding = UDim.new(0, 4); pl.Parent = pr
+	for _, nme in ipairs({ "LOW", "MEDIUM", "HIGH", "ULTRA" }) do
+		local b = Instance.new("TextButton")
+		b.Text = nme; b.Font = Enum.Font.GothamBold; b.TextSize = 12; b.TextColor3 = Color3.fromRGB(200, 205, 215)
+		b.BackgroundColor3 = Color3.fromRGB(34, 38, 48); b.Size = UDim2.new(0.25, -3, 1, 0); b.Parent = pr
+		corner(b, 6)
+		b.Activated:Connect(function() preset(nme) end)
+	end
+
+	local scroll = Instance.new("ScrollingFrame")
+	scroll.BackgroundTransparency = 1; scroll.BorderSizePixel = 0
+	scroll.Position = UDim2.fromOffset(8, 70); scroll.Size = UDim2.new(1, -16, 1, -76)
+	scroll.ScrollBarThickness = 4; scroll.CanvasSize = UDim2.new(); scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	scroll.Parent = root
+	local ll = Instance.new("UIListLayout"); ll.Padding = UDim.new(0, 3); ll.SortOrder = Enum.SortOrder.LayoutOrder; ll.Parent = scroll
+
+	local activeSlider
+
+	local order = 0
+	for _, def in ipairs(UI) do
+		order += 1
+		if #def == 1 then
+			local h = label(scroll, def[1], 11, Color3.fromRGB(80, 160, 255), Enum.Font.GothamBold)
+			h.Size = UDim2.new(1, 0, 0, 20); h.LayoutOrder = order
+			h.Text = "  " .. def[1]
+		else
+			local key, name, kind = def[1], def[2], def[3]
+			local row = Instance.new("Frame")
+			row.Size = UDim2.new(1, -6, 0, 26); row.BackgroundColor3 = Color3.fromRGB(28, 31, 40); row.BorderSizePixel = 0
+			row.LayoutOrder = order; row.Parent = scroll; corner(row, 4)
+			local lb = label(row, name, 12, Color3.fromRGB(205, 210, 220))
+			lb.Position = UDim2.fromOffset(8, 0); lb.Size = UDim2.new(1, -160, 1, 0); lb.TextTruncate = Enum.TextTruncate.AtEnd
+
+			if kind == "bool" then
+				local b = Instance.new("TextButton")
+				b.Text = ""; b.AutoButtonColor = false; b.Size = UDim2.fromOffset(36, 16); b.AnchorPoint = Vector2.new(1, 0.5)
+				b.Position = UDim2.new(1, -8, 0.5, 0); b.Parent = row; corner(b, 8)
+				local kn = Instance.new("Frame")
+				kn.Size = UDim2.fromOffset(12, 12); kn.AnchorPoint = Vector2.new(0, 0.5); kn.BackgroundColor3 = Color3.new(1, 1, 1)
+				kn.BorderSizePixel = 0; kn.Parent = b; corner(kn, 6)
+				local function upd()
+					local on = CFG[key]
+					b.BackgroundColor3 = on and Color3.fromRGB(60, 200, 110) or Color3.fromRGB(60, 64, 76)
+					kn.Position = UDim2.new(0, on and 22 or 2, 0.5, 0)
+				end
+				ctrls[key] = upd; upd()
+				b.Activated:Connect(function() set(key, not CFG[key]) end)
+			elseif kind == "choice" then
+				local b = Instance.new("TextButton")
+				b.Font = Enum.Font.GothamBold; b.TextSize = 12; b.TextColor3 = Color3.new(1, 1, 1)
+				b.BackgroundColor3 = Color3.fromRGB(40, 44, 56); b.Size = UDim2.fromOffset(120, 20); b.AnchorPoint = Vector2.new(1, 0.5)
+				b.Position = UDim2.new(1, -6, 0.5, 0); b.Parent = row; corner(b, 4)
+				local opts = def[4]
+				local function upd() b.Text = tostring(CFG[key]) end
+				ctrls[key] = upd; upd()
+				b.Activated:Connect(function()
+					local idx = table.find(opts, CFG[key]) or 0
+					set(key, opts[idx % #opts + 1])
+				end)
+			elseif kind == "color" then
+				local btns = {}
+				for i, c in ipairs(COLORS) do
+					local b = Instance.new("TextButton")
+					b.Text = ""; b.AutoButtonColor = false; b.BackgroundColor3 = c; b.Size = UDim2.fromOffset(16, 16)
+					b.AnchorPoint = Vector2.new(1, 0.5); b.Position = UDim2.new(1, -8 - (#COLORS - i) * 21, 0.5, 0)
+					b.Parent = row; corner(b, 8)
+					local st = Instance.new("UIStroke"); st.Color = Color3.new(1, 1, 1); st.Thickness = 2; st.Parent = b
+					btns[i] = st
+					b.Activated:Connect(function() set(key, i) end)
+				end
+				local function upd() for i, st in ipairs(btns) do st.Enabled = (i == CFG[key]) end end
+				ctrls[key] = upd; upd()
+			else
+				local mn, mx, step = def[3], def[4], def[5]
+				local dec = step >= 1 and 0 or (step >= 0.1 and 1 or (step >= 0.01 and 2 or 3))
+				local vl = label(row, "", 11, Color3.fromRGB(90, 170, 255), Enum.Font.GothamBold)
+				vl.Size = UDim2.fromOffset(44, 26); vl.AnchorPoint = Vector2.new(1, 0); vl.Position = UDim2.new(1, -4, 0, 0)
+				vl.TextXAlignment = Enum.TextXAlignment.Right
+				local bar = Instance.new("TextButton")
+				bar.Text = ""; bar.AutoButtonColor = false; bar.BackgroundColor3 = Color3.fromRGB(46, 50, 62); bar.BorderSizePixel = 0
+				bar.Size = UDim2.fromOffset(96, 8); bar.AnchorPoint = Vector2.new(1, 0.5); bar.Position = UDim2.new(1, -52, 0.5, 0)
+				bar.Parent = row; corner(bar, 4)
+				local fill = Instance.new("Frame")
+				fill.BackgroundColor3 = Color3.fromRGB(60, 150, 255); fill.BorderSizePixel = 0; fill.Size = UDim2.fromScale(0, 1)
+				fill.Parent = bar; corner(fill, 4)
+				local function upd()
+					local v = CFG[key]
+					fill.Size = UDim2.fromScale(clamp((v - mn) / (mx - mn), 0, 1), 1)
+					vl.Text = string.format("%." .. dec .. "f", v)
+				end
+				ctrls[key] = upd; upd()
+				local function fromX(px)
+					local a = clamp((px - bar.AbsolutePosition.X) / max(bar.AbsoluteSize.X, 1), 0, 1)
+					local v = mn + a * (mx - mn)
+					v = floor(v / step + 0.5) * step
+					set(key, clamp(tonumber(string.format("%.4f", v)), mn, mx))
+				end
+				bar.InputBegan:Connect(function(i)
+					if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+						activeSlider = fromX
+						scroll.ScrollingEnabled = false
+						fromX(i.Position.X)
+					end
+				end)
+			end
+		end
+	end
+
+	conns[#conns + 1] = UIS.InputChanged:Connect(function(i)
+		if activeSlider and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+			activeSlider(i.Position.X)
+		end
+	end)
+	conns[#conns + 1] = UIS.InputEnded:Connect(function(i)
+		if activeSlider and (i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch) then
+			activeSlider = nil
+			scroll.ScrollingEnabled = true
+		end
+	end)
+
+	panelBtn = Instance.new("TextButton")
+	panelBtn.Text = "RAIN"; panelBtn.Font = Enum.Font.GothamBold; panelBtn.TextSize = 11; panelBtn.TextColor3 = Color3.new(1, 1, 1)
+	panelBtn.BackgroundColor3 = Color3.fromRGB(16, 18, 24); panelBtn.BackgroundTransparency = 0.15
+	panelBtn.Size = UDim2.fromOffset(44, 30); panelBtn.Position = UDim2.new(0, 8, 0.5, -15); panelBtn.Visible = false
+	panelBtn.Parent = gui; corner(panelBtn, 6)
+
+	local function show(v) root.Visible = v; panelBtn.Visible = not v end
+	x.Activated:Connect(function() show(false) end)
+	panelBtn.Activated:Connect(function() show(true) end)
+	return show
+end
+local showPanel = buildPanel()
+
+task.spawn(function()
+	while alive do
+		task.wait(0.5)
+		if fpsLbl then
+			fpsLbl.Text = floor(fpsAvg + 0.5) .. " FPS"
+			fpsLbl.TextColor3 = fpsAvg >= 45 and Color3.fromRGB(80, 220, 120) or (fpsAvg >= 30 and Color3.fromRGB(240, 200, 70) or Color3.fromRGB(240, 90, 80))
+		end
+	end
+end)
+
+preset("HIGH")
+applyLook()
+
+---------------------------------------------------------------- API
+local api = {}
+api.Config = CFG
+api.Set = set
+api.Preset = preset
+api.Enable = function() set("Enabled", true) end
+api.Disable = function() set("Enabled", false) end
+api.Toggle = function() set("Enabled", not CFG.Enabled) end
+api.Panel = function(v) showPanel(v ~= false) end
+api.Destroy = function()
+	alive = false
+	for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
+	for _, s in ipairs(splashes) do pcall(function() s.a:Destroy() end) end
+	for _, d in pairs({ rainF, proxyF, panel }) do pcall(function() d:Destroy() end) end
+	env.RealRain = nil
+end
+env.RealRain = api
+return api
