@@ -2538,7 +2538,7 @@ local toolNameMap = {
     ["Consecutive Punches"]    = "Wrenching Ki Blasts",
     ["Shove"]                  = "Spirit Crusher",
     ["Uppercut"]               = "Sky Breaker",
-    ["Serious Punch"]          = "?",
+    ["Serious Punch"]          = "Super Kamehameha",
     ["Omni Directional Punch"] = "?",
     ["Death Counter"]          = "Divine Counter",
     ["Table Flip"]             = "Spirit Bomb",
@@ -2907,6 +2907,8 @@ end
 
 humanoid.AnimationPlayed:Connect(function(track)
     if ssjbRevertAnimIds[track.Animation.AnimationId] then
+        -- Keep Super Saiyan Blue hair and aura active until the beam sequence finishes.
+        task.wait(9.9)
         ssjbActive = false
         RevertSSJBHairToSSJ()
         DisableSSJBAura()
