@@ -502,6 +502,802 @@ function StartAttack4Camera()
 	return controller
 end
 
+-- ================= ATTACK 4 KAMEHAMEHA VFX =================
+-- Extra visuals layered ON TOP of the Attack 4 beam model (the model itself is untouched, so it keeps its look).
+--   charge : glowing orb that grows in the palm + energy streaks that spiral into it
+--   beam   : the model is locked to the character (follows aim), white-hot core + glow shell that shoot out in ~0.07s,
+--            pulse rings racing down the beam, crackling lightning, muzzle flash + shockwaves, sparks, and an impact
+--            that lands where the beam REALLY ends (raycast: walls, ground, players). Near the ground you also get
+--            a shockwave, dust and small shards in the real color/material of the surface.
+-- All of it is wrapped in pcall at the call site, so a bug here can never break the attack itself.
+ATTACK4_FX_QUALITY      = 1                       -- 0.4 - 1 (lower = fewer streaks/bolts/shards, better for mobile)
+ATTACK4_FX_BEAM_LENGTH  = nil                     -- studs; nil = measured from the beam model
+ATTACK4_FX_BEAM_RADIUS  = nil                     -- studs; nil = measured from the beam model
+ATTACK4_FX_AXIS_NUDGE   = Vector3.new(0, 0, 0)    -- (right, up, forward) nudge of the overlay if it sits slightly off the model
+ATTACK4_FX_BEAM_FOLLOWS = true                    -- true = beam model follows the character's aim while it lives
+ATTACK4_FX_GROUND       = true                    -- dust / shards / shockwave when the ground is close
+ATTACK4_FX_BLOOM        = true                    -- short bloom pulse while the beam is out
+ATTACK4_FX_CORE_COLOR   = Color3.fromRGB(238, 248, 255)
+ATTACK4_FX_MID_COLOR    = Color3.fromRGB(103, 194, 255) -- same blue as the charge particles
+ATTACK4_FX_EDGE_COLOR   = Color3.fromRGB(41, 128, 255)
+
+-- Spot in the palm where the charge sits (same place as Charge()).
+function A4FX_Hand()
+	if RightArm and RightArm.Parent then
+		return (RightArm.CFrame * CFrame.new(0, -1.35, 0)).Position
+	end
+	return HumanoidRootPart.Position + HumanoidRootPart.CFrame.LookVector * 2
+end
+
+function A4FX_Part(name, shape, size, color, transparency, parent)
+	local part = Instance.new("Part")
+	part.Name = name
+	part.Shape = shape
+	part.Size = size
+	part.Color = color
+	part.Material = Enum.Material.Neon
+	part.Transparency = transparency
+	part.Anchored = true
+	part.CanCollide = false
+	part.CanQuery = false
+	part.CanTouch = false
+	part.CastShadow = false
+	part.Massless = true
+	part.Parent = parent
+	return part
+end
+
+function A4FX_Anchor(name, parent)
+	local part = Instance.new("Part")
+	part.Name = name
+	part.Size = Vector3.new(0.1, 0.1, 0.1)
+	part.Transparency = 1
+	part.Anchored = true
+	part.CanCollide = false
+	part.CanQuery = false
+	part.CanTouch = false
+	part.CastShadow = false
+	part.Massless = true
+	part.Parent = parent
+	return part
+end
+
+-- CFrame at `position` whose -Z (Front) looks along `direction`. Safe for straight up / down.
+function A4FX_LookFrame(position, direction)
+	local dir = direction.Magnitude > 0.0001 and direction.Unit or Vector3.new(0, 0, -1)
+	local upVector = math.abs(dir.Y) > 0.98 and Vector3.xAxis or Vector3.yAxis
+	return CFrame.lookAt(position, position + dir, upVector)
+end
+
+-- Same, but the LOCAL X axis points along `direction` (cylinders are long on X).
+function A4FX_Frame(position, direction)
+	return A4FX_LookFrame(position, direction) * CFrame.Angles(0, math.pi / 2, 0)
+end
+
+-- Raycast that skips invisible, non-colliding parts (zones, triggers, invisible walls).
+function A4FX_Cast(origin, direction, ignore)
+	local list = table.clone(ignore)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.IgnoreWater = true
+	for _ = 1, 5 do
+		params.FilterDescendantsInstances = list
+		local result = workspace:Raycast(origin, direction, params)
+		if not result then
+			return nil
+		end
+		local hit = result.Instance
+		if hit.Transparency >= 0.95 and not hit.CanCollide then
+			table.insert(list, hit)
+		else
+			return result
+		end
+	end
+	return nil
+end
+
+function A4FX_IgnoreList(extra)
+	local list = { LocalPlayer.Character or Character }
+	local thrown = workspace:FindFirstChild("Thrown")
+	if thrown then
+		table.insert(list, thrown)
+	end
+	for _, wall in ipairs(game:GetService("CollectionService"):GetTagged("InvisibleWalls")) do
+		table.insert(list, wall)
+	end
+	for _, instance in ipairs(extra or {}) do
+		table.insert(list, instance)
+	end
+	return list
+end
+
+-- Real color + material of whatever the ray hit (terrain included).
+function A4FX_SurfaceColor(result)
+	local instance = result.Instance
+	if instance:IsA("Terrain") then
+		local ok, color = pcall(function()
+			return workspace.Terrain:GetMaterialColor(result.Material)
+		end)
+		return (ok and color) or Color3.fromRGB(120, 110, 100), result.Material
+	end
+	return instance.Color, result.Material
+end
+
+-- Flat ring that expands and fades (shockwave).
+function A4FX_Ring(parent, cframe, startDiameter, endDiameter, thickness, life, color, startTransparency)
+	local ring = A4FX_Part("Ring", Enum.PartType.Cylinder, Vector3.new(thickness, startDiameter, startDiameter), color, startTransparency or 0.15, parent)
+	ring.CFrame = cframe
+	local info = TweenInfo.new(life, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+	game:GetService("TweenService"):Create(ring, info, {
+		Size = Vector3.new(thickness, endDiameter, endDiameter),
+		Transparency = 1,
+	}):Play()
+	game:GetService("Debris"):AddItem(ring, life + 0.1)
+	return ring
+end
+
+-- Short-lived jagged lightning bolt (beam segments between jittered attachments).
+function A4FX_Bolt(parent, startPos, direction, boltLength, jitter, haloColor, coreColor, rng)
+	local segments = 5
+	local anchor = A4FX_Anchor("Bolt", parent)
+	anchor.CFrame = CFrame.new(startPos)
+
+	local sideA = direction:Cross(Vector3.yAxis)
+	if sideA.Magnitude < 0.01 then
+		sideA = Vector3.xAxis
+	end
+	sideA = sideA.Unit
+	local sideB = direction:Cross(sideA).Unit
+
+	local attachments = {}
+	for index = 0, segments do
+		local attachment = Instance.new("Attachment")
+		local wobble = (index == 0 or index == segments) and 0 or jitter
+		attachment.Position = direction * (boltLength * index / segments)
+			+ sideA * rng:NextNumber(-wobble, wobble)
+			+ sideB * rng:NextNumber(-wobble, wobble)
+		attachment.Parent = anchor
+		attachments[index + 1] = attachment
+	end
+
+	for index = 1, segments do
+		for layer = 1, 2 do
+			local beam = Instance.new("Beam")
+			beam.Attachment0 = attachments[index]
+			beam.Attachment1 = attachments[index + 1]
+			beam.FaceCamera = true
+			beam.Segments = 1
+			beam.LightEmission = 1
+			beam.LightInfluence = 0
+			beam.Color = ColorSequence.new(layer == 1 and haloColor or coreColor)
+			local width = layer == 1 and 0.6 or 0.2
+			beam.Width0 = width
+			beam.Width1 = width
+			beam.Transparency = NumberSequence.new(layer == 1 and 0.35 or 0)
+			beam.Parent = anchor
+		end
+	end
+
+	game:GetService("Debris"):AddItem(anchor, 0.09)
+end
+
+-- ---------- CHARGE (runs during Charge(0.6)) ----------
+-- Orb that grows in the palm + energy streaks spiraling into it. Call release() when the charge ends, abort() to kill it.
+function StartAttack4ChargeFX(handFn)
+	local runService = game:GetService("RunService")
+	local tweenService = game:GetService("TweenService")
+	local debris = game:GetService("Debris")
+	local quality = math.clamp(ATTACK4_FX_QUALITY or 1, 0.4, 1)
+	local CORE, MID = ATTACK4_FX_CORE_COLOR, ATTACK4_FX_MID_COLOR
+	local rng = Random.new()
+	local controller = { finished = false }
+
+	local folder = Instance.new("Folder")
+	folder.Name = "Attack4ChargeFX"
+	folder.Parent = workspace
+	debris:AddItem(folder, 2.5) -- failsafe
+
+	local duration = 0.6
+	local startTime = os.clock()
+
+	local orbShell = A4FX_Part("OrbShell", Enum.PartType.Ball, Vector3.one * 0.6, MID, 0.5, folder)
+	local orbCore = A4FX_Part("OrbCore", Enum.PartType.Ball, Vector3.one * 0.4, CORE, 0, folder)
+	local light = Instance.new("PointLight")
+	light.Color = MID
+	light.Range = 6
+	light.Brightness = 1
+	light.Shadows = false
+	light.Parent = orbCore
+
+	local streaks = {}
+	local streakCount = math.floor(22 * quality)
+	local nextStreak = 1
+	local connection
+
+	local function stopLoop()
+		if controller.finished then
+			return
+		end
+		controller.finished = true
+		if connection then
+			connection:Disconnect()
+		end
+	end
+
+	local function step()
+		if controller.finished then
+			return
+		end
+		local elapsed = os.clock() - startTime
+		local hand = handFn()
+		local progress = math.clamp(elapsed / duration, 0, 1)
+
+		-- orb: slow start, fast finish, with a tremble that gets stronger as it charges
+		local size = 0.4 + 3.4 * progress ^ 1.8
+		local tremble = 0.08 * progress
+		local jitter = Vector3.new(rng:NextNumber(-tremble, tremble), rng:NextNumber(-tremble, tremble), rng:NextNumber(-tremble, tremble))
+		local pulse = 1 + 0.07 * math.sin(elapsed * 70)
+		orbShell.Size = Vector3.one * (size * 1.6 * pulse)
+		orbShell.Position = hand + jitter
+		orbCore.Size = Vector3.one * (size * pulse)
+		orbCore.Position = hand + jitter
+		light.Range = 6 + 16 * progress
+		light.Brightness = 1 + 3 * progress
+
+		-- streaks: spawned over the first ~0.36s, each flies in along an accelerating spiral
+		while nextStreak <= streakCount and elapsed >= (nextStreak - 1) / streakCount * 0.36 do
+			nextStreak += 1
+			local direction = Vector3.new(rng:NextNumber(-1, 1), rng:NextNumber(-0.5, 1), rng:NextNumber(-1, 1))
+			if direction.Magnitude < 0.25 then
+				direction = Vector3.yAxis
+			end
+
+			local part = A4FX_Part("Streak", Enum.PartType.Block, Vector3.new(0.2, 0.2, 0.2), CORE, 1, folder)
+			local attachment0 = Instance.new("Attachment")
+			attachment0.Position = Vector3.new(0, 0.3, 0)
+			attachment0.Parent = part
+			local attachment1 = Instance.new("Attachment")
+			attachment1.Position = Vector3.new(0, -0.3, 0)
+			attachment1.Parent = part
+
+			local trail = Instance.new("Trail")
+			trail.Attachment0 = attachment0
+			trail.Attachment1 = attachment1
+			trail.Lifetime = 0.16
+			trail.LightEmission = 1
+			trail.LightInfluence = 0
+			trail.FaceCamera = true
+			trail.Color = ColorSequence.new(CORE, MID)
+			trail.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) })
+			trail.WidthScale = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(1, 0) })
+			trail.Parent = part
+
+			table.insert(streaks, {
+				part = part,
+				direction = direction.Unit,
+				radius = rng:NextNumber(9, 16),
+				born = elapsed,
+				life = math.max(0.14, math.min(rng:NextNumber(0.2, 0.3), duration - elapsed)),
+			})
+		end
+
+		for index = #streaks, 1, -1 do
+			local streak = streaks[index]
+			local t = (elapsed - streak.born) / streak.life
+			if t >= 1 then
+				streak.part:Destroy()
+				table.remove(streaks, index)
+			else
+				local swirl = CFrame.Angles(0, t * 1.3, 0)
+				streak.part.Position = hand + swirl:VectorToWorldSpace(streak.direction) * streak.radius * (1 - t * t)
+			end
+		end
+	end
+
+	step() -- place everything right away so nothing flashes at the world origin for a frame
+	connection = runService.Heartbeat:Connect(step)
+
+	function controller.release()
+		if controller.finished then
+			return
+		end
+		stopLoop()
+		for _, streak in ipairs(streaks) do
+			streak.part:Destroy()
+		end
+		table.clear(streaks)
+		-- the orb pops as the beam leaves
+		local info = TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+		tweenService:Create(orbShell, info, { Size = orbShell.Size * 1.8, Transparency = 1 }):Play()
+		tweenService:Create(orbCore, info, { Size = orbCore.Size * 0.4, Transparency = 1 }):Play()
+		tweenService:Create(light, info, { Brightness = 0 }):Play()
+		debris:AddItem(folder, 0.3)
+	end
+
+	function controller.abort()
+		stopLoop()
+		folder:Destroy()
+	end
+
+	task.delay(1.5, controller.abort) -- failsafe
+	return controller
+end
+
+-- ---------- BEAM (spawned together with the beam model) ----------
+-- Returns a controller: fade(seconds) when the beam starts to fade, abort() to remove everything instantly.
+function PlayAttack4BeamFX(model)
+	local runService = game:GetService("RunService")
+	local tweenService = game:GetService("TweenService")
+	local debris = game:GetService("Debris")
+	local lighting = game:GetService("Lighting")
+	local quality = math.clamp(ATTACK4_FX_QUALITY or 1, 0.4, 1)
+	local CORE, MID, EDGE = ATTACK4_FX_CORE_COLOR, ATTACK4_FX_MID_COLOR, ATTACK4_FX_EDGE_COLOR
+	local rng = Random.new()
+	local controller = { finished = false }
+
+	local root = HumanoidRootPart
+	local rootCF = root.CFrame
+	local aim0 = rootCF.LookVector
+	local right0, up0 = rootCF.RightVector, rootCF.UpVector
+	local hand0 = A4FX_Hand()
+
+	-- 1) Measure the beam model along our aim so the overlay matches its real size and sits on its real axis.
+	local maxForward = 0
+	local lateralValues, verticalValues, radiusValues = {}, {}, {}
+	for _, descendant in ipairs(model:GetDescendants()) do
+		if descendant:IsA("BasePart") and descendant.Transparency < 0.95 then
+			local cf, size = descendant.CFrame, descendant.Size
+			local function halfAlong(axis)
+				return 0.5 * (math.abs(axis:Dot(cf.RightVector)) * size.X
+					+ math.abs(axis:Dot(cf.UpVector)) * size.Y
+					+ math.abs(axis:Dot(cf.LookVector)) * size.Z)
+			end
+			local relative = cf.Position - hand0
+			maxForward = math.max(maxForward, relative:Dot(aim0) + halfAlong(aim0))
+			table.insert(lateralValues, relative:Dot(right0))
+			table.insert(verticalValues, relative:Dot(up0))
+			table.insert(radiusValues, math.max(halfAlong(right0), halfAlong(up0)))
+		end
+	end
+	local function median(values)
+		if #values == 0 then
+			return nil
+		end
+		table.sort(values)
+		return values[math.ceil(#values / 2)]
+	end
+
+	local beamLength = ATTACK4_FX_BEAM_LENGTH or ((maxForward >= 25) and math.min(maxForward, 220) or 90)
+	local measuredRadius = median(radiusValues)
+	local beamRadius = ATTACK4_FX_BEAM_RADIUS or ((measuredRadius and measuredRadius >= 1) and math.clamp(measuredRadius, 1.5, 10) or 4)
+
+	local axisLateral = median(lateralValues) or 0
+	local axisVertical = median(verticalValues) or 0
+	if math.abs(axisLateral) > 4 then axisLateral = 0 end
+	if math.abs(axisVertical) > 4 then axisVertical = 0 end
+	local nudge = ATTACK4_FX_AXIS_NUDGE or Vector3.zero
+	local muzzleWorld0 = hand0 + right0 * axisLateral + up0 * axisVertical + rootCF:VectorToWorldSpace(nudge)
+	local muzzleLocal = rootCF:PointToObjectSpace(muzzleWorld0) -- locked to the character, same as the model
+
+	-- 2) Keep the beam model glued to the character so it always points where we point.
+	local follow = {}
+	if ATTACK4_FX_BEAM_FOLLOWS ~= false then
+		for _, descendant in ipairs(model:GetDescendants()) do
+			if descendant:IsA("BasePart") then
+				follow[descendant] = rootCF:ToObjectSpace(descendant.CFrame)
+			end
+		end
+	end
+
+	local folder = Instance.new("Folder")
+	folder.Name = "Attack4BeamFX"
+	folder.Parent = workspace
+	local debrisFolder = Instance.new("Folder") -- rings / dust / shards: outlive the beam a little
+	debrisFolder.Name = "Attack4BeamDebris"
+	debrisFolder.Parent = workspace
+	debris:AddItem(folder, 4)
+	debris:AddItem(debrisFolder, 4)
+
+	local ignore = A4FX_IgnoreList({ model, folder, debrisFolder })
+
+	-- 3) Build the pieces.
+	local coreDiameter = beamRadius * 0.9
+	local shellDiameter = beamRadius * 1.5
+	local ringThickness = math.max(0.35, beamRadius * 0.12)
+	local beamCore = A4FX_Part("BeamCore", Enum.PartType.Cylinder, Vector3.new(1, coreDiameter, coreDiameter), CORE, 0.2, folder)
+	local beamShell = A4FX_Part("BeamShell", Enum.PartType.Cylinder, Vector3.new(1, shellDiameter, shellDiameter), MID, 0.6, folder)
+
+	local muzzleCore = A4FX_Part("MuzzleCore", Enum.PartType.Ball, Vector3.one * beamRadius, CORE, 0.05, folder)
+	local muzzleShell = A4FX_Part("MuzzleShell", Enum.PartType.Ball, Vector3.one * beamRadius * 2, MID, 0.55, folder)
+	local muzzleLight = Instance.new("PointLight")
+	muzzleLight.Color = MID
+	muzzleLight.Range = 14 + beamRadius * 4
+	muzzleLight.Brightness = 5
+	muzzleLight.Shadows = false
+	muzzleLight.Parent = muzzleCore
+
+	local muzzleAnchor = A4FX_Anchor("MuzzleEmitter", folder)
+	local muzzleAttachment = Instance.new("Attachment")
+	muzzleAttachment.Parent = muzzleAnchor
+
+	local sparks = Instance.new("ParticleEmitter")
+	sparks.Texture = "rbxassetid://1084976679"
+	sparks.Color = ColorSequence.new(CORE, MID)
+	sparks.LightEmission = 1
+	sparks.LightInfluence = 0
+	sparks.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.9), NumberSequenceKeypoint.new(1, 0.1) })
+	sparks.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(0.7, 0.2), NumberSequenceKeypoint.new(1, 1) })
+	sparks.Lifetime = NumberRange.new(0.25, 0.5)
+	sparks.Speed = NumberRange.new(80, 170)
+	sparks.SpreadAngle = Vector2.new(12, 12)
+	sparks.EmissionDirection = Enum.NormalId.Front
+	sparks.Rate = 170 * quality
+	sparks.LockedToPart = false
+	sparks.Parent = muzzleAttachment
+
+	local flash = Instance.new("ParticleEmitter") -- one big soft flash at the moment the beam leaves
+	flash.Texture = "rbxassetid://1084999891"
+	flash.Color = ColorSequence.new(CORE, MID)
+	flash.LightEmission = 1
+	flash.LightInfluence = 0
+	flash.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, beamRadius * 3), NumberSequenceKeypoint.new(1, beamRadius * 11) })
+	flash.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.1), NumberSequenceKeypoint.new(1, 1) })
+	flash.Lifetime = NumberRange.new(0.28, 0.28)
+	flash.Speed = NumberRange.new(0, 0)
+	flash.Rate = 0
+	flash.LockedToPart = true
+	flash.Parent = muzzleAttachment
+
+	-- impact (follows wherever the beam ends)
+	local impactAnchor = A4FX_Anchor("ImpactEmitter", folder)
+	local impactAttachment = Instance.new("Attachment")
+	impactAttachment.Parent = impactAnchor
+
+	local impactSparks = Instance.new("ParticleEmitter")
+	impactSparks.Texture = "rbxassetid://1084976679"
+	impactSparks.Color = ColorSequence.new(CORE, MID)
+	impactSparks.LightEmission = 1
+	impactSparks.LightInfluence = 0
+	impactSparks.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.7), NumberSequenceKeypoint.new(1, 0.1) })
+	impactSparks.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) })
+	impactSparks.Lifetime = NumberRange.new(0.3, 0.6)
+	impactSparks.Speed = NumberRange.new(35, 85)
+	impactSparks.SpreadAngle = Vector2.new(50, 50)
+	impactSparks.EmissionDirection = Enum.NormalId.Front
+	impactSparks.Acceleration = Vector3.new(0, -55, 0)
+	impactSparks.Rate = 110 * quality
+	impactSparks.Enabled = false
+	impactSparks.Parent = impactAttachment
+
+	local impactDust = Instance.new("ParticleEmitter")
+	impactDust.Texture = "rbxassetid://272050333"
+	impactDust.LightEmission = 0
+	impactDust.LightInfluence = 1
+	impactDust.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 3), NumberSequenceKeypoint.new(1, 9) })
+	impactDust.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.55), NumberSequenceKeypoint.new(1, 1) })
+	impactDust.Lifetime = NumberRange.new(0.6, 1)
+	impactDust.Speed = NumberRange.new(8, 22)
+	impactDust.SpreadAngle = Vector2.new(70, 70)
+	impactDust.EmissionDirection = Enum.NormalId.Front
+	impactDust.Acceleration = Vector3.new(0, 6, 0)
+	impactDust.Rate = 40 * quality
+	impactDust.Enabled = false
+	impactDust.Parent = impactAttachment
+
+	local impactFlash = A4FX_Part("ImpactFlash", Enum.PartType.Ball, Vector3.one * beamRadius, CORE, 1, folder)
+	local impactGlow = A4FX_Part("ImpactGlow", Enum.PartType.Ball, Vector3.one * beamRadius * 2, MID, 1, folder)
+	local impactLight = Instance.new("PointLight")
+	impactLight.Color = MID
+	impactLight.Range = 22
+	impactLight.Brightness = 0
+	impactLight.Shadows = false
+	impactLight.Parent = impactFlash
+
+	-- 4) Helpers that throw dust / shards (real surface color + material, kept small).
+	local function dustPuff(position, color, count, speed)
+		local anchor = A4FX_Anchor("DustPuff", debrisFolder)
+		anchor.CFrame = CFrame.new(position)
+		local attachment = Instance.new("Attachment")
+		attachment.Parent = anchor
+		local emitter = Instance.new("ParticleEmitter")
+		emitter.Texture = "rbxassetid://272050333"
+		emitter.Color = ColorSequence.new(color:Lerp(Color3.fromRGB(170, 170, 170), 0.45))
+		emitter.LightEmission = 0
+		emitter.LightInfluence = 1
+		emitter.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 3), NumberSequenceKeypoint.new(1, 10) })
+		emitter.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.45), NumberSequenceKeypoint.new(1, 1) })
+		emitter.Lifetime = NumberRange.new(0.6, 1.1)
+		emitter.Speed = NumberRange.new(speed * 0.4, speed)
+		emitter.SpreadAngle = Vector2.new(75, 75)
+		emitter.EmissionDirection = Enum.NormalId.Top
+		emitter.Drag = 4
+		emitter.Rate = 0
+		emitter.Parent = attachment
+		emitter:Emit(count)
+		debris:AddItem(anchor, 1.6)
+	end
+
+	local function throwShards(origin, normal, color, material, count, speedMin, speedMax)
+		for _ = 1, count do
+			local size = rng:NextNumber(0.25, 0.7)
+			local shard = Instance.new("Part")
+			shard.Name = "Shard"
+			shard.Size = Vector3.new(size * rng:NextNumber(0.7, 1.3), size, size * rng:NextNumber(0.7, 1.3))
+			shard.Color = color
+			shard.Material = material
+			shard.Anchored = false
+			shard.CanCollide = false
+			shard.CanQuery = false
+			shard.CanTouch = false
+			shard.CastShadow = false
+			shard.CFrame = CFrame.new(origin + normal * 0.3 + Vector3.new(rng:NextNumber(-1.5, 1.5), 0, rng:NextNumber(-1.5, 1.5)))
+				* CFrame.Angles(rng:NextNumber(0, 6), rng:NextNumber(0, 6), 0)
+			shard.Parent = debrisFolder
+
+			local push = normal * rng:NextNumber(0.9, 1.5) + Vector3.new(rng:NextNumber(-1, 1), rng:NextNumber(0.2, 1), rng:NextNumber(-1, 1))
+			if push.Magnitude < 0.1 then
+				push = Vector3.yAxis
+			end
+			shard.AssemblyLinearVelocity = push.Unit * rng:NextNumber(speedMin, speedMax)
+			shard.AssemblyAngularVelocity = Vector3.new(rng:NextNumber(-20, 20), rng:NextNumber(-20, 20), rng:NextNumber(-20, 20))
+
+			tweenService:Create(shard, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.In, 0, false, 0.6), {
+				Size = Vector3.new(0.05, 0.05, 0.05),
+			}):Play()
+			debris:AddItem(shard, 1.3)
+		end
+	end
+
+	-- 5) Launch burst: flash, two shockwaves, and a ground shockwave + dust + shards if the ground is close.
+	flash:Emit(1)
+	A4FX_Ring(debrisFolder, A4FX_Frame(muzzleWorld0 + aim0 * 1.5, aim0), beamRadius * 1.5, beamRadius * 13, ringThickness, 0.4, CORE, 0.1)
+	task.delay(0.06, function()
+		A4FX_Ring(debrisFolder, A4FX_Frame(muzzleWorld0 + aim0 * 2.5, aim0), beamRadius * 1.5, beamRadius * 18, ringThickness, 0.5, MID, 0.25)
+	end)
+
+	if ATTACK4_FX_GROUND ~= false then
+		local groundHit = A4FX_Cast(root.Position, Vector3.new(0, -18, 0), ignore)
+		if groundHit then
+			local color, material = A4FX_SurfaceColor(groundHit)
+			local ringFrame = A4FX_Frame(groundHit.Position + groundHit.Normal * 0.15, groundHit.Normal)
+			A4FX_Ring(debrisFolder, ringFrame, 3, 56, 0.4, 0.45, MID, 0.2)
+			task.delay(0.07, function()
+				A4FX_Ring(debrisFolder, ringFrame, 3, 36, 0.3, 0.35, CORE, 0.2)
+			end)
+			dustPuff(groundHit.Position, color, math.floor(24 * quality), 45)
+			throwShards(groundHit.Position, groundHit.Normal, color, material, math.floor(14 * quality), 22, 52)
+		end
+	end
+
+	-- 6) Bloom pulse.
+	local bloom
+	if ATTACK4_FX_BLOOM ~= false then
+		bloom = Instance.new("BloomEffect")
+		bloom.Name = "Attack4BeamBloom"
+		bloom.Intensity = 0
+		bloom.Size = 24
+		bloom.Threshold = 0.95
+		bloom.Parent = lighting
+		tweenService:Create(bloom, TweenInfo.new(0.06, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Intensity = 0.9 }):Play()
+	end
+
+	-- 7) Per-frame update.
+	local startTime = os.clock()
+	local launchTime = 0.07
+	local fadeStart, fadeDuration
+	local rings = {}
+	local ringIndex = 0
+	local nextRing, nextBolt, nextTrail, nextImpactRing = 0, 0, 0, 0
+	local hadHit = false
+	local lastHitInstance, hitColor, hitMaterial
+	local hitIsCharacter = false
+	local connection
+
+	local function cleanup()
+		if controller.finished then
+			return
+		end
+		controller.finished = true
+		if connection then
+			connection:Disconnect()
+		end
+		if bloom then
+			bloom:Destroy()
+		end
+		folder:Destroy() -- debrisFolder is left to the Debris service so shards / rings can finish
+	end
+
+	local function step()
+		if controller.finished then
+			return
+		end
+		if not root.Parent or not model.Parent then
+			cleanup()
+			return
+		end
+
+		local now = os.clock()
+		local elapsed = now - startTime
+		local fadeAlpha = 0
+		if fadeStart then
+			fadeAlpha = math.clamp((now - fadeStart) / fadeDuration, 0, 1)
+			if fadeAlpha >= 1 then
+				cleanup()
+				return
+			end
+		end
+		local keep = 1 - fadeAlpha
+
+		local currentCF = root.CFrame
+		local aim = currentCF.LookVector
+		local muzzle = currentCF * muzzleLocal
+
+		for part, relative in pairs(follow) do
+			if part.Parent then
+				part.CFrame = currentCF * relative
+			end
+		end
+
+		-- where the beam REALLY ends
+		local hit = A4FX_Cast(muzzle, aim * beamLength, ignore)
+		local length = hit and math.max((hit.Position - muzzle).Magnitude, 1) or beamLength
+
+		local launch = math.clamp(elapsed / launchTime, 0, 1)
+		local launchEase = 1 - (1 - launch) * (1 - launch)
+		local visibleLength = math.max(length * launchEase, 0.5)
+		local flicker = 1 + math.noise(elapsed * 38, 3.1, 0.5) * 0.35
+
+		-- core + shell (shoot out fast, then shimmer)
+		beamCore.Size = Vector3.new(visibleLength, coreDiameter * flicker, coreDiameter * flicker)
+		beamCore.CFrame = A4FX_Frame(muzzle + aim * (visibleLength / 2), aim)
+		beamCore.Transparency = 0.2 + 0.8 * fadeAlpha
+		beamShell.Size = Vector3.new(visibleLength, shellDiameter * (2 - flicker), shellDiameter * (2 - flicker))
+		beamShell.CFrame = beamCore.CFrame
+		beamShell.Transparency = 0.6 + 0.4 * fadeAlpha
+
+		-- muzzle orb: starts big and settles
+		local pop = 1 + 1.2 * math.max(0, 1 - elapsed / 0.15)
+		local orbSize = beamRadius * 1.6 * pop * flicker
+		muzzleCore.Size = Vector3.one * orbSize
+		muzzleCore.Position = muzzle
+		muzzleCore.Transparency = 0.05 + 0.95 * fadeAlpha
+		muzzleShell.Size = Vector3.one * (orbSize * 1.7)
+		muzzleShell.Position = muzzle
+		muzzleShell.Transparency = 0.55 + 0.45 * fadeAlpha
+		muzzleLight.Brightness = 5 * keep
+		muzzleAnchor.CFrame = A4FX_LookFrame(muzzle, aim)
+
+		-- pulse rings racing down the beam
+		if not fadeStart and elapsed >= nextRing then
+			nextRing = elapsed + 0.07
+			if #rings < 10 then
+				ringIndex += 1
+				table.insert(rings, {
+					part = A4FX_Part("PulseRing", Enum.PartType.Cylinder, Vector3.new(ringThickness, beamRadius * 2.3, beamRadius * 2.3), (ringIndex % 2 == 0) and CORE or MID, 0.2, folder),
+					born = elapsed,
+				})
+			end
+		end
+		for index = #rings, 1, -1 do
+			local ring = rings[index]
+			local age = (elapsed - ring.born) / 0.26
+			local distance = length * age
+			if age >= 1 or distance >= length then
+				ring.part:Destroy()
+				table.remove(rings, index)
+			else
+				local diameter = beamRadius * 2.3 * (0.85 + 0.45 * age)
+				ring.part.Size = Vector3.new(ringThickness, diameter, diameter)
+				ring.part.CFrame = A4FX_Frame(muzzle + aim * distance, aim)
+				ring.part.Transparency = math.clamp(0.2 + 0.8 * age * age + fadeAlpha, 0, 1)
+			end
+		end
+
+		-- lightning crackling around the beam
+		if not fadeStart and elapsed >= nextBolt then
+			nextBolt = elapsed + 0.05
+			local aimRight = aim:Cross(Vector3.yAxis)
+			if aimRight.Magnitude < 0.01 then
+				aimRight = Vector3.xAxis
+			end
+			aimRight = aimRight.Unit
+			local aimUp = aimRight:Cross(aim).Unit
+			for _ = 1, math.max(1, math.floor(2 * quality + 0.5)) do
+				local angle = rng:NextNumber(0, math.pi * 2)
+				local radial = aimRight * math.cos(angle) + aimUp * math.sin(angle)
+				local startAt = muzzle + aim * (rng:NextNumber(0.03, 0.92) * length) + radial * (beamRadius * rng:NextNumber(0.75, 1.25))
+				local direction = (aim * rng:NextNumber(0.6, 1) + radial * rng:NextNumber(-0.1, 0.9)).Unit
+				A4FX_Bolt(folder, startAt, direction, rng:NextNumber(6, 15), beamRadius * 0.35, MID, CORE, rng)
+			end
+		end
+
+		-- impact exactly where the beam ends
+		if hit then
+			local normal = hit.Normal
+			impactAnchor.CFrame = A4FX_LookFrame(hit.Position, normal)
+
+			if hit.Instance ~= lastHitInstance then
+				lastHitInstance = hit.Instance
+				hitColor, hitMaterial = A4FX_SurfaceColor(hit)
+				local owner = hit.Instance:FindFirstAncestorOfClass("Model")
+				hitIsCharacter = owner ~= nil and owner:FindFirstChildOfClass("Humanoid") ~= nil
+				impactDust.Color = ColorSequence.new(hitColor:Lerp(Color3.fromRGB(170, 170, 170), 0.45))
+			end
+
+			impactSparks.Enabled = not fadeStart
+			impactDust.Enabled = (not fadeStart) and not hitIsCharacter
+
+			local impactSize = beamRadius * 2.2 * flicker
+			impactFlash.Size = Vector3.one * impactSize
+			impactFlash.Position = hit.Position + normal * (impactSize * 0.2)
+			impactFlash.Transparency = 0.2 + 0.8 * fadeAlpha
+			impactGlow.Size = Vector3.one * (impactSize * 1.8)
+			impactGlow.Position = impactFlash.Position
+			impactGlow.Transparency = 0.6 + 0.4 * fadeAlpha
+			impactLight.Brightness = 4 * keep
+
+			if not hadHit then
+				hadHit = true
+				A4FX_Ring(debrisFolder, A4FX_Frame(hit.Position + normal * 0.2, normal), beamRadius * 1.5, beamRadius * 14, ringThickness, 0.45, CORE, 0.1)
+				impactSparks:Emit(math.floor(40 * quality))
+				if not hitIsCharacter then
+					dustPuff(hit.Position, hitColor, math.floor(20 * quality), 40)
+					throwShards(hit.Position, normal, hitColor, hitMaterial, math.floor(12 * quality), 25, 55)
+				end
+			end
+			if not fadeStart and elapsed >= nextImpactRing then
+				nextImpactRing = elapsed + 0.14
+				A4FX_Ring(debrisFolder, A4FX_Frame(hit.Position + normal * 0.2, normal), beamRadius, beamRadius * 6, ringThickness * 0.8, 0.3, MID, 0.35)
+			end
+		else
+			impactSparks.Enabled = false
+			impactDust.Enabled = false
+			impactFlash.Transparency = 1
+			impactGlow.Transparency = 1
+			impactLight.Brightness = 0
+		end
+
+		-- dust + shards kicked up along the beam's path when it runs close to the ground
+		if ATTACK4_FX_GROUND ~= false and not fadeStart and elapsed >= nextTrail then
+			nextTrail = elapsed + 0.07
+			local low = math.min(5, length)
+			local high = math.max(low, math.min(length, 70))
+			local probe = muzzle + aim * rng:NextNumber(low, high)
+			local ground = A4FX_Cast(probe + Vector3.new(0, 4, 0), Vector3.new(0, -34, 0), ignore)
+			if ground and (probe.Y - ground.Position.Y) < 24 then
+				local owner = ground.Instance:FindFirstAncestorOfClass("Model")
+				if not (owner and owner:FindFirstChildOfClass("Humanoid")) then
+					local color, material = A4FX_SurfaceColor(ground)
+					dustPuff(ground.Position, color, math.floor(5 * quality + 0.5), 26)
+					throwShards(ground.Position, ground.Normal, color, material, math.floor(3 * quality + 0.5), 18, 40)
+				end
+			end
+		end
+	end
+
+	step() -- place everything right away so nothing flashes at the world origin for a frame
+	connection = runService.Heartbeat:Connect(step)
+
+	function controller.fade(duration)
+		if controller.finished or fadeStart then
+			return
+		end
+		fadeStart = os.clock()
+		fadeDuration = math.max(duration or 0.3, 0.05)
+		sparks.Enabled = false
+		if bloom then
+			tweenService:Create(bloom, TweenInfo.new(fadeDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Intensity = 0 }):Play()
+		end
+	end
+
+	function controller.abort()
+		cleanup()
+	end
+
+	task.delay(3, cleanup) -- failsafe
+	return controller
+end
+
 -- ================= PLANET EXPLOSION V3 (embedded) =================
 -- PlayPlanetExplosion() runs the whole cinematic (camera takeover, ~7s). Fired by the Attack 4 finisher below.
 PlayPlanetExplosion = (function()
@@ -9011,6 +9807,7 @@ end)
 			task.spawn(function()
 				local attack4Camera
 				local attack4Lighting
+				local attack4ChargeFx
 				local ok, err = pcall(function()
 					PlayAttack4Anim()
 					local beamSfx -- kept so the finisher can fade it out with the beam
@@ -9029,8 +9826,13 @@ end)
 						if RightArm and RightArm.Parent then return (RightArm.CFrame * CFrame.new(0, -1.35, 0)).Position end -- same spot the charge VFX sits
 					end)
 
+					-- Palm orb + energy streaks during the charge (wrapped in pcall: can never break the attack)
+					local chargeFxOk, chargeFxResult = pcall(StartAttack4ChargeFX, A4FX_Hand)
+					if chargeFxOk then attack4ChargeFx = chargeFxResult else warn("[Attack4] charge FX error:", chargeFxResult) end
+
 					-- Beam charge VFX for 0.6s, then spawn the model
 					Charge(0.6)
+					if attack4ChargeFx then attack4ChargeFx.release() end -- orb pops as the beam leaves
 					a4Hitbox.stop() -- charge is over: make sure the hitbox is gone
 					attack4Lighting.release() -- beam is about to spawn: fade the lighting back to normal
 
@@ -9059,9 +9861,17 @@ end)
 						end
 					end
 
+					-- Extra Kamehameha visuals on top of the model: aim lock, core/shell, rings, lightning, muzzle, impact
+					local beamFxOk, beamFx = pcall(PlayAttack4BeamFX, model)
+					if not beamFxOk then
+						warn("[Attack4] beam FX error:", beamFx)
+						beamFx = nil
+					end
+
 					-- After 0.6 seconds: disable all particles then fade the whole model out
 					task.delay(0.6, function()
 						attack4Camera.restore()
+						if beamFx then beamFx.fade(0.3) end -- same duration as the model fade below
 						-- the beam starts to fade right now. If the hitbox caught a low-health target, a white overlay fades in
 						-- over the same duration as the beam fade, and the cutscene starts once the beam is fully gone (see fade loop below).
 
@@ -9175,6 +9985,7 @@ end)
 
 				if not ok then
 					warn("[Attack4] Error:", err)
+					if attack4ChargeFx then attack4ChargeFx.abort() end
 					if attack4Camera then attack4Camera.restore() end
 					if attack4Lighting then attack4Lighting.abort() end
 				end
