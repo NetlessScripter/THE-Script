@@ -10475,6 +10475,7 @@ local controlModule = require(player:WaitForChild("PlayerScripts")
 
 -- ===== state =====
 local flying, falling = false, false
+local flightLocked = false -- set once the event begins: flying is disabled from then on
 local renderConn, landHitbox
 local flySound, fadeTween
 local landSounds = {}
@@ -10935,7 +10936,7 @@ rollButton.MouseButton1Click:Connect(function() doRoll(lastStrafe) end)
 
 -- ===== start / stop =====
 startFlying = function()
-	if flying or attack5Running then return end
+	if flying or attack5Running or flightLocked then return end
 	flying = true
 
 	if not fxActive then fovBase = camera.FieldOfView end
@@ -11079,6 +11080,46 @@ player.CharacterAdded:Connect(function(newChar)
 	loadLandSounds()
 	hookHumanoid()
 end)
+
+-- ===== flight lock: the event begins when this user says this line in chat =====
+local FLIGHT_LOCK_USERID = 8029999470
+local FLIGHT_LOCK_PHRASE = "Okay, Beginning now."
+local TextChatService = game:GetService("TextChatService")
+
+local function lockFlight()
+	if flightLocked then return end
+	flightLocked = true
+	if flying then stopFlying() end -- drop out of the air if we were mid-flight
+end
+
+local function checkFlightLockMessage(userId, message)
+	if userId ~= FLIGHT_LOCK_USERID then return end
+	if message:match("^%s*(.-)%s*$") == FLIGHT_LOCK_PHRASE then
+		lockFlight()
+	end
+end
+
+if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+	-- New chat
+	TextChatService.MessageReceived:Connect(function(msg)
+		if msg.TextSource then
+			checkFlightLockMessage(msg.TextSource.UserId, msg.Text)
+		end
+	end)
+else
+	-- Legacy chat
+	local function hookChatter(p)
+		if p.UserId == FLIGHT_LOCK_USERID then
+			p.Chatted:Connect(function(msg)
+				checkFlightLockMessage(p.UserId, msg)
+			end)
+		end
+	end
+	for _, p in ipairs(Players:GetPlayers()) do
+		hookChatter(p)
+	end
+	Players.PlayerAdded:Connect(hookChatter)
+end
 
 -- handy handles for other scripts / the console
 _G.FlySystem = {
