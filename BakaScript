@@ -1,0 +1,2790 @@
+--[[
+    =====================================================================
+     TOURNAMENT OF POWER  -  EVENT 2  -  CINEMATIC REWORK
+    =====================================================================
+    Flow:  chat trigger -> teleport (frozen + hidden) -> cutscene
+           -> camera handed back -> BEGIN!
+
+    How the file is organised (top to bottom):
+      1. CONFIG     every tunable lives here (your original constants are kept)
+      2. TOOLKIT    Maid (cleanup), easing, camera path builders, SFX
+      3. DIALOGUE   KJ typed-letter module (unchanged) + Dragon Ball styles
+      4. CHARACTER  teleport VFX, hide / reveal, spot assignment (unchanged)
+      5. TRIGGER    Event:Start waits for the chat phrase (unchanged)
+      6. CUTSCENE   built as small systems, all driven by ONE clock:
+            clock/rig  -> one render step: animations, waits, camera
+            gui        -> bars, speed lines, impact frames, stamps, vignette
+            post fx    -> colour grade, bloom, blur, DoF, atmosphere
+            world fx   -> rings, domes, lightning, debris, ki orb, pillar
+            shots      -> data tables (path + fov + roll + timed CUES)
+            sequence   -> shot list + transitions + finale
+            cleanup    -> always runs, restores EVERYTHING
+
+    Adding a shot = adding one table. Adding an effect on a beat = adding
+    one { time, function } entry to that shot's `cues`.
+    =====================================================================
+]]
+
+local Players = game:GetService("Players")
+local TextChatService = game:GetService("TextChatService")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+local StarterGui = game:GetService("StarterGui")
+local SoundService = game:GetService("SoundService")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Debris = game:GetService("Debris")
+
+---------------------------------------------------------------------
+-- 1. CONFIG  (original constants, same names, same values)
+---------------------------------------------------------------------
+local TARGET_USERID = 8029999470
+local TARGET_PHRASE = "Okay, Beginning now."
+local TARGET_CFRAME = CFrame.new(75995.4453125, 449.6561584472656, 24748.6875)
+
+-- Cutscene constants
+local RING_CENTER = Vector3.new(75995.4453125, 449.6561584472656, 24748.6875)
+local SNAP_A = Vector3.new(74986.4453125, 764.1341552734375, 24767.322265625)
+local SNAP_B = Vector3.new(76267.375, 482.7586364746094, 25763.9296875)
+local SNAP_C = Vector3.new(76434.1015625, 752.1995849609375, 23813.369140625)
+local CUTSCENE_MUSIC_ID = "" -- optional, e.g. "rbxassetid://123456789"
+
+-- Where players get teleported the moment the event begins (each player gets their own spot)
+local TELEPORT_POSITIONS = {
+    Vector3.new(76031.9296875, 458.7995300292969, 24937.943359375),
+    Vector3.new(76236.359375, 458.7989807128906, 24803.498046875),
+    Vector3.new(76241.71875, 458.7989501953125, 24691.03125),
+    Vector3.new(76173.796875, 458.798583984375, 24608.583984375),
+    Vector3.new(76075.6640625, 458.7984924316406, 24589.060546875),
+    Vector3.new(76074.1015625, 459.3154296875, 24682.763671875),
+    Vector3.new(75999.0234375, 460.29620361328125, 24747.98046875),
+    Vector3.new(76041.296875, 459.3631591796875, 24846.517578125),
+}
+
+local EXTRA_SPOT_DISTANCE = 20 -- with more players than spots, the extras land this far from one of the spots
+local FOV_BURST_START = 120 -- FOV the instant the camera is handed back to the player
+local FOV_BURST_END = 70 -- FOV it settles back to
+local FOV_BURST_TIME = 0.8 -- seconds the burst takes
+local TELEPORT_SFX_ID = "rbxassetid://3339374157" -- teleport whoosh (from the Goku script's DoTeleport)
+local FACE_SHOT_DISTANCE = 6 -- studs in front of the player's face for the extra close-up shot
+local hrpAnchoredBeforeEvent = nil -- remembered so the cutscene can put the anchor back afterwards
+
+-- NEW tunables ---------------------------------------------------------
+local CFG = {
+    ARENA_RADIUS = 280,        -- rough radius of the fighting area (rocks, lightning, gather swirl)
+    ARENA_GROUND_Y = nil,      -- nil = worked out from TELEPORT_POSITIONS (standing height - 3)
+    BAR_HEIGHT = 0.115,        -- letterbox bar height (screen fraction). Dialogue sits just above it
+    FAILSAFE_SECONDS = 90,     -- if anything ever hangs, the cutscene force-ends after this long
+    FX_TAIL = 2.6,             -- world FX keep animating this long after the player gets control back
+    SHOW_KANJI = true,         -- small 力の大会 line under the title card (set false if it shows boxes)
+    DEBRIS_COUNT = 34,         -- levitating rocks
+    BOLT_SEGMENTS = 11,        -- lightning jaggedness
+    SPEED_LINES = 64,
+
+    -- Optional sound ids. Leave "" and a pitched version of the teleport whoosh stands in,
+    -- so everything still has audio punch with zero extra assets.
+    SFX = {
+        boom = "",      -- big hits: title slam, eruption
+        impact = "",    -- hard cuts
+        thunder = "",   -- lightning strikes
+        rumble = "",    -- low swell under the opening
+        charge = "",    -- ki charging
+        whoosh = TELEPORT_SFX_ID,
+        dialogue = "rbxassetid://97182227194468", -- plays every time a new dialogue line begins
+    },
+}
+
+-- Dragon Ball palette
+local COL = {
+    white = Color3.new(1, 1, 1),
+    cream = Color3.fromRGB(255, 252, 220),
+    goldHot = Color3.fromRGB(255, 228, 120),
+    gold = Color3.fromRGB(255, 200, 60),
+    orange = Color3.fromRGB(255, 140, 30),
+    ember = Color3.fromRGB(255, 85, 20),
+    black = Color3.new(0, 0, 0),
+}
+
+---------------------------------------------------------------------
+-- 2. TOOLKIT
+---------------------------------------------------------------------
+local rng = Random.new()
+
+local function rand(a, b)
+    return rng:NextNumber(a, b)
+end
+
+local function lerp(a, b, t)
+    return a + (b - a) * t
+end
+
+-- Maid: collects instances / connections / functions and cleans them all in one call
+local Maid = {}
+Maid.__index = Maid
+
+function Maid.new()
+    return setmetatable({tasks = {}}, Maid)
+end
+
+function Maid:Add(item)
+    table.insert(self.tasks, item)
+    return item
+end
+
+function Maid:Clean()
+    local list = self.tasks
+    self.tasks = {}
+    for i = #list, 1, -1 do
+        local item = list[i]
+        pcall(function()
+            local kind = typeof(item)
+            if kind == "RBXScriptConnection" then
+                item:Disconnect()
+            elseif kind == "Instance" then
+                item:Destroy()
+            elseif kind == "function" then
+                item()
+            end
+        end)
+    end
+end
+
+-- Easing: every function takes 0..1 and returns 0..1
+local Ease = {}
+Ease.linear = function(a) return a end
+Ease.sine = function(a) return -(math.cos(math.pi * a) - 1) / 2 end
+Ease.quadIn = function(a) return a * a end
+Ease.quadOut = function(a) return 1 - (1 - a) * (1 - a) end
+Ease.cubicOut = function(a) return 1 - (1 - a) ^ 3 end
+Ease.quartIn = function(a) return a ^ 4 end
+Ease.quartOut = function(a) return 1 - (1 - a) ^ 4 end
+Ease.quartInOut = function(a)
+    if a < 0.5 then return 8 * a ^ 4 end
+    return 1 - ((-2 * a + 2) ^ 4) / 2
+end
+Ease.expoIn = function(a) return a <= 0 and 0 or 2 ^ (10 * a - 10) end
+Ease.expoOut = function(a) return a >= 1 and 1 or 1 - 2 ^ (-10 * a) end
+Ease.backOut = function(a)
+    local c1 = 1.70158
+    local c3 = c1 + 1
+    return 1 + c3 * (a - 1) ^ 3 + c1 * (a - 1) ^ 2
+end
+Ease.smoother = function(a) return a * a * a * (a * (a * 6 - 15) + 10) end
+
+-- Camera path builders: each returns f(e) -> Vector3 for e in 0..1
+local Path = {}
+
+function Path.line(a, b)
+    return function(e) return a:Lerp(b, e) end
+end
+
+function Path.bezier(a, c, b)
+    return function(e)
+        local u = 1 - e
+        return a * (u * u) + c * (2 * u * e) + b * (e * e)
+    end
+end
+
+function Path.cubic(a, c1, c2, b)
+    return function(e)
+        local u = 1 - e
+        return a * (u * u * u) + c1 * (3 * u * u * e) + c2 * (3 * u * e * e) + b * (e * e * e)
+    end
+end
+
+-- a position or a path function -> a position
+local function evalP(p, e)
+    if type(p) == "function" then
+        return p(e)
+    end
+    return p
+end
+
+-- One-shot sound. Falls back to a pitched teleport whoosh when no id is configured.
+local FALLBACK_SPEED = {boom = 0.45, impact = 0.7, thunder = 0.6, rumble = 0.3, charge = 1.5, whoosh = 1}
+local WET = {boom = true, thunder = true, rumble = true}
+
+local function playSfx(kind, volume, speed)
+    pcall(function()
+        local id = CFG.SFX[kind]
+        local pitch = speed or 1
+        if not id or id == "" then
+            id = TELEPORT_SFX_ID
+            pitch = pitch * (FALLBACK_SPEED[kind] or 1)
+        end
+        local s = Instance.new("Sound")
+        s.SoundId = id
+        s.Volume = volume or 1
+        s.PlaybackSpeed = pitch
+        if WET[kind] then
+            local verb = Instance.new("ReverbSoundEffect")
+            verb.DecayTime = 2.6
+            verb.Wetness = 0.35
+            verb.Parent = s
+        end
+        s.Parent = SoundService
+        s:Play()
+        Debris:AddItem(s, 10)
+    end)
+end
+
+-- Every shockwave ring plays all of these at once (stacked on purpose)
+local SHOCKWAVE_SFX_VOLUME = 0.7 -- per sound; 11 stacked sounds get loud fast, lower this if it clips
+local SHOCKWAVE_SFX = {
+    "rbxassetid://6895079853",  -- UI Click
+    "rbxassetid://8701825353",  -- JJBA: TW kick & SP:TW punch SFX
+    "rbxassetid://14065053293", -- Audio/cloth 9
+    "rbxassetid://12446557959", -- Audio/finisherhit
+    "rbxassetid://14762034452", -- Audio/new ult test 2
+    "rbxassetid://3848076724",  -- earthcrumble1
+    "rbxassetid://10467680476", -- Audio/punchimpact2
+    "rbxassetid://12982132788", -- Audio/punchstart
+    "rbxassetid://14761553780", -- Audio/new slam
+    "rbxassetid://6476791205",  -- ward_activate
+    "rbxassetid://4418405082",  -- Big Explosion
+}
+
+-- Preload them up front so all eleven start on the same frame instead of trickling in as they load
+task.spawn(function()
+    pcall(function()
+        local assets = {}
+        for _, id in ipairs(SHOCKWAVE_SFX) do
+            local snd = Instance.new("Sound")
+            snd.SoundId = id
+            assets[#assets + 1] = snd
+        end
+        game:GetService("ContentProvider"):PreloadAsync(assets)
+        for _, snd in ipairs(assets) do snd:Destroy() end
+    end)
+end)
+
+local function playShockwaveSfx()
+    for _, id in ipairs(SHOCKWAVE_SFX) do
+        pcall(function()
+            local s = Instance.new("Sound")
+            s.SoundId = id
+            s.Volume = SHOCKWAVE_SFX_VOLUME
+            s.Parent = SoundService
+            s:Play()
+            Debris:AddItem(s, 10)
+        end)
+    end
+end
+
+---------------------------------------------------------------------
+-- Load the arena model up front and place it in workspace right away
+---------------------------------------------------------------------
+do
+    local ok, result = pcall(function()
+        return game:GetObjects("rbxassetid://12221552478")[1]
+    end)
+    if ok and result then
+        local obj = result
+        if not obj:IsA("PVInstance") then
+            local wrap = Instance.new("Model")
+            for _, child in ipairs(obj:GetChildren()) do
+                child.Parent = wrap
+            end
+            obj:Destroy()
+            obj = wrap
+        end
+        obj:PivotTo(TARGET_CFRAME)
+        obj.Parent = workspace
+    else
+        warn("[Event] Could not load the arena model: " .. tostring(result))
+    end
+end
+
+-- Pre-stream every cutscene location so nothing pops in when the camera arrives
+if workspace.StreamingEnabled then
+    task.spawn(function()
+        for _, pos in ipairs({SNAP_A, SNAP_B, SNAP_C, RING_CENTER}) do
+            pcall(function()
+                Players.LocalPlayer:RequestStreamAroundAsync(pos, 5)
+            end)
+        end
+    end)
+end
+
+---------------------------------------------------------------------
+-- KJ dialogue module (typed bouncing letters, portrait + name plate)
+-- Same module the Rick portal script uses, but the speaker is the event
+-- trigger player: his name on the plate and his headshot as the portrait.
+-- Needs the game's ReplicatedStorage.Resources.UFW.TekrinnDialogue.KJDialogue gui.
+---------------------------------------------------------------------
+-- The one font every piece of text in this script uses (Font.new, not the old Enum.Font)
+local EVENT_FONT = Font.new("rbxassetid://12187375716", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+
+local DIALOGUE_SPEAKER = {Name = "ToPHost"} -- only .Name is used, it keys the dialogue gui
+local DIALOGUE_NAME_COLOR = Color3.fromRGB(255, 190, 50)
+local DIALOGUE_Y_OFFSET = UDim2.new(0, 0, -0.11, -10) -- raised so it sits above the letterbox bar
+local hostName = "LIMITLESS" -- hardcoded name shown on the dialogue name plate
+local hostImage = ""
+
+task.spawn(function()
+    local okImg, img = pcall(function()
+        return (Players:GetUserThumbnailAsync(TARGET_USERID, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size150x150))
+    end)
+    if okImg and img and img ~= "" then
+        hostImage = img
+    end
+end)
+
+local KJDialogue = (function()
+    local CollectionService = game:GetService("CollectionService")
+    local TextService = game:GetService("TextService")
+    local Debris = game:GetService("Debris")
+    local Y_OFFSET = DIALOGUE_Y_OFFSET
+    local _LocalPlayer = Players.LocalPlayer
+
+    -- Letter sizes for the custom font (GetTextSize only understands Enum.Font). Cached per letter.
+    local boundsParams = Instance.new("GetTextBoundsParams")
+    boundsParams.Font = EVENT_FONT
+    boundsParams.Size = 25
+    boundsParams.Width = 100
+    local letterSizes = {}
+    local function measureLetter(ch)
+        local cached = letterSizes[ch]
+        if cached then return cached end
+        local size
+        local ok = pcall(function()
+            boundsParams.Text = ch
+            size = TextService:GetTextBoundsAsync(boundsParams)
+        end)
+        if not ok or not size then
+            size = Vector2.new(14, 25)
+        end
+        if size.X <= 0 then
+            size = Vector2.new(25 * 0.3, size.Y > 0 and size.Y or 25) -- whitespace can measure as zero width
+        end
+        letterSizes[ch] = size
+        return size
+    end
+
+    local function getColor(p8, p9)
+        local v11 = p9[1].Value
+        for v12 = 1, #p9 - 1 do
+            if p9[v12].Time <= p8 and p8 <= p9[v12 + 1].Time then
+                local v13 = p9[v12]
+                local v14 = p9[v12 + 1]
+                local v15 = (p8 - v13.Time) / (v14.Time - v13.Time)
+                return v13.Value:lerp(v14.Value, v15)
+            end
+        end
+        return v11
+    end
+
+    local function _endLetters(p16)
+        for _, v17 in p16:GetChildren() do
+            if v17.Name == "letter" then
+                v17:SetAttribute("Ending", true)
+                TweenService:Create(v17, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+                    Position               = v17.Position + UDim2.new(0, 0, 0, 50),
+                    TextTransparency       = 1,
+                    TextStrokeTransparency = 1,
+                }):Play()
+                Debris:AddItem(v17, 0.5)
+            end
+        end
+    end
+
+    local function _speak(lines, speaker)
+        local v21    = speaker or _LocalPlayer
+        local v_u_22 = _LocalPlayer.PlayerGui:FindFirstChild(v21.Name .. "KJUI")
+            or game:GetService("ReplicatedStorage").Resources.UFW.TekrinnDialogue.KJDialogue:Clone()
+        local v_u_24 = 0
+        local v_u_25 = 0
+        local startDelay = (lines[1] and lines[1].StartDelay) or 0
+        local v26    = startDelay
+
+        if v_u_22:GetAttribute("Created") then
+            v_u_22:SetAttribute("Created", os.clock() + startDelay)
+        else
+            local v_u_27 = v_u_22:WaitForChild("Holder"):WaitForChild("Template")
+            local v28    = v_u_22.Holder
+            if hostImage ~= "" then
+                v_u_27:WaitForChild("ImageLabel").Image = hostImage
+            end
+            v_u_27:WaitForChild("Name").TextColor3 = DIALOGUE_NAME_COLOR
+            v28.Position = v28.Position - UDim2.new(0, 0, 0, #CollectionService:GetTagged("KJUI") * 100)
+            v_u_27:WaitForChild("ImageLabel").Position          = v_u_27:WaitForChild("ImageLabel").Position - UDim2.new(0, 0, 0, 100)
+            v_u_27:WaitForChild("ImageLabel").ImageTransparency = 1
+            v_u_27:WaitForChild("Name").Position                = v_u_27:WaitForChild("Name").Position - UDim2.new(0, 0, 0, 100)
+            v_u_27:WaitForChild("Name").TextTransparency        = 1
+            v_u_27:WaitForChild("Name").TextStrokeTransparency  = 1
+            task.delay(startDelay, function()
+                if not v_u_22.Parent then return end
+                TweenService:Create(v_u_27:WaitForChild("ImageLabel"), TweenInfo.new(1, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+                    Position          = v_u_27:WaitForChild("ImageLabel").Position + UDim2.new(0, 0, 0, 100),
+                    ImageTransparency = 0,
+                }):Play()
+                TweenService:Create(v_u_27:WaitForChild("Name"), TweenInfo.new(1, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+                    Position               = v_u_27:WaitForChild("Name").Position + UDim2.new(0, 0, 0, 100),
+                    TextTransparency       = 0,
+                    TextStrokeTransparency = 0,
+                }):Play()
+            end)
+            task.spawn(function()
+                v_u_22:SetAttribute("Created", os.clock() + startDelay)
+                repeat task.wait() until os.clock() - v_u_22:GetAttribute("Created") > 5 or not v_u_22.Parent
+                v_u_22.Name = "deleting"
+                _endLetters(v_u_22.Holder.Template)
+                TweenService:Create(v_u_27:WaitForChild("ImageLabel"), TweenInfo.new(1, Enum.EasingStyle.Quint, Enum.EasingDirection.In), {
+                    Position          = v_u_27:WaitForChild("ImageLabel").Position - UDim2.new(0, 0, 0, 100),
+                    ImageTransparency = 1,
+                }):Play()
+                TweenService:Create(v_u_27:WaitForChild("Name"), TweenInfo.new(1, Enum.EasingStyle.Quint, Enum.EasingDirection.In), {
+                    Position               = v_u_27:WaitForChild("Name").Position - UDim2.new(0, 0, 0, 100),
+                    TextTransparency       = 1,
+                    TextStrokeTransparency = 1,
+                }):Play()
+                task.delay(1, function() v_u_22:Destroy() end)
+            end)
+        end
+
+        v_u_22.IgnoreGuiInset = true
+        v_u_22.ScreenInsets = Enum.ScreenInsets.None
+        v_u_22.Parent  = _LocalPlayer.PlayerGui
+        v_u_22.Enabled = true
+        v_u_22.Name    = v21.Name .. "KJUI"
+        v_u_22:AddTag("KJUI")
+        v_u_22:WaitForChild("Holder"):WaitForChild("Template"):WaitForChild("Name").Text = hostName
+        v_u_22:WaitForChild("Holder"):WaitForChild("Template"):WaitForChild("Name").FontFace = EVENT_FONT
+
+        local v32 = false
+        for _, v33 in pairs(lines) do
+            if v33.HigherUp then
+                TweenService:Create(v_u_22.Holder, TweenInfo.new(0.2), {
+                    Position = UDim2.new(0.5, 0, 0.965, 0) + Y_OFFSET,
+                }):Play()
+                v32 = true
+            end
+        end
+        if not v32 and v_u_22.Holder.Position ~= UDim2.new(0.5, 0, 1, 0) + Y_OFFSET then
+            TweenService:Create(v_u_22.Holder, TweenInfo.new(1), {
+                Position = UDim2.new(0.5, 0, 1, 0) + Y_OFFSET,
+            }):Play()
+        end
+
+        _endLetters(v_u_22.Holder.Template)
+
+        for _, v34 in lines do
+            for _, v37 in string.split(v34.Text, "") do
+                v_u_24 = v_u_24 + measureLetter(v37).X
+            end
+        end
+
+        for _, v_u_38 in lines do
+            for _, v41 in string.split(v_u_38.Text, "") do
+                local v42    = measureLetter(v41)
+                local v_u_43 = Instance.new("TextLabel")
+                v_u_43.AnchorPoint            = Vector2.new(0, 0.5)
+                v_u_43.Position               = UDim2.new(0.5, v_u_25 - v_u_24 / 2 // 1, 0.5, 10)
+                v_u_43.Size                   = UDim2.new(0, v42.X, 0, v42.Y)
+                v_u_43.Text                   = v41
+                v_u_43.Name                   = "letter"
+                v_u_43.FontFace               = EVENT_FONT
+                v_u_43.TextSize               = 25
+                v_u_43.BackgroundTransparency = 1
+                v_u_43.TextStrokeColor3       = v_u_38.TextStrokeColor
+                v_u_43.TextStrokeTransparency = 1
+                v_u_43.TextTransparency       = 1
+                v_u_43.Parent                 = v_u_22.Holder.Template
+                local _capPos = v_u_25
+                task.delay(v26, function()
+                    local v44 = os.clock()
+                    repeat
+                        local v46 = math.min((os.clock() - v44) / 0.35, 1)
+                        local v48 = math.min((os.clock() - v44) / v_u_38.Shake.Lifetime, 1)
+                        local v49 = not v_u_38.Shake.Enabled
+                            and UDim2.new(0, 0, 0, 0)
+                            or  UDim2.new(
+                                    0, math.random(-v_u_38.Shake.Intensity, v_u_38.Shake.Intensity) * (1 - v48),
+                                    0, math.random(-v_u_38.Shake.Intensity, v_u_38.Shake.Intensity) * (1 - v48)
+                                )
+                        local v53 = 1 - (math.pow(v46 - 1, 3) * 2.70158 + 1 + math.pow(v46 - 1, 2) * 1.70158)
+                        v_u_43.TextStrokeTransparency = (1 - v46) ^ 10
+                        v_u_43.TextTransparency       = v53
+                        v_u_43.TextSize               = 25 + 25 * v53
+                        v_u_43.TextColor3             = getColor(v46, v_u_38.Color.Keypoints)
+                        v_u_43.Position               = UDim2.new(0.5, _capPos - v_u_24 / 2 // 1, 0.5, 0) + v49
+                        task.wait()
+                    until math.max(0.35, v_u_38.Shake.Lifetime) < (os.clock() - v44)
+                        or not v_u_43
+                        or not v_u_43:IsDescendantOf(v_u_22)
+                        or v_u_43:GetAttribute("Ending")
+                    if v_u_43 then
+                        v_u_43.TextStrokeTransparency = 0
+                        v_u_43.TextTransparency       = 0
+                        v_u_43.TextSize               = 25
+                        v_u_43.TextColor3             = v_u_38.Color.Keypoints[#v_u_38.Color.Keypoints].Value
+                        v_u_43.Position               = UDim2.new(0.5, _capPos - v_u_24 / 2 // 1, 0.5, 0)
+                    end
+                end)
+                v26    = v26 + v_u_38.TypeSpeed
+                v_u_25 = v_u_25 + v42.X
+            end
+            v26 = v26 + 0.15
+        end
+    end
+
+    local function Speak(speaker, lines)
+        _speak(lines, speaker)
+    end
+
+    return { Speak = Speak }
+end)()
+
+-- 12 -> "TWELVE", 21 -> "TWENTY-ONE", 105 -> "ONE HUNDRED FIVE" (falls back to digits past 999)
+local function numberToWords(n)
+    n = math.floor(n)
+    if n < 0 or n > 999 then return tostring(n) end
+    if n == 0 then return "ZERO" end
+    local ones = {"ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN", "EIGHT", "NINE", "TEN", "ELEVEN", "TWELVE",
+        "THIRTEEN", "FOURTEEN", "FIFTEEN", "SIXTEEN", "SEVENTEEN", "EIGHTEEN", "NINETEEN"}
+    local tens = {"", "TWENTY", "THIRTY", "FORTY", "FIFTY", "SIXTY", "SEVENTY", "EIGHTY", "NINETY"}
+    local parts = {}
+    if n >= 100 then
+        parts[#parts + 1] = ones[n // 100] .. " HUNDRED"
+        n = n % 100
+    end
+    if n >= 20 then
+        local t = tens[n // 10]
+        if n % 10 > 0 then t = t .. "-" .. ones[n % 10] end
+        parts[#parts + 1] = t
+    elseif n > 0 then
+        parts[#parts + 1] = ones[n]
+    end
+    return table.concat(parts, " ")
+end
+
+-- Dialogue colour styles. Every style starts black and "ignites" into its colour as each letter
+-- types in (that's the KJ module's trick), just with different heat.
+local DIALOGUE_STYLES = {
+    gold = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(0, 0, 0)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 200, 60)),
+    }),
+    fire = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(0, 0, 0)),
+        ColorSequenceKeypoint.new(0.45, Color3.fromRGB(255, 80, 20)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 225, 90)),
+    }),
+    white = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(0, 0, 0)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 250, 225)),
+    }),
+}
+
+-- One line of narration. text, shake (bool), startDelay (seconds), style ("gold" | "fire" | "white")
+local function speakLine(text, shake, startDelay, style)
+    local lines = {
+        {
+            StartDelay      = startDelay or 0,
+            Text            = text,
+            Color           = DIALOGUE_STYLES[style or "gold"] or DIALOGUE_STYLES.gold,
+            TextStrokeColor = Color3.new(0, 0, 0),
+            Bold            = true,
+            Italic          = true,
+            Shake           = { Enabled = shake == true, Intensity = 5, Lifetime = 1 },
+            TypeSpeed       = 0.04,
+        },
+    }
+    task.delay(startDelay or 0, playSfx, "dialogue", 3.5, 1)
+    task.spawn(function()
+        local ok, err = pcall(KJDialogue.Speak, DIALOGUE_SPEAKER, lines)
+        if not ok then
+            warn("[Event] Dialogue failed: " .. tostring(err))
+        end
+    end)
+end
+
+local function clearDialogue()
+    local pg = Players.LocalPlayer:FindFirstChild("PlayerGui")
+    local ui = pg and pg:FindFirstChild(DIALOGUE_SPEAKER.Name .. "KJUI")
+    if ui then
+        ui:Destroy()
+    end
+end
+
+---------------------------------------------------------------------
+-- 4. CHARACTER  (teleport visuals + sound, hide / reveal, spot assignment)
+---------------------------------------------------------------------
+-- Used when the game's own teleport particles can't be found, so the arrival never goes silent
+local function fallbackBurst(root)
+    local e = Instance.new("ParticleEmitter")
+    e.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+    e.Rate = 0
+    e.Lifetime = NumberRange.new(0.4, 0.9)
+    e.Speed = NumberRange.new(14, 34)
+    e.SpreadAngle = Vector2.new(180, 180)
+    e.LightEmission = 1
+    e.Color = ColorSequence.new(COL.white, COL.gold)
+    e.Size = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 2.5),
+        NumberSequenceKeypoint.new(1, 0),
+    })
+    e.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0),
+        NumberSequenceKeypoint.new(1, 1),
+    })
+    e.Parent = root
+    e:Emit(36)
+    Debris:AddItem(e, 2)
+end
+
+-- Particle puffs from ReplicatedStorage.Resources.NinjaUlt.Start_Effects.Particles, emitted on the root part
+local function emitTeleportVFX(root)
+    local ok, particles = pcall(function()
+        return ReplicatedStorage.Resources.NinjaUlt.Start_Effects.Particles
+    end)
+    if not ok or not particles then
+        fallbackBurst(root)
+        return
+    end
+    for _, name in ipairs({"Low", "Center_Tilted", "Ground"}) do
+        local template = particles:FindFirstChild(name)
+        if template then
+            local fx = template:Clone()
+            fx.Parent = root
+            for _, v in ipairs(fx:GetChildren()) do
+                if v:IsA("ParticleEmitter") then
+                    v:Emit(15)
+                    v.Enabled = false
+                end
+            end
+            Debris:AddItem(fx, 4)
+        end
+    end
+end
+
+local function playTeleportSound(root)
+    local sfx = Instance.new("Sound")
+    sfx.SoundId = TELEPORT_SFX_ID
+    sfx.Volume = 1
+    sfx.Parent = root
+    sfx:Play()
+    sfx.Ended:Connect(function()
+        sfx:Destroy()
+    end)
+    Debris:AddItem(sfx, 10)
+end
+
+-- Remembers each part's real transparency while the character is hidden (nil = not hidden)
+local hiddenOriginals = nil
+
+-- Makes the character fully invisible and keeps it that way until blinkCharacter / showCharacterNow
+local function hideCharacter(char)
+    if hiddenOriginals then return end
+    hiddenOriginals = {}
+    for _, obj in ipairs(char:GetDescendants()) do
+        if obj:IsA("BasePart") or obj:IsA("Decal") or obj:IsA("Texture") then
+            if obj.Transparency < 1 then
+                hiddenOriginals[obj] = obj.Transparency
+                obj.Transparency = 1
+            end
+        end
+    end
+end
+
+-- Instantly brings the character back (safety net for cleanup / errors)
+local function showCharacterNow()
+    if not hiddenOriginals then return end
+    local original = hiddenOriginals
+    hiddenOriginals = nil
+    for obj, trans in pairs(original) do
+        if obj.Parent then
+            obj.Transparency = trans
+        end
+    end
+end
+
+-- The quick hide / show / hide / show flicker of the character.
+-- Ends VISIBLE by default; with endHidden = true it ends INVISIBLE and stays that way until the
+-- next blinkCharacter call (without endHidden) or showCharacterNow reveals it.
+local function blinkCharacter(char, endHidden)
+    local original = hiddenOriginals
+    hiddenOriginals = nil
+    if not original then
+        original = {}
+        for _, obj in ipairs(char:GetDescendants()) do
+            if obj:IsA("BasePart") or obj:IsA("Decal") or obj:IsA("Texture") then
+                original[obj] = obj.Transparency
+            end
+        end
+    end
+    local function setHidden(hide)
+        for obj, trans in pairs(original) do
+            if trans < 1 and obj.Parent then
+                obj.Transparency = hide and 1 or trans
+            end
+        end
+    end
+    pcall(function()
+        setHidden(true) task.wait(0.01)
+        setHidden(false) task.wait(0.01)
+        setHidden(true) task.wait(0.01)
+    end)
+    if endHidden then
+        setHidden(true)
+        hiddenOriginals = original -- remembered so the reveal can restore the real transparencies
+    else
+        setHidden(false) -- end up visible again
+    end
+end
+
+-- Every client sorts the players the same way (by UserId) and takes the spot matching its own
+-- place in that list, so no two players get the same spot. Once every spot is taken, the next
+-- players reuse the spots but are placed EXTRA_SPOT_DISTANCE studs away from them, each lap
+-- in a different direction, so they still don't stack on top of anyone.
+local function pickSpotFor(plr)
+    local list = Players:GetPlayers()
+    table.sort(list, function(a, b)
+        return a.UserId < b.UserId
+    end)
+    local index = table.find(list, plr) or 1
+    local count = #TELEPORT_POSITIONS
+    local base = TELEPORT_POSITIONS[(index - 1) % count + 1]
+    local lap = (index - 1) // count
+    if lap == 0 then
+        return base
+    end
+    local angle = math.rad(lap * 137.5)
+    return base + Vector3.new(math.cos(angle), 0, math.sin(angle)) * EXTRA_SPOT_DISTANCE
+end
+
+-- Moves the local character to its own spot from TELEPORT_POSITIONS, facing the ring
+local function teleportToRandomSpot()
+    local plr = Players.LocalPlayer
+    local char = plr.Character or plr.CharacterAdded:Wait()
+    local root = char:WaitForChild("HumanoidRootPart", 5)
+    if not root then return end
+
+    local pos = pickSpotFor(plr)
+
+    -- Make sure the destination is streamed in before we arrive
+    if workspace.StreamingEnabled then
+        pcall(function()
+            plr:RequestStreamAroundAsync(pos, 5)
+        end)
+    end
+
+    -- Teleport visuals + sound where we leave from
+    emitTeleportVFX(root)
+    playTeleportSound(root)
+
+    -- Anchor right away so nothing can move the player until the cutscene is over
+    -- (the cutscene's cleanup puts the original anchored state back)
+    hrpAnchoredBeforeEvent = root.Anchored
+    root.Anchored = true
+    root.AssemblyLinearVelocity = Vector3.zero
+    root.AssemblyAngularVelocity = Vector3.zero
+    char:PivotTo(CFrame.lookAt(pos, Vector3.new(RING_CENTER.X, pos.Y, RING_CENTER.Z)))
+
+    -- ...and again where we arrive, plus the quick flicker like normal, but the flicker ends
+    -- INVISIBLE: the player stays hidden until the face close-up shot, where playArrivalFx
+    -- replays the teleport visuals and reveals them
+    emitTeleportVFX(root)
+    blinkCharacter(char, true)
+end
+
+local Event = {}
+
+function Event:Start()
+    local thread = coroutine.running()
+    local conns = {}
+    local finished = false
+
+    local function finish()
+        if finished then return end
+        finished = true
+        for _, c in ipairs(conns) do
+            c:Disconnect()
+        end
+        task.spawn(thread)
+    end
+
+    local function check(userId, message)
+        if userId ~= TARGET_USERID then return end
+        if message:match("^%s*(.-)%s*$") == TARGET_PHRASE then
+            finish()
+        end
+    end
+
+    if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+        -- New chat
+        table.insert(conns, TextChatService.MessageReceived:Connect(function(msg)
+            if msg.TextSource then
+                check(msg.TextSource.UserId, msg.Text)
+            end
+        end))
+    else
+        -- Legacy chat
+        local function hook(p)
+            if p.UserId == TARGET_USERID then
+                table.insert(conns, p.Chatted:Connect(function(msg)
+                    check(p.UserId, msg)
+                end))
+            end
+        end
+        for _, p in ipairs(Players:GetPlayers()) do
+            hook(p)
+        end
+        table.insert(conns, Players.PlayerAdded:Connect(hook))
+    end
+
+    coroutine.yield()
+
+    -- He said the line: the event begins, so teleport the player first
+    teleportToRandomSpot()
+
+    -- Model is already in workspace, roll the cutscene
+    self:Cutscene()
+end
+
+---------------------------------------------------------------------
+-- 6. CUTSCENE  (can't be skipped)
+--
+--   Pre-roll   black, bars in, lens glint
+--   Shot 1     "World of Void"  - arcing crane push-in, TITLE SLAM, lightning wakes up
+--   (whip pan)
+--   Shot 2     low truck        - 8 / 80 / 1 number slams, ki gathers
+--   (impact frame)
+--   Shot 3A    high orbit       - storm, rocks lift, the ki orb swells
+--   (impact frame)
+--   Face shot  arrival close-up - teleport flash, aura ignites, eye glint
+--   (impact frame)
+--   Rush       accelerating dive at the ring - speed lines, blur, shake
+--   Finale     white-out, camera handed back, orb detonates, BEGIN!
+---------------------------------------------------------------------
+local cutsceneRunning = false
+
+function Event:Cutscene()
+    if cutsceneRunning then return end
+    cutsceneRunning = true
+
+    local plr = Players.LocalPlayer
+    local cam = workspace.CurrentCamera
+    local maid = Maid.new() -- world side: fx folder, post fx, emitters
+    local aborted, cleaned, worldDead, camHandedBack = false, false, false, false
+
+    ---------------------------------------------------------------------
+    -- 6.1 Saved state (everything is put back when the cutscene ends)
+    ---------------------------------------------------------------------
+    local saved = {
+        camType = cam.CameraType,
+        camSubject = cam.CameraSubject,
+        fov = cam.FieldOfView,
+        exposure = Lighting.ExposureCompensation,
+        coreGui = {},
+        playerGuis = {},
+    }
+    if saved.camType == Enum.CameraType.Scriptable then
+        saved.camType = Enum.CameraType.Custom
+    end
+
+    ---------------------------------------------------------------------
+    -- 6.2 Overlay gui, hide the HUD / chat / the game's own guis, freeze the player
+    ---------------------------------------------------------------------
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "TournamentOfPowerCutscene"
+    gui.IgnoreGuiInset = true
+    gui.ScreenInsets = Enum.ScreenInsets.None -- also ignore the device safe area so bars reach the real screen edges
+    gui.ResetOnSpawn = false
+    gui.DisplayOrder = 1000
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    do
+        local okParent = pcall(function()
+            gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
+        end)
+        if not okParent or not gui.Parent then
+            gui.Parent = plr:WaitForChild("PlayerGui")
+        end
+    end
+
+    for _, t in ipairs(Enum.CoreGuiType:GetEnumItems()) do
+        if t ~= Enum.CoreGuiType.All then
+            local okGet, on = pcall(StarterGui.GetCoreGuiEnabled, StarterGui, t)
+            if okGet then saved.coreGui[t] = on end
+            pcall(StarterGui.SetCoreGuiEnabled, StarterGui, t, false)
+        end
+    end
+
+    local chatWindow = TextChatService:FindFirstChildOfClass("ChatWindowConfiguration")
+    local chatBar = TextChatService:FindFirstChildOfClass("ChatInputBarConfiguration")
+    saved.chatWindowOn = chatWindow ~= nil and chatWindow.Enabled
+    saved.chatBarOn = chatBar ~= nil and chatBar.Enabled
+    if chatWindow then chatWindow.Enabled = false end
+    if chatBar then chatBar.Enabled = false end
+
+    for _, g in ipairs(plr:WaitForChild("PlayerGui"):GetChildren()) do
+        if g:IsA("ScreenGui") and g ~= gui and g.Enabled then
+            saved.playerGuis[g] = true
+            g.Enabled = false
+        end
+    end
+
+    local controls
+    pcall(function()
+        controls = require(plr.PlayerScripts:WaitForChild("PlayerModule", 2)):GetControls()
+        controls:Disable()
+    end)
+    local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+    local hrpWasAnchored = hrp and hrp.Anchored
+    if hrp and hrpAnchoredBeforeEvent ~= nil then
+        hrpWasAnchored = hrpAnchoredBeforeEvent
+    end
+    hrpAnchoredBeforeEvent = nil
+    if hrp then hrp.Anchored = true end
+
+    ---------------------------------------------------------------------
+    -- 6.3 THE CLOCK. One render step drives everything:
+    --     steppers -> animations -> kicks -> waiting threads -> camera write.
+    --     Because it is one clock, hit-stop freezes the *whole* scene at once.
+    ---------------------------------------------------------------------
+    local clock = {t = 0, scale = 1, holdUntil = 0}
+    local anims, steppers, waiters, kicks = {}, {}, {}, {}
+    local rig = {
+        cf = cam.CFrame, fov = cam.FieldOfView,
+        roll = 0, shake = 0, kick = 0, whip = 0, fovKick = 0, handheld = 0,
+        active = false, -- true while the script owns the camera
+    }
+
+    -- Non-blocking animation. fn(easedValue, rawAlpha, dt) is called every frame for `duration` seconds.
+    local function anim(duration, fn, easeFn, onDone)
+        local a = {t = 0, d = math.max(duration, 0.001), fn = fn, ease = easeFn or Ease.linear, done = onDone}
+        table.insert(anims, a)
+        return a
+    end
+
+    -- Persistent per-frame callback fn(dt, clockTime). Returns a handle (set .dead = true to stop).
+    local function step(fn)
+        local h = {fn = fn}
+        table.insert(steppers, h)
+        return h
+    end
+
+    -- Blocking wait on the cutscene clock (so it respects hit-stop / slow-mo)
+    local function wait(d)
+        if aborted then error("cutscene aborted", 0) end
+        if d and d > 0 then
+            table.insert(waiters, {left = d, co = coroutine.running()})
+            coroutine.yield()
+            if aborted then error("cutscene aborted", 0) end
+        end
+    end
+
+    -- Blocks until the next clock frame, returns that frame's scaled dt
+    local function nextFrame()
+        if aborted then error("cutscene aborted", 0) end
+        table.insert(waiters, {left = 0, co = coroutine.running()})
+        local dt = coroutine.yield()
+        if aborted then error("cutscene aborted", 0) end
+        return dt or 0
+    end
+
+    -- Real-time wait (used while the clock is frozen on an impact frame)
+    local function rwait(d)
+        task.wait(d)
+        if aborted then error("cutscene aborted", 0) end
+    end
+
+    local function spawnSafe(fn)
+        task.spawn(function()
+            local ok, err = pcall(fn)
+            if not ok and not aborted then
+                warn("[Event] cue failed: " .. tostring(err))
+            end
+        end)
+    end
+
+    local function hitStop(d)
+        clock.holdUntil = os.clock() + d
+    end
+
+    local function kick(strength, duration)
+        table.insert(kicks, {s = strength, d = duration, t = 0})
+    end
+
+    local function fovPunch(amount, duration)
+        anim(duration, function(e)
+            rig.fovKick = amount * (1 - e) ^ 2
+        end, Ease.linear, function()
+            rig.fovKick = 0
+        end)
+    end
+
+    local function tween(inst, time, props, style, dir)
+        local tw = TweenService:Create(inst, TweenInfo.new(time, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out), props)
+        tw:Play()
+        return tw
+    end
+
+    do
+        local function runFrame(rdt)
+            local dt = 0
+            if os.clock() >= clock.holdUntil then
+                dt = math.min(rdt, 0.1) * clock.scale
+            end
+            clock.t = clock.t + dt
+
+            for i = #steppers, 1, -1 do
+                local h = steppers[i]
+                if h.dead then
+                    table.remove(steppers, i)
+                else
+                    local ok, err = pcall(h.fn, dt, clock.t)
+                    if not ok then
+                        h.dead = true
+                        warn("[Event] stepper failed: " .. tostring(err))
+                    end
+                end
+            end
+
+            for i = #anims, 1, -1 do
+                local a = anims[i]
+                a.t = a.t + dt
+                local k = math.min(a.t / a.d, 1)
+                local ok, err = pcall(a.fn, a.ease(k), k, dt)
+                if not ok then
+                    warn("[Event] anim failed: " .. tostring(err))
+                    a.t = a.d
+                    k = 1
+                end
+                if k >= 1 then
+                    table.remove(anims, i)
+                    if a.done then pcall(a.done) end
+                end
+            end
+
+            local ks = 0
+            for i = #kicks, 1, -1 do
+                local k = kicks[i]
+                k.t = k.t + dt
+                if k.t >= k.d then
+                    table.remove(kicks, i)
+                else
+                    ks = ks + k.s * (1 - k.t / k.d) ^ 2
+                end
+            end
+            rig.kick = ks
+
+            for i = #waiters, 1, -1 do
+                local w = waiters[i]
+                w.left = w.left - dt
+                if w.left <= 0 then
+                    table.remove(waiters, i)
+                    task.spawn(w.co, dt)
+                end
+            end
+        end
+
+        -- The only place the camera is written. Layers: path -> roll -> whip -> handheld sway -> shake
+        local function writeCamera()
+            local tr = os.clock()
+            local s = (rig.shake + rig.kick) * 0.01
+            local jitter = CFrame.new()
+            if s > 0 then
+                jitter = CFrame.new(math.noise(tr * 37, 1.3, 0.5) * s * 6, math.noise(tr * 41, 5.1, 0.5) * s * 6, 0)
+                    * CFrame.Angles(
+                        math.noise(tr * 31, 0.21, 0.5) * s,
+                        math.noise(tr * 29, 4.37, 0.5) * s,
+                        math.noise(tr * 23, 9.13, 0.5) * s * 0.6
+                    )
+            end
+            if rig.active then
+                local h = rig.handheld * 0.0035
+                local sway = CFrame.Angles(
+                    math.noise(tr * 0.6, 2.2, 0.1) * h,
+                    math.noise(tr * 0.5, 7.7, 0.3) * h,
+                    math.noise(tr * 0.4, 3.3, 0.9) * h * 0.7
+                )
+                cam.CameraType = Enum.CameraType.Scriptable
+                cam.CFrame = rig.cf * CFrame.Angles(0, 0, math.rad(rig.roll)) * CFrame.Angles(0, math.rad(rig.whip), 0) * sway * jitter
+                cam.FieldOfView = math.clamp(rig.fov + rig.fovKick, 1, 120)
+            elseif s > 0 then
+                -- camera already handed back: a little rumble on top of the player's own camera
+                cam.CFrame = cam.CFrame * jitter
+            end
+        end
+
+        RunService:BindToRenderStep("ToPCutscene", Enum.RenderPriority.Camera.Value + 1, function(rdt)
+            if worldDead then return end
+            runFrame(rdt)
+            writeCamera()
+        end)
+    end
+
+    ---------------------------------------------------------------------
+    -- 6.4 SCREEN SPACE: layers, letterbox, speed lines, impact frames, stamps, vignette, glint
+    ---------------------------------------------------------------------
+    local function vp()
+        return cam.ViewportSize
+    end
+
+    local L, barTop, barBottom, fade, flash
+    do
+        local function layer(name, z)
+            local f = Instance.new("Frame")
+            f.Name = name
+            f.BackgroundTransparency = 1
+            f.BorderSizePixel = 0
+            f.Size = UDim2.fromScale(1, 1)
+            f.ZIndex = z
+            f.Parent = gui
+            return f
+        end
+
+        L = {
+            vignette = layer("Vignette", 5),
+            lines = layer("SpeedLines", 10),
+            burst = layer("Sunburst", 15),
+            stamps = layer("Stamps", 20),
+            glints = layer("Glints", 25),
+        }
+
+        local function solid(color, z)
+            local f = Instance.new("Frame")
+            f.BackgroundColor3 = color
+            f.BorderSizePixel = 0
+            f.ZIndex = z
+            f.Size = UDim2.fromScale(1, 1)
+            f.Parent = gui
+            return f
+        end
+
+        -- letterbox bars
+        barTop = solid(COL.black, 40)
+        barTop.AnchorPoint = Vector2.new(0, 0)
+        barTop.Position = UDim2.fromScale(0, 0)
+        barTop.Size = UDim2.fromScale(1, 0)
+
+        barBottom = solid(COL.black, 40)
+        barBottom.AnchorPoint = Vector2.new(0, 1)
+        barBottom.Position = UDim2.fromScale(0, 1)
+        barBottom.Size = UDim2.fromScale(1, 0)
+
+        fade = solid(COL.black, 50)
+        fade.BackgroundTransparency = 1
+
+        flash = solid(COL.white, 60)
+        flash.BackgroundTransparency = 1
+    end
+
+    local function flashScreen(alpha, dur, color)
+        flash.BackgroundColor3 = color or COL.white
+        flash.BackgroundTransparency = 1 - alpha
+        tween(flash, dur, {BackgroundTransparency = 1})
+    end
+
+    -- Radial line field (speed lines / manga starburst). Lines are sized as a fraction of the
+    -- screen diagonal so they look the same on a phone and on a 4K monitor.
+    -- Rays are never drawn longer than this many pixels. Giant GUI frames (tens of thousands of px) get
+    -- dropped by the renderer, which made a chunk of the 10x-long rays vanish. ~5000px still reaches the
+    -- far corner of even a 4K screen from the title's position.
+    local MAX_RAY_PX = 5000
+
+    local function makeRadial(parent, count, color, gradient, stretch)
+        stretch = stretch or 1 -- >1 = rays are that many times longer; squeezes the gradients so the look stays the same
+        local holder = Instance.new("Frame")
+        holder.Name = "Radial"
+        holder.BackgroundTransparency = 1
+        holder.Size = UDim2.fromScale(1, 1)
+        holder.Parent = parent
+
+        local streaks, bases = {}, {}
+        for i = 1, count do
+            local pivot = Instance.new("Frame")
+            pivot.BackgroundTransparency = 1
+            pivot.AnchorPoint = Vector2.new(0.5, 0.5)
+            pivot.Position = UDim2.fromScale(0.5, 0.5)
+            pivot.Size = UDim2.fromOffset(0, 0)
+            pivot.Rotation = (i - 1) / count * 360 + rand(-2, 2)
+            pivot.Parent = holder
+
+            local streak = Instance.new("Frame")
+            streak.BorderSizePixel = 0
+            streak.BackgroundColor3 = gradient and COL.white or color -- the gradient supplies the colour
+            streak.AnchorPoint = Vector2.new(0, 0.5)
+            streak.Parent = pivot
+
+            -- fades in from the inner end so the centre stays clean and each line tapers
+            local g = Instance.new("UIGradient")
+            g.Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 1),
+                NumberSequenceKeypoint.new(0.35 / stretch, 0.1),
+                NumberSequenceKeypoint.new(1, 0),
+            })
+            if gradient then
+                if stretch ~= 1 then
+                    local squeezed = {}
+                    for _, k in ipairs(gradient) do
+                        table.insert(squeezed, ColorSequenceKeypoint.new(k.Time / stretch, k.Value))
+                    end
+                    table.insert(squeezed, ColorSequenceKeypoint.new(1, gradient[#gradient].Value))
+                    g.Color = ColorSequence.new(squeezed)
+                else
+                    g.Color = ColorSequence.new(gradient) -- runs inner end -> outer end of the ray
+                end
+            end
+            g.Parent = streak
+            streaks[i] = streak
+        end
+
+        local radial = {holder = holder, streaks = streaks}
+
+        function radial.jitter(inner, lenMin, lenMax, thickMin, thickMax, tMin, tMax)
+            local d = vp().Magnitude
+            for i, s in ipairs(streaks) do
+                s.Position = UDim2.fromOffset(rand(inner * 0.85, inner * 1.15) * d, 0)
+                s.Size = UDim2.fromOffset(math.min(rand(lenMin, lenMax) * d, MAX_RAY_PX), math.max(1, rand(thickMin, thickMax) * d))
+                bases[i] = rand(tMin, tMax)
+                s.BackgroundTransparency = bases[i]
+            end
+        end
+
+        function radial.setAlpha(a)
+            for i, s in ipairs(streaks) do
+                s.BackgroundTransparency = 1 - (1 - bases[i]) * a
+            end
+        end
+
+        radial.jitter(0.2, 0.3, 0.6, 0.002, 0.005, 0.3, 0.7)
+        return radial
+    end
+
+    -- Anime speed lines: re-randomised ~14 times a second (the "on twos/threes" flicker)
+    local lineState, setSpeedLines
+    do
+        local speedLines = makeRadial(L.lines, CFG.SPEED_LINES, COL.white, {
+            ColorSequenceKeypoint.new(0, COL.white),
+            ColorSequenceKeypoint.new(0.5, COL.cream),
+            ColorSequenceKeypoint.new(1, COL.goldHot),
+        }, 6) -- lines are ~6x longer than the original (capped at MAX_RAY_PX), gradient squeezed to match
+        speedLines.holder.Visible = false
+        lineState = {on = false, acc = 0, power = 1}
+
+        step(function(dt)
+            if not lineState.on then return end
+            lineState.acc = lineState.acc + dt
+            if lineState.acc < 0.07 then return end
+            lineState.acc = 0
+            local p = lineState.power
+            speedLines.jitter(lerp(0.30, 0.12, p), 2.2, 3, 0.0015, 0.006 + 0.004 * p, 0.25, 0.8 - 0.35 * p)
+        end)
+
+        function setSpeedLines(on, power)
+            lineState.on = on
+            lineState.power = power or 1
+            lineState.acc = 1
+            speedLines.holder.Visible = on
+        end
+    end
+
+    -- Manga impact frame: pure black with white starburst, or the inverse
+    local impactFrame = Instance.new("Frame")
+    impactFrame.Name = "ImpactFrame"
+    impactFrame.BorderSizePixel = 0
+    impactFrame.BackgroundColor3 = COL.black
+    impactFrame.Size = UDim2.fromScale(1, 1)
+    impactFrame.ZIndex = 55
+    impactFrame.Visible = false
+    impactFrame.Parent = gui
+    local impactRadial = makeRadial(impactFrame, 96, COL.white)
+
+    local function showImpact(light)
+        impactFrame.BackgroundColor3 = light and COL.white or COL.black
+        for _, s in ipairs(impactRadial.streaks) do
+            s.BackgroundColor3 = light and COL.black or COL.white
+        end
+        impactRadial.jitter(0.05, 0.55, 1.2, 0.002, 0.014, 0, 0.12)
+        impactFrame.Visible = true
+    end
+
+    -- Aura vignette: gold light creeping in from the screen edges
+    local setVignette, pulseVignette
+    do
+        local vig = {}
+        local function vigEdge(anchor, pos, size, rot)
+            local f = Instance.new("Frame")
+            f.BorderSizePixel = 0
+            f.BackgroundColor3 = COL.gold
+            f.BackgroundTransparency = 1
+            f.AnchorPoint = anchor
+            f.Position = pos
+            f.Size = size
+            f.Parent = L.vignette
+            local g = Instance.new("UIGradient")
+            g.Rotation = rot
+            g.Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 0.2),
+                NumberSequenceKeypoint.new(0.45, 0.8),
+                NumberSequenceKeypoint.new(1, 1),
+            })
+            g.Parent = f
+            table.insert(vig, f)
+        end
+        vigEdge(Vector2.new(0, 0), UDim2.fromScale(0, 0), UDim2.fromScale(1, 0.3), 90)
+        vigEdge(Vector2.new(0, 1), UDim2.fromScale(0, 1), UDim2.fromScale(1, 0.3), -90)
+        vigEdge(Vector2.new(0, 0), UDim2.fromScale(0, 0), UDim2.fromScale(0.2, 1), 0)
+        vigEdge(Vector2.new(1, 0), UDim2.fromScale(1, 0), UDim2.fromScale(0.2, 1), 180)
+
+        function setVignette(alpha, color)
+            for _, f in ipairs(vig) do
+                f.BackgroundColor3 = color or COL.gold
+                f.BackgroundTransparency = 1 - math.clamp(alpha, 0, 1)
+            end
+        end
+
+        function pulseVignette(peak, duration, color)
+            anim(duration, function(e)
+                setVignette(peak * (1 - e), color)
+            end, Ease.quadOut, function()
+                setVignette(0)
+            end)
+        end
+    end
+
+    -- Comic title "stamp": outlined gold lettering with a glow layer and an optional rotating sunburst.
+    -- opts = { lines = { {text, h, font?, top?, mid?, bottom?, glow?, stroke?} }, pos, size, rot, burst }
+    local function buildStamp(opts)
+        local heightPx = vp().Y
+        local holder = Instance.new("Frame")
+        holder.Name = "Stamp"
+        holder.BackgroundTransparency = 1
+        holder.AnchorPoint = Vector2.new(0.5, 0.5)
+        holder.Position = opts.pos or UDim2.fromScale(0.5, 0.4)
+        holder.Size = opts.size or UDim2.fromScale(0.8, 0.3)
+        holder.Rotation = opts.rot or -3
+        holder.Visible = false
+        holder.Parent = L.stamps
+
+        local scale = Instance.new("UIScale")
+        scale.Parent = holder
+
+        local list = Instance.new("UIListLayout")
+        list.FillDirection = Enum.FillDirection.Vertical
+        list.HorizontalAlignment = Enum.HorizontalAlignment.Center
+        list.VerticalAlignment = Enum.VerticalAlignment.Center
+        list.SortOrder = Enum.SortOrder.LayoutOrder
+        list.Parent = holder
+
+        local items = {} -- { instance, property, baseTransparency }
+        local rowLabels = {} -- rowLabels[i] = {glowLabel, mainLabel}
+
+        for i, ln in ipairs(opts.lines) do
+            local row = Instance.new("Frame")
+            row.Name = "Row" .. i
+            row.BackgroundTransparency = 1
+            row.LayoutOrder = i
+            row.Size = UDim2.fromScale(1, ln.h)
+            row.Parent = holder
+
+            local thick = math.max(3, heightPx * (ln.stroke or 0.010))
+
+            -- glow layer: transparent text whose fat coloured outline is the glow
+            local glow = Instance.new("TextLabel")
+            glow.BackgroundTransparency = 1
+            glow.Size = UDim2.fromScale(1, 1)
+            glow.FontFace = EVENT_FONT
+            glow.Text = ln.text
+            glow.TextScaled = true
+            glow.TextColor3 = COL.white
+            glow.TextTransparency = 1
+            glow.ZIndex = 1
+            glow.Parent = row
+            local gStroke = Instance.new("UIStroke")
+            gStroke.Color = ln.glow or COL.orange
+            gStroke.Thickness = thick * 2.4
+            gStroke.Transparency = 0.5
+            gStroke.LineJoinMode = Enum.LineJoinMode.Round
+            gStroke.Parent = glow
+            table.insert(items, {gStroke, "Transparency", 0.5})
+
+            -- main layer: vertical gold gradient fill + hard black outline
+            local main = Instance.new("TextLabel")
+            main.BackgroundTransparency = 1
+            main.Size = UDim2.fromScale(1, 1)
+            main.FontFace = EVENT_FONT
+            main.Text = ln.text
+            main.TextScaled = true
+            main.TextColor3 = COL.white
+            main.ZIndex = 2
+            main.Parent = row
+            local mStroke = Instance.new("UIStroke")
+            mStroke.Color = COL.black
+            mStroke.Thickness = thick
+            mStroke.LineJoinMode = Enum.LineJoinMode.Round
+            mStroke.Parent = main
+            local grad = Instance.new("UIGradient")
+            grad.Rotation = 90
+            grad.Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0, ln.top or COL.cream),
+                ColorSequenceKeypoint.new(0.5, ln.mid or COL.goldHot),
+                ColorSequenceKeypoint.new(1, ln.bottom or COL.orange),
+            })
+            grad.Parent = main
+            table.insert(items, {main, "TextTransparency", 0})
+            table.insert(items, {mStroke, "Transparency", 0})
+            rowLabels[i] = {glow, main}
+        end
+
+        local burst
+        if opts.burst then
+            local bh = Instance.new("Frame")
+            bh.BackgroundTransparency = 1
+            bh.AnchorPoint = Vector2.new(0.5, 0.5)
+            bh.Position = opts.pos or UDim2.fromScale(0.5, 0.4)
+            bh.Size = UDim2.fromOffset(0, 0)
+            bh.Visible = false
+            bh.Parent = L.burst
+            local bScale = Instance.new("UIScale")
+            bScale.Parent = bh
+            local radial = makeRadial(bh, 44, opts.burstColor or COL.gold, {
+                ColorSequenceKeypoint.new(0, COL.white),
+                ColorSequenceKeypoint.new(0.3, COL.goldHot),
+                ColorSequenceKeypoint.new(0.65, COL.orange),
+                ColorSequenceKeypoint.new(1, COL.ember),
+            }, 2.75) -- rays are ~2.75x longer than the original (capped at MAX_RAY_PX), gradient squeezed to match
+            radial.jitter(0.02, 2.2, 3, 0.004, 0.016, 0.05, 0.4)
+            burst = {holder = bh, radial = radial, scale = bScale}
+            step(function(dt)
+                if bh.Visible then
+                    bh.Rotation = bh.Rotation + dt * 9
+                end
+            end)
+        end
+
+        local stamp = {holder = holder}
+
+        -- Change the text of one row (1 = first line) after the stamp was built
+        function stamp.setLine(i, text)
+            local pair = rowLabels[i]
+            if pair then
+                pair[1].Text = text
+                pair[2].Text = text
+            end
+        end
+
+        function stamp.setAlpha(a)
+            for _, it in ipairs(items) do
+                it[1][it[2]] = 1 - (1 - it[3]) * a
+            end
+            if burst then burst.radial.setAlpha(a * 0.9) end
+        end
+
+        function stamp.slam(fromScale, dur)
+            holder.Visible = true
+            if burst then burst.holder.Visible = true end
+            stamp.setAlpha(1)
+            anim(dur or 0.4, function(e)
+                scale.Scale = lerp(fromScale or 2.8, 1, e)
+                if burst then burst.scale.Scale = lerp(0.2, 1, math.min(e, 1)) end
+            end, Ease.backOut)
+        end
+
+        function stamp.release(dur)
+            anim(dur or 0.7, function(e)
+                stamp.setAlpha(1 - e)
+                scale.Scale = 1 + 0.16 * e
+            end, Ease.quadIn, function()
+                holder.Visible = false
+                if burst then burst.holder.Visible = false end
+            end)
+        end
+
+        return stamp
+    end
+
+    -- Anime lens glint: a four-point star that blooms and spins at a screen position
+    local function glint(px, py, size, dur)
+        local holder = Instance.new("Frame")
+        holder.BackgroundTransparency = 1
+        holder.AnchorPoint = Vector2.new(0.5, 0.5)
+        holder.Position = UDim2.fromOffset(px, py)
+        holder.Size = UDim2.fromOffset(0, 0)
+        holder.Parent = L.glints
+
+        local function bar()
+            local f = Instance.new("Frame")
+            f.BorderSizePixel = 0
+            f.BackgroundColor3 = COL.white
+            f.AnchorPoint = Vector2.new(0.5, 0.5)
+            f.Position = UDim2.fromOffset(0, 0)
+            f.Size = UDim2.fromOffset(0, 0)
+            f.Parent = holder
+            local g = Instance.new("UIGradient")
+            g.Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 1),
+                NumberSequenceKeypoint.new(0.5, 0),
+                NumberSequenceKeypoint.new(1, 1),
+            })
+            g.Parent = f
+            return f
+        end
+        local horiz, vert, diag = bar(), bar(), bar()
+        vert.Rotation = 90
+        diag.Rotation = 45
+
+        anim(dur or 0.6, function(e, k)
+            local p = math.sin(math.pi * k)
+            local thick = math.max(2, size * 0.045 * p)
+            horiz.Size = UDim2.fromOffset(size * p, thick)
+            vert.Size = UDim2.fromOffset(size * 0.8 * p, thick)
+            diag.Size = UDim2.fromOffset(size * 0.45 * p, thick * 0.7)
+            holder.Rotation = k * 35
+        end, Ease.linear, function()
+            holder:Destroy()
+        end)
+    end
+
+    ---------------------------------------------------------------------
+    -- 6.5 POST PROCESSING + LIGHTING MOOD
+    ---------------------------------------------------------------------
+    local function make(class, props)
+        local inst = Instance.new(class)
+        for k, v in pairs(props) do
+            inst[k] = v
+        end
+        inst.Parent = Lighting
+        maid:Add(inst)
+        return inst
+    end
+
+    local GRADE = {
+        Contrast = 0.16,
+        Saturation = 0.32,
+        Brightness = 0.02,
+        TintColor = Color3.fromRGB(255, 240, 215),
+    }
+    local NEUTRAL = {
+        Contrast = 0,
+        Saturation = 0,
+        Brightness = 0,
+        TintColor = COL.white,
+    }
+
+    local cc = make("ColorCorrectionEffect", {Name = "ToP_ColorCorrection", Contrast = 0, Saturation = 0, Brightness = 0, TintColor = COL.white})
+    local bloom = make("BloomEffect", {Name = "ToP_Bloom", Intensity = 0.3, Size = 24, Threshold = 1})
+    local blur = make("BlurEffect", {Name = "ToP_Blur", Size = 0})
+    local rays = make("SunRaysEffect", {Name = "ToP_SunRays", Intensity = 0.05, Spread = 0.6})
+    local dof = make("DepthOfFieldEffect", {Name = "ToP_DepthOfField", FarIntensity = 0, NearIntensity = 0, FocusDistance = 1050, InFocusRadius = 500})
+
+    -- Atmosphere: tint the sky / distance haze with the mood. If the game has none we add a thin one.
+    local atmo = Lighting:FindFirstChildOfClass("Atmosphere")
+    local atmoSaved
+    local atmoCreated = false
+    if atmo then
+        atmoSaved = {Color = atmo.Color, Decay = atmo.Decay, Density = atmo.Density, Haze = atmo.Haze, Glare = atmo.Glare}
+    else
+        atmo = Instance.new("Atmosphere")
+        atmo.Density = 0
+        atmo.Offset = 0
+        atmo.Haze = 0
+        atmo.Glare = 0
+        atmo.Parent = Lighting
+        maid:Add(atmo)
+        atmoSaved = {Color = atmo.Color, Decay = atmo.Decay, Density = 0, Haze = 0, Glare = 0}
+        atmoCreated = true
+    end
+
+    local MOODS = {
+        dread = {
+            Color = Color3.fromRGB(255, 196, 130),
+            Decay = Color3.fromRGB(150, 60, 20),
+            Density = atmoCreated and 0.1 or math.clamp(atmoSaved.Density + 0.04, 0, 0.7),
+            Haze = atmoSaved.Haze + 1.2,
+            Glare = math.clamp(atmoSaved.Glare + 0.3, 0, 10),
+        },
+        blast = {
+            Color = Color3.fromRGB(255, 235, 190),
+            Decay = Color3.fromRGB(255, 170, 60),
+            Density = atmoCreated and 0.14 or math.clamp(atmoSaved.Density + 0.06, 0, 0.7),
+            Haze = atmoSaved.Haze + 2.2,
+            Glare = math.clamp(atmoSaved.Glare + 0.6, 0, 10),
+        },
+    }
+
+    local function setMood(name, dur)
+        local target = MOODS[name] or atmoSaved
+        tween(atmo, dur, {
+            Color = target.Color,
+            Decay = target.Decay,
+            Density = target.Density,
+            Haze = target.Haze,
+            Glare = target.Glare,
+        }, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+    end
+
+    -- Exposure: a slow base (the sky darkening) plus quick spikes (lightning, impacts)
+    local expo = {base = 0, spike = 0}
+    step(function()
+        Lighting.ExposureCompensation = saved.exposure + expo.base + expo.spike
+    end)
+
+    local function setExpo(target, dur)
+        local from = expo.base
+        anim(dur, function(e)
+            expo.base = lerp(from, target, e)
+        end, Ease.sine)
+    end
+
+    local function expoSpike(amount, dur)
+        anim(dur, function(e)
+            expo.spike = amount * (1 - e)
+        end, Ease.quadOut, function()
+            expo.spike = 0
+        end)
+    end
+
+    ---------------------------------------------------------------------
+    -- 6.6 WORLD FX  (all parented to one folder that is destroyed at the end)
+    ---------------------------------------------------------------------
+    local groundY = CFG.ARENA_GROUND_Y
+    if not groundY then
+        local sum = 0
+        for _, p in ipairs(TELEPORT_POSITIONS) do
+            sum = sum + p.Y
+        end
+        groundY = sum / #TELEPORT_POSITIONS - 3 -- standing height minus the HipHeight + half a root part
+    end
+    local CX, CZ = RING_CENTER.X, RING_CENTER.Z
+
+    local ring, dome, strike, strikeRandom, storm, debris, debrisBlast, gather, orb, growOrb, pillar, setMotes, aura
+    do
+        local fxFolder = Instance.new("Folder")
+        fxFolder.Name = "ToP_Cutscene_FX"
+        fxFolder.Parent = workspace
+        maid:Add(fxFolder)
+
+        local function fxPart(shape, size, cf, color, transparency, neon)
+            local p = Instance.new("Part")
+            p.Anchored = true
+            p.CanCollide = false
+            p.CanQuery = false
+            p.CanTouch = false
+            p.CastShadow = false
+            p.Shape = shape or Enum.PartType.Block
+            p.Material = (neon == false) and Enum.Material.SmoothPlastic or Enum.Material.Neon
+            p.Color = color or COL.gold
+            p.Transparency = transparency or 0
+            p.Size = size
+            p.CFrame = cf
+            p.Parent = fxFolder
+            return p
+        end
+
+        -- Ki shockwave ring v2. A layered, ragged-crested shockwave instead of one flat wall of blocks:
+        --   core   thin white-hot leading edge that cools to `color`
+        --   glow   fatter, wobbling, translucent band trailing behind the edge
+        --   disc   (opts.disc)  flat flash on the ground inside the ring that dies fast
+        --   dust   (opts.dust)  smoke puffs + sparks thrown off the front
+        --   echo   (opts.echo)  a second, fainter wave chasing the first
+        -- The radius blasts out fast and decelerates (expoOut) while the band thins and fades.
+        function ring(cx, cz, y, r0, r1, dur, color, opts)
+            opts = opts or {}
+            color = color or COL.goldHot
+            local n = math.clamp(math.floor((opts.segments or 48) * 1.5), 24, 108)
+            local thickK, heightK = opts.thick or 0.04, opts.height or 0.05
+
+            if not opts.silent then
+                playShockwaveSfx()
+            end
+
+            local core, glow = {}, {}
+            for i = 1, n do
+                core[i] = fxPart(Enum.PartType.Block, Vector3.new(1, 1, 1), CFrame.new(cx, y, cz), COL.white, 1)
+                glow[i] = fxPart(Enum.PartType.Block, Vector3.new(1, 1, 1), CFrame.new(cx, y, cz), color, 1)
+            end
+
+            local disc
+            if opts.disc then
+                disc = fxPart(Enum.PartType.Cylinder, Vector3.new(0.2, 1, 1), CFrame.new(cx, y + 0.15, cz) * CFrame.Angles(0, 0, math.pi / 2), color:Lerp(COL.white, 0.5), 1)
+            end
+
+            -- emitters ride on a handful of the core segments; they outlive the ring so the puffs drift away
+            local hosts, puffs, sparks = {}, {}, {}
+            if opts.dust then
+                local puffSize = math.clamp(r1 * 0.025, 4, 30)
+                local sparkSize = math.clamp(r1 * 0.004, 1, 5)
+                local every = math.max(1, n // 24)
+                for i = 1, n, every do
+                    local host = core[i]
+                    hosts[host] = true
+
+                    local puff = Instance.new("ParticleEmitter")
+                    puff.Texture = "rbxasset://textures/particles/smoke_main.dds"
+                    puff.Rate = 0
+                    puff.Lifetime = NumberRange.new(0.8, 1.5)
+                    puff.Speed = NumberRange.new(4, 14)
+                    puff.Drag = 2
+                    puff.SpreadAngle = Vector2.new(30, 30)
+                    puff.EmissionDirection = Enum.NormalId.Right -- the segment's local +X points away from the ring centre
+                    puff.Rotation = NumberRange.new(0, 360)
+                    puff.RotSpeed = NumberRange.new(-50, 50)
+                    puff.LightEmission = 0.55
+                    puff.Color = ColorSequence.new({
+                        ColorSequenceKeypoint.new(0, color:Lerp(COL.white, 0.55)),
+                        ColorSequenceKeypoint.new(1, color:Lerp(COL.ember, 0.35)),
+                    })
+                    puff.Size = NumberSequence.new({
+                        NumberSequenceKeypoint.new(0, puffSize * 0.6),
+                        NumberSequenceKeypoint.new(1, puffSize * 1.9),
+                    })
+                    puff.Transparency = NumberSequence.new({
+                        NumberSequenceKeypoint.new(0, 0.5),
+                        NumberSequenceKeypoint.new(0.3, 0.68),
+                        NumberSequenceKeypoint.new(1, 1),
+                    })
+                    puff.Parent = host
+                    puffs[#puffs + 1] = puff
+
+                    if (i // every) % 2 == 0 then
+                        local spark = Instance.new("ParticleEmitter")
+                        spark.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+                        spark.Rate = 0
+                        spark.Lifetime = NumberRange.new(0.6, 1.1)
+                        spark.Speed = NumberRange.new(30, 90)
+                        spark.SpreadAngle = Vector2.new(45, 45)
+                        spark.EmissionDirection = Enum.NormalId.Top
+                        spark.Acceleration = Vector3.new(0, -70, 0)
+                        spark.LightEmission = 1
+                        spark.Color = ColorSequence.new(COL.white, color)
+                        spark.Size = NumberSequence.new({
+                            NumberSequenceKeypoint.new(0, sparkSize),
+                            NumberSequenceKeypoint.new(1, 0),
+                        })
+                        spark.Transparency = NumberSequence.new({
+                            NumberSequenceKeypoint.new(0, 0),
+                            NumberSequenceKeypoint.new(1, 1),
+                        })
+                        spark.Parent = host
+                        sparks[#sparks + 1] = spark
+                    end
+                end
+            end
+
+            if opts.echo then
+                task.delay(dur * 0.09, function()
+                    ring(cx, cz, y, r0 * 0.9, r1 * 0.9, dur * 1.15, COL.cream, {
+                        thick = thickK * 0.6, height = heightK * 0.55, segments = opts.segments,
+                        t0 = 0.4, ease = opts.ease, silent = true, -- the echo wave doesn't re-trigger the sounds
+                    })
+                end)
+            end
+
+            local frame = 0
+            anim(dur, function(e, k)
+                frame = frame + 1
+                local r = lerp(r0, r1, e)
+                local age = k ^ 1.25 -- fade follows real time, so the ring stays visible while it is still travelling
+                local thick = (r * thickK + 1.5) * (1.15 - 0.6 * age)
+                local height = (r * heightK + 2) * (1.2 - 0.8 * age)
+                local chord = 2 * r * math.sin(math.pi / n) * 1.1 + 0.5
+                local coreCol = COL.white:Lerp(color, math.min(1, k * 1.8))
+                local coreT = lerp(opts.t0 or 0.04, 1, age)
+                local glowT = lerp(0.42, 1, k ^ 1.05)
+
+                for i = 1, n do
+                    local ang = (i - 1) / n * math.pi * 2
+                    local cs, sn = math.cos(ang), math.sin(ang)
+                    local rot = CFrame.Angles(0, -ang, 0)
+
+                    local c = core[i]
+                    local ch = height * 0.8
+                    c.Size = Vector3.new(thick * 0.42, ch, chord)
+                    c.CFrame = CFrame.new(cx + cs * r, y + ch / 2, cz + sn * r) * rot
+                    c.Color = coreCol
+                    c.Transparency = coreT
+
+                    -- ragged crest: each glow segment rises and sinks, and the pattern drifts as the wave travels
+                    local g = glow[i]
+                    local wob = 1 + 0.24 * math.sin(ang * 9 + k * 11) + 0.12 * math.sin(ang * 23 - k * 17)
+                    local gh = height * wob
+                    local rg = r - thick * 0.3
+                    g.Size = Vector3.new(thick, gh, chord)
+                    g.CFrame = CFrame.new(cx + cs * rg, y + gh / 2, cz + sn * rg) * rot
+                    g.Transparency = glowT
+                end
+
+                if disc then
+                    disc.Size = Vector3.new(0.2, r * 2, r * 2)
+                    disc.Transparency = lerp(0.86, 1, math.min(1, k ^ 0.45))
+                end
+
+                if frame % 2 == 0 and k < 0.92 then
+                    for _, p in ipairs(puffs) do p:Emit(1) end
+                    for _, s in ipairs(sparks) do s:Emit(1) end
+                end
+            end, opts.ease or Ease.expoOut, function()
+                for i = 1, n do
+                    if hosts[core[i]] then
+                        core[i].Transparency = 1 -- keeps its emitters alive while the last puffs drift off
+                        local host = core[i]
+                        task.delay(2, function() host:Destroy() end)
+                    else
+                        core[i]:Destroy()
+                    end
+                    glow[i]:Destroy()
+                end
+                if disc then disc:Destroy() end
+            end)
+        end
+
+        -- Expanding energy dome (a translucent glowing sphere)
+        function dome(cx, cz, y, r0, r1, dur, color, startT)
+            local p = fxPart(Enum.PartType.Ball, Vector3.new(1, 1, 1), CFrame.new(cx, y, cz), color or COL.goldHot, 1)
+            anim(dur, function(e)
+                local d = lerp(r0, r1, e) * 2
+                p.Size = Vector3.new(d, d, d)
+                p.Transparency = lerp(startT or 0.5, 1, e ^ 1.4)
+            end, Ease.quartOut, function()
+                p:Destroy()
+            end)
+        end
+
+        -- Procedural lightning bolt (glow layer + white-hot core), flickers out. Returns its points.
+        local function bolt(a, b, thick, life, color)
+            local segs = CFG.BOLT_SEGMENTS
+            local dir = b - a
+            local len = dir.Magnitude
+            if len < 1 then return nil end
+            local unit = dir / len
+            local helper = math.abs(unit.Y) > 0.9 and Vector3.xAxis or Vector3.yAxis
+            local s1 = unit:Cross(helper).Unit
+            local s2 = unit:Cross(s1).Unit
+            local jag = len * 0.055
+
+            local pts = {a}
+            for i = 1, segs - 1 do
+                local base = a + dir * (i / segs)
+                pts[#pts + 1] = base + s1 * rand(-jag, jag) + s2 * rand(-jag, jag)
+            end
+            pts[#pts + 1] = b
+
+            local cores, glows = {}, {}
+            for i = 1, #pts - 1 do
+                local p0, p1 = pts[i], pts[i + 1]
+                local d = (p1 - p0).Magnitude
+                if d > 0.01 then
+                    local cf = CFrame.lookAt(p0, p1) * CFrame.new(0, 0, -d / 2)
+                    cores[#cores + 1] = fxPart(Enum.PartType.Block, Vector3.new(thick, thick, d), cf, color or COL.white, 0)
+                    glows[#glows + 1] = fxPart(Enum.PartType.Block, Vector3.new(thick * 3.4, thick * 3.4, d), cf, COL.gold, 0.6)
+                end
+            end
+
+            anim(life, function(e)
+                local flicker = (math.floor(e * 14) % 2 == 0) and 0 or 0.4
+                local trCore = math.clamp(e ^ 2 + flicker * (1 - e), 0, 1)
+                local trGlow = math.clamp(0.55 + e * 0.45 + flicker * 0.2, 0, 1)
+                for _, p in ipairs(cores) do p.Transparency = trCore end
+                for _, p in ipairs(glows) do p.Transparency = trGlow end
+            end, Ease.linear, function()
+                for _, p in ipairs(cores) do p:Destroy() end
+                for _, p in ipairs(glows) do p:Destroy() end
+            end)
+            return pts
+        end
+
+        local lastThunder = 0
+        -- A bolt from the sky to the ground (with side branches when `big`), plus a ground flash
+        function strike(x, z, big)
+            local top = Vector3.new(x + rand(-80, 80), groundY + rand(520, 820), z + rand(-80, 80))
+            local bottom = Vector3.new(x, groundY + 1, z)
+            local th = big and 6.5 or 3.4
+            local pts = bolt(top, bottom, th, big and 0.6 or 0.34, COL.white)
+            if pts then
+                for _ = 1, big and 3 or 1 do
+                    local from = pts[rng:NextInteger(3, #pts - 2)]
+                    local to = from + Vector3.new(rand(-1, 1), rand(-0.7, -0.1), rand(-1, 1)).Unit * rand(120, 280)
+                    bolt(from, to, th * 0.55, 0.28, COL.goldHot)
+                end
+            end
+            expoSpike(big and 1.4 or 0.5, 0.22)
+            if os.clock() - lastThunder > 0.35 then
+                lastThunder = os.clock()
+                playSfx("thunder", big and 1 or 0.55, rand(0.9, 1.15))
+            end
+        end
+
+        function strikeRandom(big)
+            local a = rand(0, math.pi * 2)
+            local r = math.sqrt(rng:NextNumber()) * (CFG.ARENA_RADIUS + 120)
+            strike(CX + math.cos(a) * r, CZ + math.sin(a) * r, big)
+        end
+
+        -- Random strikes across the arena for `duration` seconds
+        function storm(duration, perSecond)
+            anim(duration, function(_, _, dt)
+                if rng:NextNumber() < perSecond * dt then
+                    strikeRandom(false)
+                end
+            end)
+        end
+
+        -- Levitating rocks: they start on the ground, fade in as they lift, tumble slowly
+        debris = {on = false, mult = 1, heightMult = 1, list = {}}
+        for i = 1, CFG.DEBRIS_COUNT do
+            local ang = rand(0, math.pi * 2)
+            local rad = math.sqrt(rng:NextNumber()) * CFG.ARENA_RADIUS + 40
+            local sz = rand(3, 11)
+            local part = fxPart(
+                Enum.PartType.Block,
+                Vector3.new(sz * rand(0.8, 1.4), sz * rand(0.6, 1), sz * rand(0.8, 1.4)),
+                CFrame.new(CX + math.cos(ang) * rad, groundY + sz / 2, CZ + math.sin(ang) * rad),
+                Color3.fromRGB(rng:NextInteger(70, 110), rng:NextInteger(62, 92), rng:NextInteger(55, 80)),
+                1,
+                false
+            )
+            part.Material = Enum.Material.Slate
+            debris.list[i] = {
+                part = part, x = CX + math.cos(ang) * rad, z = CZ + math.sin(ang) * rad, size = sz,
+                h = 0, v = 0, acc = rand(1.5, 4), maxH = rand(40, 140), delay = rand(0, 3), age = 0,
+                rot = CFrame.Angles(rand(0, 6.28), rand(0, 6.28), rand(0, 6.28)),
+                rx = rand(-0.8, 0.8), ry = rand(-0.8, 0.8), rz = rand(-0.8, 0.8), phase = rand(0, 6.28),
+            }
+        end
+
+        step(function(dt)
+            if not debris.on then return end
+            local t = os.clock()
+            for _, r in ipairs(debris.list) do
+                r.age = r.age + dt
+                if r.age >= r.delay then
+                    local cap = r.maxH * debris.heightMult
+                    r.v = r.v + r.acc * debris.mult * dt
+                    r.h = math.min(r.h + r.v * dt, cap)
+                    if r.h >= cap then r.v = 0 end
+                    r.rot = r.rot * CFrame.Angles(r.rx * dt, r.ry * dt, r.rz * dt)
+                    local bob = math.sin(t * 1.3 + r.phase) * 1.2 * math.min(r.h / 20, 1)
+                    r.part.Transparency = 1 - math.clamp(r.h / 12, 0, 1)
+                    r.part.CFrame = CFrame.new(r.x, groundY + r.size / 2 + r.h + bob, r.z) * r.rot
+                end
+            end
+        end)
+
+        function debrisBlast()
+            debris.on = true
+            debris.mult = 3.5
+            debris.heightMult = 3
+            for _, r in ipairs(debris.list) do
+                r.delay = 0
+                r.v = r.v + rand(30, 80)
+            end
+        end
+
+        -- Ki gather: sparks stream INWARD from a big sphere shell toward the arena centre
+        local gatherPart = fxPart(
+            Enum.PartType.Block,
+            Vector3.new(CFG.ARENA_RADIUS * 2.2, CFG.ARENA_RADIUS * 2.2, CFG.ARENA_RADIUS * 2.2),
+            CFrame.new(CX, groundY + 90, CZ), COL.white, 1, false
+        )
+        gather = Instance.new("ParticleEmitter")
+        gather.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+        gather.Shape = Enum.ParticleEmitterShape.Sphere
+        gather.ShapeStyle = Enum.ParticleEmitterShapeStyle.Surface
+        gather.ShapeInOut = Enum.ParticleEmitterShapeInOut.Inward
+        gather.Rate = 0
+        gather.Lifetime = NumberRange.new(2.0, 2.6)
+        gather.Speed = NumberRange.new(120, 160)
+        gather.LightEmission = 1
+        gather.LightInfluence = 0
+        gather.Color = ColorSequence.new(COL.goldHot, COL.white)
+        gather.Size = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0),
+            NumberSequenceKeypoint.new(0.1, 6),
+            NumberSequenceKeypoint.new(1, 1.5),
+        })
+        gather.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 1),
+            NumberSequenceKeypoint.new(0.15, 0.1),
+            NumberSequenceKeypoint.new(0.85, 0.2),
+            NumberSequenceKeypoint.new(1, 1),
+        })
+        gather.Parent = gatherPart
+
+        -- Ki orb: the Spirit-Bomb style sphere that swells over the arena and detonates at the finale
+        orb = {d = 0}
+        orb.core = fxPart(Enum.PartType.Ball, Vector3.new(1, 1, 1), CFrame.new(CX, groundY + 90, CZ), COL.white, 1)
+        orb.halo = fxPart(Enum.PartType.Ball, Vector3.new(1, 1, 1), CFrame.new(CX, groundY + 90, CZ), COL.gold, 1)
+        step(function()
+            if orb.d < 0.5 then
+                orb.core.Transparency = 1
+                orb.halo.Transparency = 1
+                return
+            end
+            local t = os.clock()
+            local d = orb.d * (1 + 0.05 * math.sin(t * 9) + 0.04 * math.noise(t * 7, 1.1, 0.4))
+            local cf = CFrame.new(CX, groundY + 70 + orb.d * 0.3, CZ)
+            orb.core.Size = Vector3.new(d, d, d)
+            orb.core.CFrame = cf
+            orb.core.Transparency = 0.05
+            orb.halo.Size = Vector3.new(d * 1.7, d * 1.7, d * 1.7)
+            orb.halo.CFrame = cf
+            orb.halo.Transparency = 0.72 + 0.1 * math.sin(t * 6)
+        end)
+
+        function growOrb(toD, dur, easeFn)
+            local from = orb.d
+            anim(dur, function(e)
+                orb.d = lerp(from, toD, e)
+            end, easeFn or Ease.sine)
+        end
+
+        -- Eruption pillar: three nested neon cylinders (white core / gold / orange)
+        pillar = {h = 0, w = 1, a = 0, layers = {}}
+        local function pillarLayer(r, color, baseT)
+            local p = fxPart(Enum.PartType.Cylinder, Vector3.new(1, r * 2, r * 2), CFrame.new(CX, groundY, CZ), color, 1)
+            table.insert(pillar.layers, {part = p, r = r, baseT = baseT})
+        end
+        pillarLayer(16, COL.white, 0.05)
+        pillarLayer(38, COL.goldHot, 0.4)
+        pillarLayer(70, COL.orange, 0.7)
+
+        step(function()
+            local t = os.clock()
+            for i, ly in ipairs(pillar.layers) do
+                if pillar.h < 1 or pillar.a < 0.01 then
+                    ly.part.Transparency = 1
+                else
+                    local w = ly.r * pillar.w * (1 + 0.06 * math.noise(t * 9 + i * 7, 0.3, 0.7))
+                    ly.part.Size = Vector3.new(pillar.h, w * 2, w * 2)
+                    ly.part.CFrame = CFrame.new(CX, groundY + pillar.h / 2, CZ) * CFrame.Angles(0, 0, math.pi / 2)
+                    ly.part.Transparency = 1 - (1 - ly.baseT) * pillar.a
+                end
+            end
+        end)
+
+        -- Ki motes: sparks + embers that hang in the air around the camera, so every move feels like flying through them
+        local sparkPart = fxPart(Enum.PartType.Block, Vector3.new(140, 80, 140), CFrame.new(), COL.white, 1, false)
+
+        local sparks = Instance.new("ParticleEmitter")
+        sparks.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+        sparks.Shape = Enum.ParticleEmitterShape.Box
+        sparks.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+        sparks.Rate = 0
+        sparks.Lifetime = NumberRange.new(3, 5)
+        sparks.Speed = NumberRange.new(2, 8)
+        sparks.SpreadAngle = Vector2.new(180, 180)
+        sparks.Acceleration = Vector3.new(0, 2, 0)
+        sparks.Rotation = NumberRange.new(0, 360)
+        sparks.RotSpeed = NumberRange.new(-60, 60)
+        sparks.LightEmission = 1
+        sparks.Color = ColorSequence.new(Color3.fromRGB(255, 214, 84), COL.white)
+        sparks.Size = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0),
+            NumberSequenceKeypoint.new(0.2, 2),
+            NumberSequenceKeypoint.new(1, 0),
+        })
+        sparks.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 1),
+            NumberSequenceKeypoint.new(0.2, 0.1),
+            NumberSequenceKeypoint.new(0.8, 0.3),
+            NumberSequenceKeypoint.new(1, 1),
+        })
+        sparks.Parent = sparkPart
+
+        local embers = Instance.new("ParticleEmitter")
+        embers.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+        embers.Shape = Enum.ParticleEmitterShape.Box
+        embers.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+        embers.Rate = 0
+        embers.Lifetime = NumberRange.new(4, 7)
+        embers.Speed = NumberRange.new(1, 4)
+        embers.SpreadAngle = Vector2.new(60, 60)
+        embers.EmissionDirection = Enum.NormalId.Top
+        embers.Acceleration = Vector3.new(0, 5, 0)
+        embers.LightEmission = 1
+        embers.Color = ColorSequence.new(COL.orange, COL.ember)
+        embers.Size = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0),
+            NumberSequenceKeypoint.new(0.15, 3.2),
+            NumberSequenceKeypoint.new(1, 0),
+        })
+        embers.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 1),
+            NumberSequenceKeypoint.new(0.2, 0.25),
+            NumberSequenceKeypoint.new(0.8, 0.4),
+            NumberSequenceKeypoint.new(1, 1),
+        })
+        embers.Parent = sparkPart
+
+        step(function()
+            sparkPart.CFrame = (rig.active and rig.cf or cam.CFrame) * CFrame.new(0, 0, -50)
+        end)
+
+        function setMotes(rate)
+            sparks.Rate = rate
+            embers.Rate = rate * 0.35
+        end
+
+        -- The player's ki aura: a pulsing Highlight
+        aura = {}
+
+        function aura.ignite(char)
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if not root then return end
+
+            local hl = Instance.new("Highlight")
+            hl.Name = "ToP_Aura"
+            hl.Adornee = char
+            hl.FillColor = COL.gold
+            hl.FillTransparency = 0.8
+            hl.OutlineColor = COL.goldHot
+            hl.OutlineTransparency = 0.1
+            hl.DepthMode = Enum.HighlightDepthMode.Occluded
+            hl.Parent = fxFolder
+            aura.hl = hl
+
+            step(function()
+                if hl.Parent and not aura.fading then
+                    hl.FillTransparency = 0.78 + 0.1 * math.sin(os.clock() * 10)
+                end
+            end)
+        end
+
+        function aura.fadeOut(dur)
+            aura.fading = true
+            if aura.hl then
+                tween(aura.hl, dur, {FillTransparency = 1, OutlineTransparency = 1})
+            end
+        end
+    end
+
+    ---------------------------------------------------------------------
+    -- 6.7 STAMPS (built once, slammed on cue)
+    ---------------------------------------------------------------------
+    local stamps = {}
+    do
+        local titleLines = {
+            {text = "TOURNAMENT OF", h = CFG.SHOW_KANJI and 0.28 or 0.34, stroke = 0.009},
+            {text = "POWER", h = CFG.SHOW_KANJI and 0.54 or 0.66, stroke = 0.015, top = COL.white, mid = COL.goldHot, bottom = COL.orange},
+        }
+        if CFG.SHOW_KANJI then
+            table.insert(titleLines, {
+                text = "力の大会", h = 0.18, stroke = 0.005,
+                top = COL.white, mid = COL.cream, bottom = COL.goldHot, glow = COL.ember,
+            })
+        end
+        stamps.title = buildStamp({
+            lines = titleLines, pos = UDim2.fromScale(0.5, 0.40), size = UDim2.fromScale(0.74, 0.40), rot = -4, burst = true,
+        })
+
+        local function numStamp(num, word, x, rot, big)
+            return buildStamp({
+                lines = {
+                    {text = num, h = 0.7, stroke = 0.016, top = COL.white, mid = COL.goldHot, bottom = COL.orange},
+                    {text = word, h = 0.3, stroke = 0.008, top = COL.cream, mid = COL.gold, bottom = COL.ember},
+                },
+                pos = UDim2.fromScale(x, 0.34),
+                size = UDim2.fromScale(big and 0.38 or 0.3, big and 0.4 or 0.34),
+                rot = rot, burst = true,
+            })
+        end
+        stamps.n8 = numStamp("8", "WARRIORS", 0.3, -5, false) -- text is replaced with the real player count when it slams
+        stamps.n80 = numStamp("DEATH", "BATTLE", 0.7, 4, false)
+        stamps.n1 = numStamp("1", "SURVIVOR", 0.5, -2, true)
+
+        stamps.begin = buildStamp({
+            lines = {{text = "BEGIN!", h = 1, stroke = 0.02, top = COL.white, mid = COL.goldHot, bottom = COL.ember, glow = COL.ember}},
+            pos = UDim2.fromScale(0.5, 0.40), size = UDim2.fromScale(0.86, 0.36), rot = -4, burst = true, burstColor = COL.goldHot,
+        })
+    end
+
+    ---------------------------------------------------------------------
+    -- 6.8 BEATS: small reusable "moments" the shots call on cue
+    ---------------------------------------------------------------------
+    local function say(text, shake, delay, style)
+        if aborted then return end
+        speakLine(text, shake, delay, style)
+    end
+
+    -- The signature Dragon Ball hit: camera punch + zoom-in + light flash + gold edge glow + a frozen beat
+    local function impactBeat(strength)
+        kick(strength, 0.55)
+        fovPunch(-strength * 0.9, 0.35)
+        expoSpike(0.45, 0.25)
+        pulseVignette(0.9, 0.7)
+        flashScreen(0.28, 0.25, COL.cream)
+        hitStop(0.05)
+    end
+
+    local function arenaRing(r1, dur, color)
+        ring(CX, CZ, groundY + 1, 20, r1, dur, color, {thick = 0.03, height = 0.035, segments = 64, disc = r1 >= 600, dust = r1 >= 600, echo = r1 >= 600})
+    end
+
+    -- One number slam: 8 / 80 / 1
+    local function numBeat(stamp, strength, final)
+        stamp.slam(2.6, 0.38)
+        impactBeat(strength)
+        playSfx("boom", 0.7, final and 0.9 or 1.1)
+        if final then
+            arenaRing(900, 1.2, COL.white)
+        end
+        strike(CX + rand(-200, 200), CZ + rand(-200, 200), final == true)
+        setSpeedLines(true, 0.5)
+        wait(0.35)
+        setSpeedLines(false)
+        wait(final and 1.4 or 1.1)
+        stamp.release(0.6)
+    end
+
+    -- When the face shot cuts in, replay the teleport visuals + sound and the flicker on the
+    -- player so it looks like they arrive right there, then ignite the aura
+    local function playArrivalFx()
+        local char = plr.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        if not root then return end
+        emitTeleportVFX(root)
+        playTeleportSound(root)
+        task.spawn(blinkCharacter, char)
+        aura.ignite(char)
+    end
+
+    local function eyeGlint()
+        local char = plr.Character
+        local head = char and char:FindFirstChild("Head")
+        local size = vp().Y * 0.5
+        if head then
+            local v, onScreen = cam:WorldToViewportPoint(head.Position + Vector3.new(0, 0.1, 0))
+            if onScreen then
+                glint(v.X + size * 0.06, v.Y - size * 0.04, size, 0.75)
+                return
+            end
+        end
+        glint(vp().X / 2, vp().Y / 2, size, 0.75)
+    end
+
+    ---------------------------------------------------------------------
+    -- 6.9 SHOTS. Pure data: path + look + fov + roll + CUES (time, function).
+    --     Every position below is one of your original fixed values; the curves
+    --     between them are what make the camera glide instead of slide.
+    ---------------------------------------------------------------------
+    -- forward declarations: shots are built inside a do-block (keeps the local count down);
+    -- whipOut is assigned later in 6.10 but shot 1 needs to call it
+    local S1, S2, S3A, RUSH, buildFaceShot, whipOut
+    do
+        local T1, T2, T3, TR = 8.6, 8.0, 5.0, 3.0
+        local FACE_TIME = 2.8
+
+
+        S1 = {
+            time = T1,
+            pos = Path.bezier(SNAP_A, Vector3.new(75070, 842, 24610), Vector3.new(75188.2, 701.2, 24763.6)),
+            look = Path.line(Vector3.new(75995.4453125, 509.6561584472656, 24498.6875), Vector3.new(75995.4453125, 469.6561584472656, 24798.6875)),
+            fov = {74, 56}, roll = {-2.5, 0}, handheld = 0.4, shake = {0.3, 0.1},
+            ease = Ease.sine,
+            cues = {
+                {0.0, function()
+                    setMotes(60)
+                    setMood("dread", 6)
+                end},
+                {2.4, function() -- TITLE SLAM
+                    stamps.title.slam(3.0, 0.42)
+                    impactBeat(7)
+                    playSfx("boom", 1)
+                    arenaRing(1100, 2.0, COL.goldHot)
+                    dome(CX, CZ, groundY, 10, 500, 1.2, COL.goldHot, 0.7)
+                    strike(CX + rand(-160, 160), CZ + rand(-160, 160), true)
+                    wait(0.3)
+                    strikeRandom(false)
+                    wait(2.5)
+                    stamps.title.release(0.8)
+                end},
+                {5.7, function()
+                    say("THIS IS THE WORLD OF VOID.")
+                end},
+                {6.2, function()
+                    debris.on = true
+                    storm(2.4, 0.9)
+                end},
+                {T1 - 0.28, function()
+                    whipOut(1)
+                end},
+            },
+        }
+
+        S2 = {
+            time = T2,
+            pos = Path.bezier(SNAP_B, Vector3.new(76020, 518, 25850), Vector3.new(75767.375, 540.7586364746094, 25663.9296875)),
+            look = Path.line(Vector3.new(75995.4453125, 470.6561584472656, 24748.6875), Vector3.new(75995.4453125, 500.6561584472656, 24748.6875)),
+            fov = {60, 46}, roll = {3, -2.5}, handheld = 0.45, shake = {0.2, 0.2},
+            ease = Ease.sine,
+            cues = {
+                {0.0, function()
+                    tween(dof, 1.5, {FarIntensity = 0.2})
+                    setMotes(85)
+                end},
+                {0.5, function()
+                    local count = math.max(1, #Players:GetPlayers())
+                    local word = count == 1 and "WARRIOR" or "WARRIORS"
+                    stamps.n8.setLine(1, tostring(count))
+                    stamps.n8.setLine(2, word)
+                    say(numberToWords(count) .. " " .. word .. ".")
+                    numBeat(stamps.n8, 5, false)
+                end},
+                {2.6, function()
+                    say("EACH FIGHTING TO SURVIVE.")
+                    numBeat(stamps.n80, 6, false)
+                end},
+                {4.7, function()
+                    say("AS ONLY ONE WILL REMAIN.", true, nil, "fire")
+                    gather.Rate = 45
+                    growOrb(30, 3.2)
+                    playSfx("charge", 0.7)
+                    numBeat(stamps.n1, 9, true)
+                end},
+            },
+        }
+
+        S3A = {
+            time = T3,
+            pos = Path.bezier(SNAP_C, Vector3.new(76491, 784.5, 23843.5), Vector3.new(76368.3, 706.8, 23953.7)),
+            look = Path.line(Vector3.new(75995.4453125, 509.6561584472656, 24748.6875), Vector3.new(75995.4453125, 499.6561584472656, 24748.6875)),
+            fov = {48, 56}, roll = {-3, 0}, handheld = 0.4, shake = {0.4, 1.0},
+            ease = Ease.sine,
+            cues = {
+                {0.0, function()
+                    tween(dof, 0.3, {FarIntensity = 0})
+                    setMotes(115)
+                    setExpo(-0.2, 4)
+                    gather.Rate = 120
+                    debris.mult = 2
+                    growOrb(75, T3 + 0.5, Ease.quadIn)
+                    storm(T3, 2.2)
+                end},
+                {0.25, function()
+                    say("THE FATE OF THE FUTURE'S YOURS TO DECIDE!", true)
+                end},
+                {3.4, function()
+                    strike(CX, CZ, true)
+                    kick(4, 0.6)
+                end},
+            },
+        }
+
+        -- Close-up of the player's face, built at runtime because it depends on where they were
+        -- teleported. The camera dollies in along a small arc, then settles with handheld life.
+        function buildFaceShot()
+            local char = plr.Character
+            local head = char and char:FindFirstChild("Head")
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if not head or not root then return nil end
+            local facePos = head.Position
+            -- the character's forward direction (the way the player faces), not the head part's own
+            -- orientation, which can point the other way on some rigs
+            local fwd = root.CFrame.LookVector
+            local right = root.CFrame.RightVector
+            local function camAt(dist, ang, lift)
+                return facePos + (fwd * math.cos(ang) + right * math.sin(ang)) * dist + Vector3.new(0, lift, 0)
+            end
+            return {
+                time = FACE_TIME,
+                pos = function(e)
+                    return camAt(
+                        lerp(FACE_SHOT_DISTANCE * 1.6, FACE_SHOT_DISTANCE * 0.8, e),
+                        lerp(math.rad(-26), math.rad(10), e),
+                        lerp(0.8, 0, e)
+                    )
+                end,
+                look = function(e)
+                    return facePos + Vector3.new(0, lerp(0, 0.15, e), 0)
+                end,
+                fov = {52, 30}, roll = {-4, 2}, handheld = 0.6, shake = {0.4, 1.2},
+                ease = Ease.quartOut,
+                cues = {
+                    {0.12, function()
+                        playArrivalFx()
+                        impactBeat(6)
+                    end},
+                    {0.3, eyeGlint},
+                    {1.8, function()
+                        pulseVignette(0.7, 0.9, COL.goldHot)
+                        playSfx("charge", 0.8, 1.3)
+                    end},
+                },
+            }
+        end
+
+        RUSH = {
+            time = TR,
+            pos = Path.bezier(Vector3.new(76368.3, 706.8, 23953.7), Vector3.new(76420, 650, 24140), Vector3.new(76236.7, 616.1, 24234.3)),
+            look = Path.line(Vector3.new(75995.4453125, 499.6561584472656, 24748.6875), Vector3.new(75995.4453125, 459.6561584472656, 24748.6875)),
+            fov = {54, 112}, roll = {0, 9}, handheld = 0.2, shake = {0.3, 6}, shakeEase = Ease.quadIn,
+            ease = Ease.quartIn,
+            cues = {
+                {0.0, function()
+                    setSpeedLines(true, 0.6)
+                    tween(cc, TR, {TintColor = Color3.fromRGB(255, 236, 190), Brightness = 0.08, Contrast = 0.22}, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+                    tween(bloom, TR, {Intensity = 1.6, Size = 40}, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+                    tween(blur, TR, {Size = 10}, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
+                    growOrb(140, TR, Ease.quartIn)
+                    gather.Rate = 200
+                    playSfx("charge", 1, 1.2)
+                end},
+                {1.5, function()
+                    lineState.power = 1
+                end},
+                {2.3, function()
+                    pulseVignette(0.9, 0.8)
+                end},
+            },
+        }
+    end
+
+    ---------------------------------------------------------------------
+    -- 6.10 SHOT RUNNER + TRANSITIONS
+    ---------------------------------------------------------------------
+    local function setShot(s)
+        rig.cf = CFrame.lookAt(evalP(s.pos, 0), evalP(s.look, 0))
+        rig.fov = s.fov[1]
+        rig.roll = s.roll and s.roll[1] or 0
+        rig.handheld = s.handheld or 0.3
+        rig.shake = s.shake and s.shake[1] or 0
+        rig.active = true
+    end
+
+    -- Plays one shot: evaluates the path every frame and fires each cue once when its time comes
+    local function runShot(s)
+        local cues = {}
+        for _, c in ipairs(s.cues or {}) do
+            table.insert(cues, c)
+        end
+        table.sort(cues, function(a, b)
+            return a[1] < b[1]
+        end)
+        local ci, elapsed = 1, 0
+        local ease = s.ease or Ease.sine
+        while true do
+            while cues[ci] and elapsed >= cues[ci][1] do
+                local fn = cues[ci][2]
+                ci = ci + 1
+                spawnSafe(fn)
+            end
+            local a = math.min(elapsed / s.time, 1)
+            local e = ease(a)
+            rig.cf = CFrame.lookAt(evalP(s.pos, e), evalP(s.look, e))
+            rig.fov = lerp(s.fov[1], s.fov[2], e)
+            if s.roll then
+                rig.roll = lerp(s.roll[1], s.roll[2], e)
+            end
+            if s.shake then
+                rig.shake = lerp(s.shake[1], s.shake[2], (s.shakeEase or Ease.linear)(a))
+            end
+            if a >= 1 then break end
+            elapsed = elapsed + nextFrame()
+        end
+    end
+
+    -- WHIP PAN: the camera yaws away faster and faster behind heavy blur (whipOut, fired by a cue
+    -- just before the shot ends); the next shot starts yawed the other way and snaps into place.
+    function whipOut(dir)
+        playSfx("whoosh", 0.8, 1.15)
+        anim(0.26, function(e)
+            rig.whip = dir * 75 * e
+            blur.Size = 22 * e
+        end, Ease.expoIn)
+    end
+
+    local function whipIn(nextSetup, dir)
+        nextSetup()
+        rig.whip = -dir * 75
+        anim(0.5, function(e)
+            rig.whip = -dir * 75 * (1 - e)
+            blur.Size = 22 * (1 - e)
+        end, Ease.expoOut, function()
+            rig.whip = 0
+            blur.Size = 0
+        end)
+    end
+
+    -- MANGA IMPACT CUT: a frozen black/white starburst frame (alternating dark / inverted),
+    -- then a white flash that the new angle fades in from
+    local flip = false
+    local function impactCut(nextSetup)
+        flip = not flip
+        showImpact(flip)
+        kick(9, 0.5)
+        playSfx("impact", 0.9)
+        hitStop(0.1)
+        rwait(0.1)
+        impactFrame.Visible = false
+        flash.BackgroundColor3 = COL.white
+        flash.BackgroundTransparency = 0
+        nextSetup()
+        wait(0.05)
+        tween(flash, 0.55, {BackgroundTransparency = 1})
+    end
+
+    ---------------------------------------------------------------------
+    -- 6.11 HAND-BACK, FINALE, CLEANUP
+    ---------------------------------------------------------------------
+    local function handBackCamera()
+        if camHandedBack then return end
+        camHandedBack = true
+        rig.active = false
+        cam.CameraType = saved.camType
+        if saved.camSubject then
+            cam.CameraSubject = saved.camSubject
+        end
+        -- BURST: start wide and snap back to normal
+        cam.FieldOfView = FOV_BURST_START
+        TweenService:Create(cam, TweenInfo.new(FOV_BURST_TIME, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+            FieldOfView = FOV_BURST_END,
+        }):Play()
+    end
+
+    -- The ki orb detonates: pillar of light, one shockwave (plus its echo), a dome, rocks blasted skyward, lightning
+    local function erupt()
+        local from = orb.d
+        anim(0.18, function(e)
+            orb.d = lerp(from, 0, e)
+        end, Ease.quadIn)
+        gather.Rate = 0
+
+        pillar.a = 1
+        anim(0.5, function(e)
+            pillar.h = lerp(0, 1900, e)
+            pillar.w = lerp(0.25, 1, e)
+        end, Ease.expoOut)
+        anim(5.0, function(_, k)
+            if k > 0.45 then
+                local f = (k - 0.45) / 0.55
+                pillar.a = 1 - f
+                pillar.w = lerp(1, 0.45, f)
+            end
+        end)
+
+        ring(CX, CZ, groundY + 1, 10, 1300, 2.2, COL.white, {thick = 0.03, height = 0.05, segments = 72, disc = true, dust = true, echo = true})
+        dome(CX, CZ, groundY, 20, 800, 1.3, COL.goldHot, 0.35)
+        debrisBlast()
+        strike(CX, CZ, true)
+        storm(2.4, 5)
+        setMotes(150)
+    end
+
+    local function beginBeat()
+        stamps.begin.slam(3.2, 0.45)
+        kick(10, 0.6)
+        flashScreen(0.35, 0.4, COL.cream)
+        pulseVignette(0.8, 1.2, COL.goldHot)
+        playSfx("impact", 1, 0.8)
+    end
+
+    local finaleStarted = false
+    local function finale()
+        finaleStarted = true
+
+        -- white-out, camera goes back to the player (with the FOV burst)
+        flash.BackgroundColor3 = COL.white
+        flash.BackgroundTransparency = 0
+        setSpeedLines(false)
+        blur.Size = 0
+        rig.shake = 0
+        table.clear(kicks)
+        playSfx("boom", 1.2, 0.85)
+        handBackCamera()
+
+        tween(barTop, 1.0, {Size = UDim2.fromScale(1, 0)})
+        tween(barBottom, 1.0, {Size = UDim2.fromScale(1, 0)})
+        tween(cc, 1.4, NEUTRAL)
+        tween(bloom, 1.4, {Intensity = 0.7, Size = 28, Threshold = 0.9})
+        tween(rays, 1.4, {Intensity = 0.05})
+        tween(dof, 0.5, {FarIntensity = 0})
+        setExpo(0, 1.4)
+        setMood("blast", 0.5)
+
+        erupt()
+        anim(1.8, function(e)
+            rig.shake = 5 * (1 - e)
+        end, Ease.quadOut, function()
+            rig.shake = 0
+        end)
+
+        wait(0.25)
+        tween(flash, 1.2, {BackgroundTransparency = 1})
+        wait(0.2)
+        beginBeat()
+        wait(1.9)
+        stamps.begin.release(0.7)
+        aura.fadeOut(1.2)
+        setMood("calm", 2.2)
+        wait(0.9)
+    end
+
+    local music
+    local function destroyWorld()
+        if worldDead then return end
+        worldDead = true
+        pcall(function()
+            RunService:UnbindFromRenderStep("ToPCutscene")
+        end)
+        pcall(function()
+            Lighting.ExposureCompensation = saved.exposure
+        end)
+        pcall(function()
+            if not atmoCreated then
+                atmo.Color = atmoSaved.Color
+                atmo.Decay = atmoSaved.Decay
+                atmo.Density = atmoSaved.Density
+                atmo.Haze = atmoSaved.Haze
+                atmo.Glare = atmoSaved.Glare
+            end
+        end)
+        maid:Clean()
+        pcall(function() gui:Destroy() end)
+        cutsceneRunning = false
+    end
+
+    local function cleanup()
+        if cleaned then return end
+        cleaned = true
+
+        handBackCamera()
+        setSpeedLines(false)
+        pcall(function() impactFrame.Visible = false end)
+
+        -- If the cutscene got cut short (error / failsafe) the finale never ran: put the scene back
+        -- to normal behind a white flash so it still ends cleanly
+        if not finaleStarted then
+            pcall(function()
+                barTop.Size = UDim2.fromScale(1, 0)
+                barBottom.Size = UDim2.fromScale(1, 0)
+                fade.BackgroundTransparency = 1
+                blur.Size = 0
+                stamps.title.holder.Visible = false
+                stamps.n8.holder.Visible = false
+                stamps.n80.holder.Visible = false
+                stamps.n1.holder.Visible = false
+                tween(cc, 0.6, NEUTRAL)
+                tween(bloom, 0.6, {Intensity = 0.3, Size = 24, Threshold = 1})
+                tween(rays, 0.6, {Intensity = 0.05})
+                tween(dof, 0.3, {FarIntensity = 0})
+                setMood("calm", 1.5)
+                flashScreen(1, 1.2)
+            end)
+        end
+
+        -- the glow and aura ease out while the world FX play their tail
+        pcall(function()
+            aura.fadeOut(1.0)
+            tween(bloom, CFG.FX_TAIL, {Intensity = 0})
+            setMood("calm", 1.5)
+            setExpo(0, 1.0)
+        end)
+
+        -- Player side: everything is put back
+        pcall(clearDialogue)
+        for t, enabled in pairs(saved.coreGui) do
+            pcall(StarterGui.SetCoreGuiEnabled, StarterGui, t, enabled)
+        end
+        if chatWindow and saved.chatWindowOn then chatWindow.Enabled = true end
+        if chatBar and saved.chatBarOn then chatBar.Enabled = true end
+        for g in pairs(saved.playerGuis) do
+            pcall(function() g.Enabled = true end)
+        end
+        if controls then
+            pcall(function() controls:Enable() end)
+        end
+        if hrp then
+            pcall(function() hrp.Anchored = hrpWasAnchored end)
+        end
+        -- If the face shot never ran (or errored), make sure the player isn't left invisible
+        showCharacterNow()
+        if music then
+            pcall(function()
+                TweenService:Create(music, TweenInfo.new(1.5), {Volume = 0}):Play()
+                task.delay(1.6, function() music:Destroy() end)
+            end)
+        end
+
+        -- World FX keep playing for a moment (pillar fading, rings finishing), then everything goes
+        task.delay(CFG.FX_TAIL, destroyWorld)
+    end
+
+    -- Failsafe: if anything ever hangs, force the cutscene to end instead of locking the player in
+    local function abort()
+        if aborted then return end
+        aborted = true
+        for i = #waiters, 1, -1 do
+            local w = waiters[i]
+            table.remove(waiters, i)
+            task.spawn(w.co)
+        end
+    end
+    task.delay(CFG.FAILSAFE_SECONDS, function()
+        if not cleaned then
+            warn("[Event] Cutscene failsafe triggered")
+            abort()
+            cleanup()
+        end
+    end)
+
+    ---------------------------------------------------------------------
+    -- 6.12 THE SEQUENCE
+    ---------------------------------------------------------------------
+    local function sequence()
+        if CUTSCENE_MUSIC_ID ~= "" then
+            music = Instance.new("Sound")
+            music.SoundId = CUTSCENE_MUSIC_ID
+            music.Volume = 1
+            music.Parent = SoundService
+            music:Play()
+        end
+
+        -- PRE-ROLL: real game fades to black, bars close in, a lens glint, then the world is revealed
+        tween(fade, 0.55, {BackgroundTransparency = 0}, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+        playSfx("rumble", 0.9)
+        wait(0.6)
+
+        setShot(S1)
+        rig.shake = 0.3
+        tween(barTop, 1.2, {Size = UDim2.fromScale(1, CFG.BAR_HEIGHT)})
+        tween(barBottom, 1.2, {Size = UDim2.fromScale(1, CFG.BAR_HEIGHT)})
+        tween(cc, 1.5, GRADE)
+        tween(bloom, 1.5, {Intensity = 0.9, Size = 28, Threshold = 0.85})
+        tween(rays, 1.5, {Intensity = 0.14})
+        wait(0.55)
+        glint(vp().X / 2, vp().Y / 2, vp().Y * 0.45, 0.7)
+        playSfx("whoosh", 0.5, 1.6)
+        wait(0.45)
+
+        -- SHOT 1: arcing crane push-in + title slam
+        tween(fade, 1.5, {BackgroundTransparency = 1})
+        runShot(S1)
+
+        -- SHOT 2: low truck, the numbers
+        whipIn(function() setShot(S2) end, 1)
+        runShot(S2)
+
+        -- SHOT 3A: high angle, the storm builds
+        impactCut(function() setShot(S3A) end)
+        runShot(S3A)
+
+        -- FACE SHOT: the arrival close-up (skipped if the character can't be found)
+        local face = buildFaceShot()
+        if face then
+            impactCut(function() setShot(face) end)
+            runShot(face)
+        end
+
+        -- RUSH: accelerating dive at the ring
+        impactCut(function() setShot(RUSH) end)
+        runShot(RUSH)
+
+        -- FINALE
+        finale()
+    end
+
+    local ok, err = pcall(sequence)
+    cleanup()
+    if not ok and not aborted then
+        warn("[Event] Cutscene error: " .. tostring(err))
+    end
+end
+
+-- Usage (yields until he says the line, then plays the cutscene):
+Event:Start()
+print("Event started")
+-- put whatever should happen next here
