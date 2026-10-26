@@ -10252,33 +10252,12 @@ LocalPlayer.CharacterAdded:Connect(function(char)
 	task.spawn(createActorInstance, LocalPlayer, char, true)
 end)
 
-EVENT_SPOTS = {
-	Vector3.new(76031.9296875, 458.7995300292969, 24937.943359375),
-	Vector3.new(76236.359375, 458.7989807128906, 24803.498046875),
-	Vector3.new(76241.71875, 458.7989501953125, 24691.03125),
-	Vector3.new(76173.796875, 458.798583984375, 24608.583984375),
-	Vector3.new(76075.6640625, 458.7984924316406, 24589.060546875),
-	Vector3.new(76074.1015625, 459.3154296875, 24682.763671875),
-	Vector3.new(75999.0234375, 460.29620361328125, 24747.98046875),
-	Vector3.new(76041.296875, 459.3631591796875, 24846.517578125),
-}
-EVENT_EXTRA_SPOT_DISTANCE = 20
-EVENT_SPOT_TOLERANCE      = 8
-EVENT_SPOT_HEIGHT_SLACK   = 20
-EVENT_SPOT_CHECK_SECONDS  = 20
+-- Who gets the effect: once the event is triggered, anyone who chats
+-- EVENT_QUALIFY_PHRASE within EVENT_QUALIFY_SECONDS becomes an extra player.
+EVENT_QUALIFY_PHRASE  = "GX-LIMITLESS!"
+EVENT_QUALIFY_SECONDS = 20
 
 local RemoteParticipants = {}
-
-local function isOnEventSpot(root)
-	local pos = root.Position
-	for _, spot in ipairs(EVENT_SPOTS) do
-		local flat = Vector2.new(pos.X - spot.X, pos.Z - spot.Z).Magnitude
-		if flat <= EVENT_EXTRA_SPOT_DISTANCE + EVENT_SPOT_TOLERANCE and math.abs(pos.Y - spot.Y) <= EVENT_SPOT_HEIGHT_SLACK then
-			return true
-		end
-	end
-	return false
-end
 
 local function registerParticipant(plr)
 	if RemoteParticipants[plr] then return end
@@ -10299,33 +10278,60 @@ Players.PlayerRemoving:Connect(function(plr)
 end)
 
 local eventParticipantsStarted = false
+local EventQualify = { deadline = 0 }
+
+function EventQualify.SendChat()
+    if _G.GXLimitlessSent then return end
+    _G.GXLimitlessSent = true
+    pcall(function()
+        local textChat = game:GetService("TextChatService")
+        if textChat.ChatVersion == Enum.ChatVersion.TextChatService then
+            local channels = textChat:FindFirstChild("TextChannels")
+            local general = channels and channels:FindFirstChild("RBXGeneral")
+            if general then general:SendAsync(EVENT_QUALIFY_PHRASE) end
+        else
+            local chatEvents = game:GetService("ReplicatedStorage"):FindFirstChild("DefaultChatSystemChatEvents")
+            local say = chatEvents and chatEvents:FindFirstChild("SayMessageRequest")
+            if say then say:FireServer(EVENT_QUALIFY_PHRASE, "All") end
+        end
+    end)
+end
+
 function EventParticipants_Start()
 	if eventParticipantsStarted then return end
 	eventParticipantsStarted = true
+	EventQualify.deadline = os.clock() + EVENT_QUALIFY_SECONDS
+	-- everyone running this chats the phrase the moment the event is triggered
+	EventQualify.SendChat()
+end
 
-	local pending = {}
-	for _, plr in ipairs(Players:GetPlayers()) do
-		if plr ~= REAL_LOCAL_PLAYER then pending[plr] = true end
-	end
+function EventQualify.Check(userId, message)
+	if not eventParticipantsStarted or os.clock() > EventQualify.deadline then return end
+	if userId == REAL_LOCAL_PLAYER.UserId then return end
+	if message:match("^%s*(.-)%s*$"):lower() ~= EVENT_QUALIFY_PHRASE:lower() then return end
+	local plr = Players:GetPlayerByUserId(userId)
+	if plr then registerParticipant(plr) end
+end
 
-	task.spawn(function()
-		local deadline = os.clock() + EVENT_SPOT_CHECK_SECONDS
-		while next(pending) and os.clock() < deadline do
-			for plr in pairs(pending) do
-				if plr.Parent == nil then
-					pending[plr] = nil
-				else
-					local char = plr.Character
-					local root = char and char:FindFirstChild("HumanoidRootPart")
-					if root and isOnEventSpot(root) then
-						pending[plr] = nil
-						registerParticipant(plr)
-					end
-				end
+do
+	local textChat = game:GetService("TextChatService")
+	if textChat.ChatVersion == Enum.ChatVersion.TextChatService then
+		textChat.MessageReceived:Connect(function(msg)
+			if msg.TextSource then
+				EventQualify.Check(msg.TextSource.UserId, msg.Text)
 			end
-			task.wait(0.25)
+		end)
+	else
+		local function hookQualify(p)
+			p.Chatted:Connect(function(msg)
+				EventQualify.Check(p.UserId, msg)
+			end)
 		end
-	end)
+		for _, p in ipairs(Players:GetPlayers()) do
+			hookQualify(p)
+		end
+		Players.PlayerAdded:Connect(hookQualify)
+	end
 end
 
 _G.EventAttackParticipants = {
