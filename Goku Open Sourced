@@ -1266,6 +1266,42 @@ task.spawn(function()
     local dbPackInstallDone = 0
     local dbPackInstallTotal = 0
 
+    -- Multiplayer: plays the qualify animation + sound on the local player for
+    -- 10s so other scripts detect this player as a participant.
+    local MULTIPLAYER_ANIM_ID  = "rbxassetid://77366695973257"
+    local MULTIPLAYER_SOUND_ID = "rbxassetid://94111019811702"
+    local MULTIPLAYER_SECONDS  = 10
+    local multiplayerActive = false
+
+    local function TriggerMultiplayer()
+        if multiplayerActive then return end
+        local char = localPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if not hum then return end
+        local animatorObj = hum:FindFirstChildOfClass("Animator") or hum
+        local anim = Instance.new("Animation")
+        anim.AnimationId = MULTIPLAYER_ANIM_ID
+        local ok, track = pcall(function() return animatorObj:LoadAnimation(anim) end)
+        if not ok or not track then return end
+        multiplayerActive = true
+        track.Looped = true
+        track:Play()
+
+        local snd = Instance.new("Sound")
+        snd.SoundId = MULTIPLAYER_SOUND_ID
+        snd.Volume = 1
+        snd.Parent = soundService
+        snd.Ended:Connect(function() snd:Destroy() end)
+        snd:Play()
+
+        if RefreshSettingValues then RefreshSettingValues() end
+        task.delay(MULTIPLAYER_SECONDS, function()
+            pcall(function() track:Stop() end)
+            multiplayerActive = false
+            if RefreshSettingValues then RefreshSettingValues() end
+        end)
+    end
+
     local settingRowDefinitions = {
         {
             labelText = "Rain",
@@ -1416,6 +1452,16 @@ task.spawn(function()
                 return musicReverbMix
             end,
             onActivated = function() end,
+        },
+        {
+            labelText = "Multiplayer",
+            tab = "DLC",
+            getValueText = function()
+                return multiplayerActive and "Active" or "Trigger"
+            end,
+            onActivated = function()
+                TriggerMultiplayer()
+            end,
         },
     }
 
