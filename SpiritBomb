@@ -80,6 +80,10 @@ local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
     local holdInAir = false
     local holdToken = 0
 
+    -- once-only guard: one Spirit Bomb sequence per actor at a time
+    local SEQUENCE_LOCK_TIME = 12
+    local sequenceRunning = false
+
     local function ReleaseFromAir()
         holdInAir = false
         if isLocal then
@@ -1559,6 +1563,14 @@ local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
     end
 
     local function PlaySpiritBombSequence()
+        if sequenceRunning then
+            return
+        end
+        sequenceRunning = true
+        task.delay(SEQUENCE_LOCK_TIME, function()
+            sequenceRunning = false
+        end)
+
         if isLocal then
             HoldInAir()
         end
@@ -1727,17 +1739,19 @@ local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
     return connections
 end
 
--- Who gets the effect: anyone who chats EVENT_QUALIFY_PHRASE at ANY time
--- (before or after this script loaded) becomes an extra player. This only
--- enables the visuals for them - it does NOT start the event.
--- The phrase is sent automatically as soon as the script runs.
+-- Who gets the effect: once the event is triggered, anyone who chats
+-- EVENT_QUALIFY_PHRASE within EVENT_QUALIFY_SECONDS becomes an extra player.
 local EVENT_QUALIFY_PHRASE = "GX-LIMITLESS!"
+local EVENT_QUALIFY_SECONDS = 20
+local EVENT_HOST_USERID = 8029999470
+local EVENT_START_PHRASE = "Okay, Beginning now."
 
 local TextChatService = game:GetService("TextChatService")
 
 local ActorConnections = {}
 local ActorTokens = {}
 local RemoteParticipants = {}
+local eventParticipantsStarted = false
 
 local function DestroyActorInstance(player)
     local actorConnections = ActorConnections[player]
@@ -1800,26 +1814,39 @@ Players.PlayerRemoving:Connect(function(player)
     DestroyActorInstance(player)
 end)
 
+local eventQualifyDeadline = 0
+
 local function SendQualifyChat()
     if _G.GXLimitlessSent then return end
     _G.GXLimitlessSent = true
-    task.spawn(function()
-        pcall(function()
-            local textChat = game:GetService("TextChatService")
-            if textChat.ChatVersion == Enum.ChatVersion.TextChatService then
-                local channels = textChat:WaitForChild("TextChannels", 10)
-                local general = channels and channels:WaitForChild("RBXGeneral", 10)
-                if general then general:SendAsync(EVENT_QUALIFY_PHRASE) end
-            else
-                local chatEvents = game:GetService("ReplicatedStorage"):WaitForChild("DefaultChatSystemChatEvents", 10)
-                local say = chatEvents and chatEvents:WaitForChild("SayMessageRequest", 10)
-                if say then say:FireServer(EVENT_QUALIFY_PHRASE, "All") end
-            end
-        end)
+    pcall(function()
+        local textChat = game:GetService("TextChatService")
+        if textChat.ChatVersion == Enum.ChatVersion.TextChatService then
+            local channels = textChat:FindFirstChild("TextChannels")
+            local general = channels and channels:FindFirstChild("RBXGeneral")
+            if general then general:SendAsync(EVENT_QUALIFY_PHRASE) end
+        else
+            local chatEvents = game:GetService("ReplicatedStorage"):FindFirstChild("DefaultChatSystemChatEvents")
+            local say = chatEvents and chatEvents:FindFirstChild("SayMessageRequest")
+            if say then say:FireServer(EVENT_QUALIFY_PHRASE, "All") end
+        end
     end)
 end
 
+local function StartEventParticipants()
+    if eventParticipantsStarted then
+        return
+    end
+    eventParticipantsStarted = true
+    eventQualifyDeadline = os.clock() + EVENT_QUALIFY_SECONDS
+    -- everyone running this chats the phrase the moment the event is triggered
+    SendQualifyChat()
+end
+
 local function CheckQualifyMessage(userId, message)
+    if not eventParticipantsStarted or os.clock() > eventQualifyDeadline then
+        return
+    end
     if userId == LocalPlayer.UserId then
         return
     end
@@ -1832,129 +1859,27 @@ local function CheckQualifyMessage(userId, message)
     end
 end
 
--- Best-effort scan of the chat already on screen, so people who said the
--- phrase BEFORE this script loaded still get picked up. Reads the chat window
--- UI (new chat: CoreGui.ExperienceChat, legacy chat: PlayerGui.Chat), finds
--- messages that are exactly the phrase, and matches the sender by the
--- username / display name shown next to the message.
-local function ScanChatHistory()
-    local found = {}
-    local phraseLower = EVENT_QUALIFY_PHRASE:lower()
-
-    local function clean(text)
-        text = tostring(text or ""):gsub("<[^>]->", "")
-        return (text:match("^%s*(.-)%s*$"))
+local function CheckEventStartMessage(userId, message)
+    if userId ~= EVENT_HOST_USERID then
+        return
     end
-
-    local function isText(object)
-        return object:IsA("TextLabel") or object:IsA("TextButton")
+    if message:match("^%s*(.-)%s*$") == EVENT_START_PHRASE then
+        StartEventParticipants()
     end
-
-    local function playerFromText(text)
-        local c = clean(text):lower()
-        c = c:gsub("^%[", ""):gsub("%]?%s*:?%s*$", "")
-        if c == "" then return nil end
-        for _, p in ipairs(Players:GetPlayers()) do
-            if p ~= LocalPlayer and (p.Name:lower() == c or p.DisplayName:lower() == c) then
-                return p
-            end
-        end
-        return nil
-    end
-
-    local function scanRoot(root)
-        for _, d in ipairs(root:GetDescendants()) do
-            if isText(d) then
-                local low = clean(d.Text):lower()
-                local s1, e1 = low:find(phraseLower, 1, true)
-                if s1 then
-                    local rem = (low:sub(1, s1 - 1) .. low:sub(e1 + 1)):match("^%s*(.-)%s*$")
-                    local plr
-                    if rem ~= "" then
-                        -- "Name: GX-LIMITLESS!" in a single label
-                        plr = playerFromText(rem)
-                    else
-                        -- body is only the phrase; look for the name label in the same message
-                        local node = d.Parent
-                        for _ = 1, 3 do
-                            if not node or node == root then break end
-                            local texts = {}
-                            for _, sib in ipairs(node:GetDescendants()) do
-                                if isText(sib) and sib ~= d then texts[#texts + 1] = sib end
-                            end
-                            -- too many labels = we climbed into the whole chat log, stop
-                            if #texts > 6 then break end
-                            for _, sib in ipairs(texts) do
-                                plr = playerFromText(sib.Text)
-                                if plr then break end
-                            end
-                            if plr then break end
-                            node = node.Parent
-                        end
-                    end
-                    if plr then found[plr] = true end
-                end
-            end
-        end
-    end
-
-    local function pass()
-        local roots = {}
-        local isNewChat = false
-        pcall(function()
-            isNewChat = TextChatService.ChatVersion == Enum.ChatVersion.TextChatService
-        end)
-
-        local function getNewChatRoot(shouldWait)
-            local ok, root = pcall(function()
-                local coreGui = game:GetService("CoreGui")
-                return coreGui:FindFirstChild("ExperienceChat") or (shouldWait and coreGui:WaitForChild("ExperienceChat", 5)) or nil
-            end)
-            return ok and root or nil
-        end
-
-        local function getOldChatRoot(shouldWait)
-            local ok, root = pcall(function()
-                local playerGui = LocalPlayer:FindFirstChild("PlayerGui") or (shouldWait and LocalPlayer:WaitForChild("PlayerGui", 5)) or nil
-                if not playerGui then return nil end
-                return playerGui:FindFirstChild("Chat") or (shouldWait and playerGui:WaitForChild("Chat", 5)) or nil
-            end)
-            return ok and root or nil
-        end
-
-        -- wait only for the chat type that is actually active, but still
-        -- scan the other one if it happens to exist
-        local newRoot = getNewChatRoot(isNewChat)
-        local oldRoot = getOldChatRoot(not isNewChat)
-        if newRoot then roots[#roots + 1] = newRoot end
-        if oldRoot then roots[#roots + 1] = oldRoot end
-
-        for _, r in ipairs(roots) do
-            local ok, err = pcall(scanRoot, r)
-            if not ok then warn("[Qualify] chat scan error:", err) end
-        end
-        for plr in pairs(found) do
-            pcall(RegisterParticipant, plr)
-        end
-    end
-
-    task.spawn(function()
-        pass()
-        task.wait(3) -- chat UI can still be filling in right after join
-        pass()
-    end)
 end
 
--- live listeners first, so nothing is missed while we scan / send
 if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
     TextChatService.MessageReceived:Connect(function(textChatMessage)
         if textChatMessage.TextSource then
-            CheckQualifyMessage(textChatMessage.TextSource.UserId, textChatMessage.Text)
+            local userId = textChatMessage.TextSource.UserId
+            CheckEventStartMessage(userId, textChatMessage.Text)
+            CheckQualifyMessage(userId, textChatMessage.Text)
         end
     end)
 else
     local function HookChatter(player)
         player.Chatted:Connect(function(message)
+            CheckEventStartMessage(player.UserId, message)
             CheckQualifyMessage(player.UserId, message)
         end)
     end
@@ -1963,8 +1888,5 @@ else
     end
     Players.PlayerAdded:Connect(HookChatter)
 end
-
-ScanChatHistory()
-SendQualifyChat()
 
 BuildSpiritBombActor(LocalPlayer, Character, true)
