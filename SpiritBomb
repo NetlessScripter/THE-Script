@@ -1639,7 +1639,14 @@ local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
             camAnim:Play()
 
             if isLocal then
-                getgenv().Animation.Completed:Once(function()
+                local completedConn
+                completedConn = getgenv().Animation.Completed:Connect(function(finishedCharacter)
+                    -- Completed fires for every character's animation; only OUR throw counts here
+                    -- (an older module passes no character, so nil is still accepted)
+                    if finishedCharacter ~= nil and finishedCharacter ~= Character then
+                        return
+                    end
+                    completedConn:Disconnect()
                     camAnim:Stop()
                     Workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
                 end)
