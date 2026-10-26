@@ -1612,6 +1612,26 @@ local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
 
             LoadAnimator6D()
 
+            if isLocal then
+                local impactFrames = UFW.ImpactFrames:Clone()
+                impactFrames.Parent = LocalPlayer.PlayerGui
+                for _, frame in pairs(impactFrames:GetChildren()) do
+                    frame.Size = UDim2.new(0, 0, 0, 1)
+                    frame.ImageTransparency = 0
+                end
+
+                for _, flexwork in pairs(UFW.Flexworks:GetChildren()) do
+                    local cloneFlex = flexwork:Clone()
+                    cloneFlex.Size = UDim2.new(0, 0, 0, 1)
+                    cloneFlex.Position = UDim2.new(0, 0, 0, 0)
+                    cloneFlex.Parent = impactFrames
+                    task.delay(1.6, function()
+                        cloneFlex:Destroy()
+                    end)
+                end
+                task.wait(0.01)
+            end
+
             Animator6D(throwAnimData, nil, false, Character)
 
             if isLocal then
@@ -1662,23 +1682,6 @@ local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
                     camAnim:Stop()
                     Workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
                 end)
-
-                local impactFrames = UFW.ImpactFrames:Clone()
-                impactFrames.Parent = LocalPlayer.PlayerGui
-                for _, frame in pairs(impactFrames:GetChildren()) do
-                    frame.Size = UDim2.new(0, 0, 0, 1)
-                    frame.ImageTransparency = 0
-                end
-
-                for _, flexwork in pairs(UFW.Flexworks:GetChildren()) do
-                    local cloneFlex = flexwork:Clone()
-                    cloneFlex.Size = UDim2.new(0, 0, 0, 1)
-                    cloneFlex.Position = UDim2.new(0, 0, 0, 0)
-                    cloneFlex.Parent = impactFrames
-                    task.delay(2, function()
-                        cloneFlex:Destroy()
-                    end)
-                end
             end
 
             task.spawn(function()
