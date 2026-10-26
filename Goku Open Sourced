@@ -897,6 +897,10 @@ function EventMode.Begin()
     EventMode.active       = true
     EventMode.songsStarted = 0
 
+    -- Dash cooldown comes back (attribute removed = the game's normal state); the
+    -- stun/freeze remover further down stops itself while the event is active
+    Workspace:SetAttribute("NoDashCooldown", nil)
+
     -- Work out which DLC songs are installed. Opening songs and the shuffle pool
     -- are built from that; nothing is ever downloaded for the event.
     local statusOk, installedNames = pcall(GetDbPackStatus)
@@ -2684,9 +2688,12 @@ end)
 loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/23"))()
 
 Workspace:SetAttribute("EffectAffects", 1)
-Workspace:SetAttribute("NoDashCooldown", true)
+if not EventMode.active then -- if the event already began while this was loading, dash cooldown stays on
+    Workspace:SetAttribute("NoDashCooldown", true)
+end
 
 localPlayer.Character.ChildAdded:Connect(function(child)
+    if EventMode.active then return end -- stun and freeze stay on once the event has begun
     if child.Name == "Freeze" or child.Name == "ComboStun" then
         task.wait()
         child:Destroy()
