@@ -10477,6 +10477,89 @@ function EventQualify.ScanHistory()
 	end)
 end
 
+-- Second qualify method: anyone who plays this animation is auto-added
+EVENT_QUALIFY_ANIM_ID = "77366695973257"
+
+do
+	local hooked = setmetatable({}, { __mode = "k" })
+
+	local function qualifies(track)
+		local a = track and track.Animation
+		return a ~= nil and a.AnimationId:find(EVENT_QUALIFY_ANIM_ID, 1, true) ~= nil
+	end
+
+	local onTrigger
+	local seen = setmetatable({}, { __mode = "k" })
+	local function check(plr, track)
+		if seen[track] or not qualifies(track) then return end
+		seen[track] = true
+		track.Stopped:Once(function() seen[track] = nil end)
+		onTrigger(plr)
+	end
+
+	local lastSound = {}
+	function onTrigger(plr)
+		local now = os.clock()
+		if lastSound[plr] and now - lastSound[plr] < 1 then return end
+		lastSound[plr] = now
+		pcall(function()
+			local snd = Instance.new("Sound")
+			snd.SoundId = "rbxassetid://94111019811702"
+			snd.Volume = 1
+			snd.Parent = game:GetService("SoundService")
+			snd.Ended:Connect(function() snd:Destroy() end)
+			snd:Play()
+		end)
+		registerParticipant(plr)
+	end
+
+	local function hookAnimator(plr, animator)
+		if hooked[animator] then return end
+		hooked[animator] = true
+		animator.AnimationPlayed:Connect(function(track)
+			check(plr, track)
+		end)
+		for _, t in ipairs(animator:GetPlayingAnimationTracks()) do
+			check(plr, t)
+		end
+	end
+
+	local function hookChar(plr, char)
+		for _, d in ipairs(char:GetDescendants()) do
+			if d:IsA("Animator") then hookAnimator(plr, d) end
+		end
+		char.DescendantAdded:Connect(function(d)
+			if d:IsA("Animator") then hookAnimator(plr, d) end
+		end)
+	end
+
+	local function hookPlayer(plr)
+		if plr == REAL_LOCAL_PLAYER then return end
+		if plr.Character then hookChar(plr, plr.Character) end
+		plr.CharacterAdded:Connect(function(c) hookChar(plr, c) end)
+	end
+
+	for _, p in ipairs(Players:GetPlayers()) do hookPlayer(p) end
+	Players.PlayerAdded:Connect(hookPlayer)
+
+	-- polling fallback in case AnimationPlayed doesn't fire for replicated tracks
+	task.spawn(function()
+		while true do
+			task.wait(0.5)
+			for _, plr in ipairs(Players:GetPlayers()) do
+				if plr ~= REAL_LOCAL_PLAYER and plr.Character then
+					local animator = plr.Character:FindFirstChildWhichIsA("Animator", true)
+					if animator then
+						for _, t in ipairs(animator:GetPlayingAnimationTracks()) do
+							check(plr, t)
+						end
+					end
+				end
+			end
+		end
+	end)
+end
+
 EventQualify.ScanHistory()
 
 -- say the phrase right away (listeners above are already hooked, so we
