@@ -5,10 +5,6 @@ Humanoid = Character:WaitForChild("Humanoid")
 HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
 Animator = Humanoid:WaitForChild("Animator")
 RightArm = Character:WaitForChild("Right Arm")
--- ===== multiplayer attack support =====
--- Everything that draws an attack (animation + VFX + sounds) now lives in BuildActorLibrary() further down. It is built ONCE PER PLAYER
--- (you, plus every player that was teleported into the event) inside its own private environment, so each player's attack has its own
--- state and can never collide with someone else's. These two globals are what the private environments fall back to.
 REAL_ENV          = (getfenv and getfenv(1)) or (getgenv and getgenv())
 REAL_LOCAL_PLAYER = LocalPlayer
 TRIGGER_ANIM_IDS = {
@@ -18,13 +14,12 @@ TRIGGER_ANIM_IDS = {
 	ATTACK4 = "10468665991",
 	ATTACK5 = "12983333733",
 }
--- Finisher animations that must fully cancel Attack 2 (animation, VFX, and sounds)
 ATTACK2_CANCEL_IDS = {
 	["71181015443030"]  = true,
 	["75127576841159"]  = true,
 }
-attack2LastFired = -math.huge  -- tick() timestamp; prevents finisher re-triggering attack2
-ATTACK2_COOLDOWN = 3           -- seconds to lock out after attack2 completes
+attack2LastFired = -math.huge
+ATTACK2_COOLDOWN = 3
 local function GetGitSoundBase(GithubSnd, SoundName, Volume)
     local url = GithubSnd
     local fileName = SoundName .. ".mp3"
@@ -47,16 +42,12 @@ _gc_TweenService      = game:GetService("TweenService")
 _gc_LocalPlayer       = game.Players.LocalPlayer
 _gc_LegacyReplication = game.ReplicatedStorage.Resources.LegacyReplication
 
--- ================= ATTACK 4 FINISHER =================
--- Hitbox that lives exactly as long as the Attack 4 charge (0.6s), 3 studs in front of us. If it touches a PLAYER whose
--- health is at or below ATTACK4_FINISHER_HEALTH, the hitbox is destroyed and the planet explosion fires the moment the beam starts to fade.
-ATTACK4_HITBOX_SIZE      = Vector3.new(8, 6, 8) -- studs
-ATTACK4_HITBOX_OFFSET    = 3                    -- studs in front of the character
-ATTACK4_FINISHER_HEALTH  = 27                   -- health at or below this counts (23 and under), but above 0
-ATTACK4_HITBOX_DEBUG     = false                -- true = make the hitbox visible (red, see-through)
-CUTSCENE_TELEPORT_POS    = Vector3.new(377.1642761230469, 699.103271484375, 360.6839904785156) -- where we wait while the cutscene plays
+ATTACK4_HITBOX_SIZE      = Vector3.new(8, 6, 8)
+ATTACK4_HITBOX_OFFSET    = 3
+ATTACK4_FINISHER_HEALTH  = 27
+ATTACK4_HITBOX_DEBUG     = false
+CUTSCENE_TELEPORT_POS    = Vector3.new(377.1642761230469, 699.103271484375, 360.6839904785156)
 
--- Cutscene SFX: downloaded once (writefile), loaded with getcustomasset, and kept ready so it plays the instant the cutscene starts.
 local cutsceneSfx
 task.spawn(function()
 	local ok, result = pcall(GetGitSoundBase,
@@ -67,25 +58,23 @@ task.spawn(function()
 	if ok then cutsceneSfx = result else warn("[Cutscene SFX] failed to load:", result) end
 end)
 
--- Saves where we are, teleports to CUTSCENE_TELEPORT_POS, plays the cutscene, then teleports back to the saved spot.
-cutsceneActive = false -- only one finisher cutscene at a time (several attackers could catch us at once)
+cutsceneActive = false
 function PlayCutsceneWithTeleport()
 	if cutsceneActive then return end
 	cutsceneActive = true
-	task.delay(25, function() cutsceneActive = false end) -- failsafe: never stay locked if the cutscene dies midway
+	task.delay(25, function() cutsceneActive = false end)
 	local function getRoot()
 		local c = LocalPlayer.Character
 		return c and c:FindFirstChild("HumanoidRootPart")
 	end
 
 	local root = getRoot()
-	local savedCFrame = root and root.CFrame -- exactly where we were right before teleporting
+	local savedCFrame = root and root.CFrame
 	local pinConn
 
 	if root then
 		local waitCFrame = CFrame.new(CUTSCENE_TELEPORT_POS)
 		root.CFrame = waitCFrame
-		-- keep us parked there for the whole cutscene (stops falling / other scripts moving us)
 		pinConn = game:GetService("RunService").Heartbeat:Connect(function()
 			local r = getRoot()
 			if r then
@@ -98,7 +87,7 @@ function PlayCutsceneWithTeleport()
 
 	if cutsceneSfx then
 		cutsceneSfx.TimePosition = 0
-		cutsceneSfx:Play() -- cutscene sound starts together with the cutscene
+		cutsceneSfx:Play()
 	end
 
 	PlayPlanetExplosion(function()
@@ -106,57 +95,42 @@ function PlayCutsceneWithTeleport()
 		if pinConn then pinConn:Disconnect() end
 		local r = getRoot()
 		if r and savedCFrame then
-			r.CFrame = savedCFrame -- back to where we were
+			r.CFrame = savedCFrame
 			r.AssemblyLinearVelocity = Vector3.zero
 			r.AssemblyAngularVelocity = Vector3.zero
 		end
 	end)
 end
 
--- ================= PLANET EXPLOSION V3 (embedded) =================
--- PlayPlanetExplosion() runs the whole cinematic (camera takeover, ~7s). Fired by the Attack 4 finisher below.
 PlayPlanetExplosion = (function()
---[[
-	PLANET EXPLOSION V3  (LocalScript -> StarterPlayer > StarterPlayerScripts)
-	Explosion happens CONFIG.Distance studs in front of the camera.
-
-	Pacing : charge (energy spirals INTO the core, camera pushes in, rumble builds)
-	         -> inhale (everything collapses, screen dims)  -> BREACH (blue) -> SECOND BURST
-	         -> fade out (the hot detonation, aftershocks and whiteout were cut).
-	3D     : trail-based spiral comets (smooth curved streaks), jagged lightning cracks,
-	         tapered beam starbursts, 12-layer neon core, tilted shockwaves, glowing debris, embers.
-	Screen : stretched particle lens flare (core, band, long streaks, ghost - recolored every phase), 24-layer radial haze,
-	         smooth UI shockwave rings, vignette, impact frames.
-	Camera : impulse shake with decay, dolly via FOV, whip-out on detonation.
-]]
 
 local CONFIG = {
-	Distance = 3000,                          -- studs from camera to the explosion
+	Distance = 3000,
 	FOV = 60,
-	UseStage = true,                          -- true: camera sits at StageOrigin (empty void)
-	StageOrigin = Vector3.new(0, 25000, 0),   -- false: uses your current camera position/direction
-	Quality = 1,                              -- 0.4 - 1 (lower = fewer trails/beams, better for mobile)
+	UseStage = true,
+	StageOrigin = Vector3.new(0, 25000, 0),
+	Quality = 1,
 	Shake = 1,
-	ExplosionShake = 1,                       -- strength of the big smooth camera shakes on the two blue explosions (0 = off)
+	ExplosionShake = 1,
 	Sway = 1,
-	Flare = 1,                                -- lens flare strength (0 = off)
-	FlareStretch = 1,                         -- how far the flare is stretched out horizontally (0 = round, 2 = double)
-	FlareTilt = 10,                           -- degrees the stretch is tilted (+ = rising to the right, - = falling)
+	Flare = 1,
+	FlareStretch = 1,
+	FlareTilt = 10,
 	SlowMo = true,
-	HideUI = true,                            -- hides ALL ui (game HUD, CoreGui, gethui, chat, topbar, touch controls) while playing
-	AutoPlay = false,                         -- unused here: the explosion is fired by the Attack 4 finisher
+	HideUI = true,
+	AutoPlay = false,
 	EarthAssetId = 750680926,
 	EarthIntroSeconds = 2,
 	EarthScreenFraction = 0.55,
 	StartupScale = 1,
 	EarthParkDistance = 8000,
-	EarthReveal = true,                       -- black night-to-day shadow sweeps across the earth during the intro, then is destroyed
-	EarthRevealSeconds = 2.2,                 -- how long the shadow takes to slide off the planet
-	EarthWarningGlow = true,                  -- highlight fades in on the earth right before it gets moved (planet about to blow)
-	EarthWarningGlowSeconds = 1,              -- how long before the breach the glow tween runs
-	EarthWarningGlowEase = 2.5,               -- ease-in strength: 1 = linear, 2 = quad, 3 = cubic, higher = later and sharper
-	EndFadeOutSeconds = 1.5,                  -- the black screen at the end of the cutscene fades out over this long instead of cutting instantly
-	ImpactFlashSeconds = 0.035,               -- real-time length of the pure black & white impact frame on the big blue explosion (0 = off)
+	EarthReveal = true,
+	EarthRevealSeconds = 2.2,
+	EarthWarningGlow = true,
+	EarthWarningGlowSeconds = 1,
+	EarthWarningGlowEase = 2.5,
+	EndFadeOutSeconds = 1.5,
+	ImpactFlashSeconds = 0.035,
 }
 
 local Players = game:GetService("Players")
@@ -168,7 +142,7 @@ local Workspace = game:GetService("Workspace")
 local player = Players.LocalPlayer
 local camera = Workspace.CurrentCamera
 local PI = math.pi
-local DURATION = 7.12 -- ends right before the old detonation (7.15); hot detonation, aftershocks and whiteout were cut
+local DURATION = 7.12
 
 local NSK, CSK = NumberSequenceKeypoint.new, ColorSequenceKeypoint.new
 local rgb = Color3.fromRGB
@@ -264,10 +238,9 @@ local function play(onDone)
 	local function pick(t) return t[rng:NextInteger(1, #t)] end
 	local function cnt(n) return math.max(1, math.floor(n * CONFIG.Quality)) end
 
-	-- ================= camera & scale =================
 	local D = CONFIG.Distance
 	local camBase = CONFIG.UseStage and CFrame.new(CONFIG.StageOrigin) or camera.CFrame
-	local C = camBase * CFrame.new(0, 0, -D) -- explosion center; axes = camera axes (X right, Y up, Z toward camera)
+	local C = camBase * CFrame.new(0, 0, -D)
 
 	local earthModel = obtainEarthModel()
 
@@ -279,7 +252,7 @@ local function play(onDone)
 	local V = camera.ViewportSize
 	local aspect = math.max(V.X / math.max(V.Y, 1), 1.6)
 	local halfH = D * math.tan(math.rad(CONFIG.FOV) / 2)
-	local S = halfH * aspect -- half the visible width at the explosion plane; every size is a fraction of S
+	local S = halfH * aspect
 	local srcX, srcY, onScreen = V.X / 2, V.Y / 2, true
 
 	local earthRadius = earthModel and CONFIG.EarthScreenFraction * halfH or 0
@@ -293,8 +266,6 @@ local function play(onDone)
 		centerEarthAt(earthModel, C.Position + camBase.LookVector * earthBackOffset)
 	end
 
-	-- ================= world setup =================
-	-- remember which Roblox core UI was on (so we restore exactly that), then hide all of it
 	local coreStates = {}
 	for _, t in ipairs(Enum.CoreGuiType:GetEnumItems()) do
 		if t ~= Enum.CoreGuiType.All then
@@ -326,8 +297,6 @@ local function play(onDone)
 	cc.Saturation = 0.25
 	cc.Parent = Lighting
 
-	-- impact frame: a stack of max-contrast, fully desaturated color corrections crushes every pixel to pure black or pure white.
-	-- (one effect can't hard-threshold, so several are chained). They stay disabled except for the flash.
 	local flashCCs = {}
 	for i = 1, 6 do
 		local f = Instance.new("ColorCorrectionEffect")
@@ -340,7 +309,7 @@ local function play(onDone)
 		flashCCs[i] = f
 	end
 	local flashUntil, flashOn = 0, false
-	local explosionShakes = {} -- { start = real-time stamp, strength, phase } per explosion; drives the smooth camera shakes
+	local explosionShakes = {}
 
 	local root = Instance.new("Folder")
 	root.Name = "PlanetExplosionFX"
@@ -355,14 +324,11 @@ local function play(onDone)
 
 	local gui = Instance.new("ScreenGui")
 	gui.IgnoreGuiInset = true
-	gui.ScreenInsets = Enum.ScreenInsets.None -- no safe-area clamping, vignette hits the real screen edges
+	gui.ScreenInsets = Enum.ScreenInsets.None
 	gui.ResetOnSpawn = false
 	gui.DisplayOrder = 1000
 	gui.Parent = player:WaitForChild("PlayerGui")
 
-	-- hide EVERY ui while the cutscene plays: the game's HUD, CoreGui, gethui() guis, other scripts' guis, the chat window,
-	-- the topbar and touch controls. A per-frame watcher keeps them hidden if the game (or another script) turns one back on
-	-- or creates a new one. Only the cutscene's own gui and the white/black fade overlays are exempt.
 	local hiddenGuis, controls = {}, nil
 	local hiddenSet, chatStates, uiConn = {}, {}, nil
 	local KEEP_GUI_NAMES = { Attack4FinisherWhite = true, PlanetExplosionEndFade = true }
@@ -393,7 +359,6 @@ local function play(onDone)
 			end
 		end
 
-		-- new-style chat (TextChatService): chat window + input bar
 		local function hideChat()
 			pcall(function()
 				local tcs = game:GetService("TextChatService")
@@ -412,7 +377,7 @@ local function play(onDone)
 		local lastCoreSweep = os.clock()
 		uiConn = RunService.RenderStepped:Connect(function()
 			hideAllGuis()
-			if os.clock() - lastCoreSweep > 0.25 then -- re-assert core UI / topbar / chat a few times a second
+			if os.clock() - lastCoreSweep > 0.25 then
 				lastCoreSweep = os.clock()
 				pcall(function() StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.All, false) end)
 				pcall(function() StarterGui:SetCore("TopbarEnabled", false) end)
@@ -427,12 +392,10 @@ local function play(onDone)
 		end)
 	end
 
-	-- ================= scheduler (story-time) =================
 	local tasks = {}
 	local function at(t0, dur, fn, done) table.insert(tasks, { t0 = t0, dur = dur, fn = fn, done = done }) end
 	local function once(t0, fn) table.insert(tasks, { t0 = t0, once = true, fn = fn }) end
 
-	-- ================= 3D building blocks =================
 	local function newAtt()
 		local a = Instance.new("Attachment")
 		a.Parent = anchor
@@ -467,7 +430,6 @@ local function play(onDone)
 		return NumberSequence.new({ NSK(0, t), NSK(0.55, t + (1 - t) * 0.4), NSK(1, 1) })
 	end
 
-	-- tapered beam streak: white-hot tail -> colored body -> soft tip (halo layer on thick rays)
 	local function addRay(s)
 		local dir = Vector3.new(math.cos(s.ang), math.sin(s.ang), s.z or 0).Unit
 		local grow, hold, tm = s.grow or 0.25, s.hold or 0.5, s.tailMove or 0.7
@@ -503,7 +465,6 @@ local function play(onDone)
 		end)
 	end
 
-	-- tilted ellipse shockwave ring (beam segments)
 	local function addRing3D(s)
 		local N = s.N or cnt(72)
 		local cr, sr = math.cos(s.rot or 0), math.sin(s.rot or 0)
@@ -534,7 +495,6 @@ local function play(onDone)
 		end)
 	end
 
-	-- smooth curved streak: a glowing head dragging a Trail along a spiral path
 	local function addComet(s)
 		local part, tr
 		local inward = s.mode == "in"
@@ -571,7 +531,6 @@ local function play(onDone)
 		end)
 	end
 
-	-- jagged flickering lightning (planet cracks / charge arcs)
 	local function addBolt(s)
 		local N = s.N or 9
 		local dir = Vector3.new(math.cos(s.ang), math.sin(s.ang), 0)
@@ -599,7 +558,7 @@ local function play(onDone)
 				atts[i].WorldPosition = C * (dir * (s.r0 + s.len * g * u) + nrm * off)
 			end
 			local fade = math.max(1 - math.min(a / 0.04, 1), math.clamp((a - 0.45) / 0.55, 0, 1))
-			if rr(0, 1) < 0.18 then fade = math.min(1, fade + 0.55) end -- flicker
+			if rr(0, 1) < 0.18 then fade = math.min(1, fade + 0.55) end
 			local tsq = NumberSequence.new(fade)
 			local hsq = NumberSequence.new(0.5 + 0.5 * fade)
 			for i = 1, N do
@@ -617,7 +576,6 @@ local function play(onDone)
 		end)
 	end
 
-	-- glowing planet debris
 	local function addDebris(t0, dir, spd, size, life, spin)
 		local p
 		at(t0, life, function(a)
@@ -633,13 +591,11 @@ local function play(onDone)
 		end, function() if p then p:Destroy() end end)
 	end
 
-	-- ================= backdrop (deep space color + tiny stars) =================
 	local tiles = {}
 	local stars = {}
 	do
 		local T = 2048
 		local f = (D + backdropDepth) / D
-		-- extra margin so the backdrop still covers the screen when the FOV zooms out during the blue explosion
 		local BACKDROP_WIDTH_MARGIN = 2.2
 		local BACKDROP_HEIGHT_MARGIN = 2.0
 		local cols = math.ceil(2 * S * f * BACKDROP_WIDTH_MARGIN / T)
@@ -654,11 +610,10 @@ local function play(onDone)
 			end
 		end
 
-		-- tiny stars: small neon dots just in front of the backdrop, spread over the whole (widened) backdrop area
 		local starColors = { rgb(255, 255, 255), rgb(255, 255, 255), rgb(200, 225, 255), rgb(160, 200, 255), rgb(255, 238, 215) }
-		local starRng = Random.new(2024) -- separate RNG so the stars don't change the existing effects' random layout
+		local starRng = Random.new(2024)
 		local function sr(lo, hi) return starRng:NextNumber(lo, hi) end
-		local pxStud = 2 * S * f / math.max(V.X, 1) -- studs per screen pixel at the backdrop
+		local pxStud = 2 * S * f / math.max(V.X, 1)
 		for i = 1, cnt(450) do
 			local p = neonPart(Enum.PartType.Ball)
 			local sz = pxStud * sr(1, 2.6)
@@ -669,13 +624,12 @@ local function play(onDone)
 			table.insert(stars, { part = p, base = sr(0.45, 1), speed = sr(0.8, 3), phase = sr(0, 2 * PI) })
 		end
 	end
-	local starKeys = { { 0, 1 }, { 4.74, 1 }, { 4.9, 0 } } -- gone once the blue breach lights the backdrop
+	local starKeys = { { 0, 1 }, { 4.74, 1 }, { 4.9, 0 } }
 	local bgKeys = {
 		{ 0, rgb(0, 0, 0) }, { 4.7, rgb(0, 0, 0) }, { 4.9, rgb(6, 28, 150) }, { 5.9, rgb(0, 60, 235) },
 		{ 7.1, rgb(10, 50, 230) }, { 7.4, rgb(62, 12, 150) }, { 9, rgb(38, 10, 100) }, { 11, rgb(105, 34, 110) },
 	}
 
-	-- ================= core: 12 stacked neon spheres = smooth radial glow =================
 	local NL = 12
 	local mult = { 1, 1.2, 1.45, 1.75, 2.1, 2.6, 3.2, 4, 5, 6.3, 8, 10 }
 	local ctr = { 0, 0.18, 0.36, 0.5, 0.62, 0.72, 0.8, 0.86, 0.91, 0.945, 0.97, 0.985 }
@@ -693,8 +647,6 @@ local function play(onDone)
 		layers[i].CFrame = C
 		layers[i].Transparency = 1
 	end
-	-- parts max out at 2048 studs: ease big sizes into the cap instead of hiding the layer
-	-- (hiding made the whole glow stack vanish once the core passed ~half the screen)
 	local function softCap(x)
 		local knee, cap = 1000, 2040
 		if x <= knee then return x end
@@ -705,7 +657,6 @@ local function play(onDone)
 		{ 5.0, 0.22 }, { 5.9, 0.22 }, { 6.1, 0.29 }, { 7.1, 0.31 }, { 7.25, 0.5 }, { 9, 0.62 }, { 11, 0.9 },
 	}
 
-	-- ================= sparks, dust, embers =================
 	local emitters = {}
 	local sparkers = {}
 	for i = 1, 16 do
@@ -777,7 +728,6 @@ local function play(onDone)
 	table.insert(emitters, embers)
 	local hasTimeScale = pcall(function() return dust.TimeScale end)
 
-	-- ================= SCREEN LAYER =================
 	local function canvas(z)
 		local c = Instance.new("CanvasGroup")
 		c.Size = UDim2.fromScale(1, 1)
@@ -812,7 +762,6 @@ local function play(onDone)
 		s.Parent = f
 		return f, s
 	end
-	-- vignette (darker + tighter while charging)
 	local vigC = canvas(1)
 	local function edge(anchorP, pos, size, rot)
 		local f = Instance.new("Frame")
@@ -832,13 +781,11 @@ local function play(onDone)
 	edge(Vector2.new(0, 0), UDim2.fromScale(0, 0), UDim2.fromScale(1, 0.28), 90)
 	edge(Vector2.new(0, 1), UDim2.fromScale(0, 1), UDim2.fromScale(1, 0.28), 270)
 
-	-- radial haze: 24 stacked discs for a smooth falloff
 	local NG = 24
 	local glowC = canvas(2)
 	local glowCircles = {}
 	for i = 1, NG do glowCircles[i] = circle(glowC, WHITE) end
 
-	-- UI shockwave rings
 	local ringC = canvas(3)
 	local function addUIRing(s)
 		local fa, sa, fb, sb
@@ -860,9 +807,6 @@ local function play(onDone)
 		end, function() if fa then fa:Destroy(); fb:Destroy() end end)
 	end
 
-	-- lens flare: particle flare ported from Sunset, stretched out horizontally like an anamorphic lens (negative Squash = wider).
-	-- One emitter per attachment, placed by screen-space math every frame, tinted by the current phase colors
-	-- (role 1 = main, 2 = accent, 3 = ghost). Everything except the ghost stays pinned on the core.
 	local FLARE_DEPTH = 13
 	local flareRig = Instance.new("Part")
 	flareRig.Anchored, flareRig.CanCollide, flareRig.CanQuery, flareRig.CanTouch = true, false, false, false
@@ -871,33 +815,33 @@ local function play(onDone)
 	flareRig.Size = Vector3.one * 0.05
 	flareRig.Parent = root
 	local flareDefs = {
-		{ -- MainGlow: wide oval glow
+		{
 			pos = Vector2.new(1, 1), mult = 1, blend = 0.5, role = 1, squash = -1,
 			size = NumberSequence.new({ NSK(0, 9), NSK(0.5, 4.5), NSK(1, 0) }),
 			alpha = NumberSequence.new({ NSK(0, 0.1), NSK(0.6, 0.55), NSK(1, 1) }),
 		},
-		{ -- CoreFlash: white-hot stretched core
+		{
 			pos = Vector2.new(1, 1), mult = 1, blend = 0.15, role = 1, squash = -1.2,
 			size = NumberSequence.new({ NSK(0, 4.5), NSK(1, 0) }),
 			alpha = NumberSequence.new({ NSK(0, 0), NSK(1, 1) }),
 		},
-		{ -- Band: soft colored band running through the core
+		{
 			pos = Vector2.new(1, 1), mult = 1, blend = 0.8, role = 2, squash = -4,
 			size = NumberSequence.new({ NSK(0, 6), NSK(1, 0) }),
 			alpha = NumberSequence.new({ NSK(0, 0.25), NSK(0.6, 0.65), NSK(1, 1) }),
 		},
-		{ -- Ghost: faint stretched ghost drifting off-axis
+		{
 			pos = Vector2.new(-0.6, -0.6), mult = 1, blend = 0.75, role = 3, squash = -1.5,
 			size = NumberSequence.new({ NSK(0, 2.2), NSK(1, 0) }),
 			alpha = NumberSequence.new({ NSK(0, 0.65), NSK(1, 1) }),
 		},
-		{ -- Anamorphic: long streak across the screen
+		{
 			pos = Vector2.new(1, 1), mult = 1, blend = 0.85, role = 2,
 			size = NumberSequence.new({ NSK(0, 3.5), NSK(1, 0) }),
 			alpha = NumberSequence.new({ NSK(0, 0.1), NSK(1, 1) }),
 			squash = NumberSequence.new({ NSK(0, -9), NSK(1, -3) }),
 		},
-		{ -- StreakCore: thin white-hot line through the middle
+		{
 			pos = Vector2.new(1, 1), mult = 1, blend = 0.15, role = 1,
 			size = NumberSequence.new({ NSK(0, 2.2), NSK(1, 0) }),
 			alpha = NumberSequence.new({ NSK(0, 0), NSK(1, 1) }),
@@ -935,7 +879,6 @@ local function play(onDone)
 	local blackF = uiFrame(gui, Color3.new(0, 0, 0))
 	blackF.AnchorPoint, blackF.Size, blackF.ZIndex = Vector2.zero, UDim2.fromScale(1, 1), 6
 
-	-- ================= TIMELINE =================
 	local T1, T2 = 4.8, 5.9
 
 	local function starburst(t0, n, baseLen, w, palette, life, tilt)
@@ -949,9 +892,6 @@ local function play(onDone)
 		end
 	end
 
-	-- EARTH REVEAL: a soft black shadow (dark on the left, clear on the right), as tall as the screen, slides across the planet
-	-- and off the left edge, like night turning to day. It is destroyed when the tween finishes.
-	-- Built from a long solid-black tail (always runs past the screen's left edge, so no visible cut) + a soft gradient edge.
 	if earthModel and CONFIG.EarthReveal then
 		local earthCenter = C.Position + camBase.LookVector * earthBackOffset
 		local holder = Instance.new("Frame")
@@ -961,19 +901,19 @@ local function play(onDone)
 		holder.ZIndex = 4
 		holder.Parent = gui
 
-		local tail = Instance.new("Frame") -- solid black, extends far past the left of the screen
+		local tail = Instance.new("Frame")
 		tail.BackgroundColor3 = Color3.new(0, 0, 0)
 		tail.BorderSizePixel = 0
 		tail.ZIndex = 4
 		tail.Parent = holder
 
-		local fade = Instance.new("Frame") -- soft terminator edge
+		local fade = Instance.new("Frame")
 		fade.BackgroundColor3 = Color3.new(0, 0, 0)
 		fade.BorderSizePixel = 0
 		fade.ZIndex = 4
 		fade.Parent = holder
 		local fadeGrad = Instance.new("UIGradient")
-		fadeGrad.Rotation = 0 -- left -> right: dark to clear
+		fadeGrad.Rotation = 0
 		fadeGrad.Transparency = NumberSequence.new({ NSK(0, 0), NSK(0.45, 0.45), NSK(1, 1) })
 		fadeGrad.Parent = fade
 
@@ -982,14 +922,13 @@ local function play(onDone)
 			local dPx = 2 * earthRadius * pxPerStud * 1.03
 			local P = camera:WorldToViewportPoint(earthCenter)
 			local planetLeft = P.X - dPx / 2
-			local F = dPx * 1.4 -- width of the soft edge
+			local F = dPx * 1.4
 			local e = a * a * (3 - 2 * a)
-			-- start: planet fully in shadow. end: soft edge fully past the planet's left edge, planet fully lit
 			local x0 = planetLeft + dPx * 1.03
 			local x1 = planetLeft - F - dPx * 0.03
 			local x = x0 + (x1 - x0) * e
 			local tailW = V.X * 3 + dPx * 4
-			tail.Size = UDim2.new(0, tailW, 1, 0) -- full screen height
+			tail.Size = UDim2.new(0, tailW, 1, 0)
 			tail.Position = UDim2.new(0, x - tailW, 0, 0)
 			fade.Size = UDim2.new(0, F, 1, 0)
 			fade.Position = UDim2.new(0, x, 0, 0)
@@ -998,9 +937,6 @@ local function play(onDone)
 		at(-CONFIG.EarthIntroSeconds, CONFIG.EarthRevealSeconds, placeShadow, function() holder:Destroy() end)
 	end
 
-	-- EARTH WARNING GLOW: in the last second before the planet is moved away (T1), a highlight fades in on the earth in the
-	-- charge-phase lens flare color (BLUE[2], cyan), telling the viewer the planet is about to blow. Ease-in (power curve):
-	-- starts slow, shoots to full strength right at the end. Occluded depth mode, fill + outline, destroyed when the earth moves.
 	if earthModel and CONFIG.EarthWarningGlow then
 		local glow
 		at(T1 - CONFIG.EarthWarningGlowSeconds, CONFIG.EarthWarningGlowSeconds, function(a)
@@ -1013,13 +949,12 @@ local function play(onDone)
 				glow.FillTransparency, glow.OutlineTransparency = 1, 1
 				glow.Parent = root
 			end
-			local e = a ^ CONFIG.EarthWarningGlowEase -- power ease-in: slow start, fast finish, but visible much earlier than an expo curve
+			local e = a ^ CONFIG.EarthWarningGlowEase
 			glow.FillTransparency = 1 - (1 - 0.15) * e
 			glow.OutlineTransparency = 1 - e
 		end, function() if glow then glow:Destroy() end end)
 	end
 
-	-- PHASE 1: seed + lens streak + charge (energy spirals INTO the core)
 	for _, off in ipairs({ 0, PI }) do
 		addRay{ t0 = 0.5, life = 4.2, ang = TILT + off, r0 = 0, len = earthRadius + 0.62 * S, w = 0.007 * S * startupScale, color = BLUE[2], grow = 0.3, hold = 0.85, tailMove = 0 }
 	end
@@ -1038,11 +973,9 @@ local function play(onDone)
 		addBolt{ t0 = 3.5 + i * 0.18, life = 0.5, ang = rr(0, 2 * PI), r0 = 0.03 * S, len = rr(0.1, 0.22) * S * startupScale, w = 0.003 * S * startupScale, color = BLUE[2], jitter = 0.14, N = 7 }
 	end
 
-	-- PHASE 2: BREACH (your frame 2)
 	once(T1, function() burst(WHITE, BLUE[2], cnt(10), 1.0, 0.006) end)
-	-- the big blue explosion: pure black & white impact frame (real-time, so slow-mo doesn't stretch it)
 	once(T1, function() flashUntil = os.clock() + CONFIG.ImpactFlashSeconds end)
-	once(T1, function() table.insert(explosionShakes, { start = os.clock(), strength = 1, phase = 0 }) end) -- big smooth camera shake on the breach
+	once(T1, function() table.insert(explosionShakes, { start = os.clock(), strength = 1, phase = 0 }) end)
 	once(T1, function()
 		if earthModel then
 			centerEarthAt(earthModel, C.Position + camBase.UpVector * CONFIG.EarthParkDistance)
@@ -1063,9 +996,8 @@ local function play(onDone)
 		addBolt{ t0 = T1 + rr(0, 0.35), life = rr(0.4, 0.8), ang = rr(0, 2 * PI), r0 = 0.1 * S, len = rr(0.5, 1.1) * S, w = 0.006 * S, color = BLUE[2], jitter = 0.08 }
 	end
 
-	-- PHASE 3: SECOND BURST (your frame 3)
 	once(T2, function() burst(BLUE[2], BLUE[3], cnt(12), 1.2, 0.007) end)
-	once(T2, function() table.insert(explosionShakes, { start = os.clock(), strength = 0.85, phase = 2.3 }) end) -- smooth shake on the second burst too
+	once(T2, function() table.insert(explosionShakes, { start = os.clock(), strength = 0.85, phase = 2.3 }) end)
 	for _, a in ipairs({ 0.15, PI + 0.15, -0.12, PI - 0.12, 1.2, PI + 1.2 }) do
 		addRay{ t0 = T2 + 0.03, life = 2.6, ang = a, r0 = 0.1 * S, len = 1.7 * S, w = 0.03 * S, color = BLUE[2], grow = 0.12, hold = 0.6, tailMove = 0.35 }
 	end
@@ -1080,12 +1012,11 @@ local function play(onDone)
 		addBolt{ t0 = T2 + rr(0, 0.4), life = rr(0.4, 0.8), ang = rr(0, 2 * PI), r0 = 0.12 * S, len = rr(0.7, 1.4) * S, w = 0.007 * S, color = BLUE[2], jitter = 0.08 }
 	end
 
-	-- ================= key tracks =================
 	local blackKeys = earthModel and { { 0, 1 }, { 6.7, 1 }, { 7.1, 0 } } or { { 0, 0 }, { 1.3, 1 }, { 6.7, 1 }, { 7.1, 0 } }
 	local dimKeys = { { 0, 1 }, { 4.3, 1 }, { 4.72, 0.5 }, { 4.79, 0.5 }, { 4.84, 1 } }
 	local whiteKeys = { { 0, 1 }, { 4.74, 1 }, { 4.8, 0.15 }, { 4.86, 0.7 }, { 5.3, 1 }, { 5.88, 1 }, { 5.93, 0.3 }, { 6.3, 1 }, { 7.12, 1 }, { 7.2, 0 }, { 7.3, 0.4 }, { 7.9, 0.96 }, { 10, 0.96 }, { 11.2, 0 } }
 	local rumbleKeys = { { 0, 0 }, { 1.5, 0.03 }, { 4.4, 0.3 }, { 4.74, 0.55 }, { 4.78, 0 }, { 7.2, 0 }, { 7.5, 0.4 }, { 12, 0 } }
-	local impulses = {} -- the old jagged per-explosion impulses are gone: the two blue explosions use the smooth shake below
+	local impulses = {}
 	local swayKeys = { { 0, 0 }, { 7.1, 0 }, { 7.3, 0.03 }, { 10, 0.015 }, { 12, 0 } }
 	local fovKeys = { { 0, 3 }, { 4.4, -6 }, { 4.74, -17 }, { 4.8, -17 }, { 4.88, 14 }, { 5.5, 5 }, { 5.9, 2 }, { 6.0, 10 }, { 7.1, 5 }, { 7.14, -9 }, { 7.3, 24 }, { 9, 9 }, { 12, 0 } }
 	local dustKeys = { { 0.5, 0 }, { 1, 70 }, { 4.6, 70 }, { 4.8, 0 } }
@@ -1104,14 +1035,13 @@ local function play(onDone)
 		{ 6.6, 0.6 }, { 7.1, 0.65 }, { 7.2, 1.0 }, { 8.5, 0.85 }, { 10, 1.0 }, { 11.2, 0.6 }, { 11.8, 0 },
 	}
 
-	-- flare colors per phase: { start, end, main, accent, ghost } - the gap between two phases is the crossfade
 	local flarePhases = {
-		{ 0,    4.7,  BLUE[2],            BLUE[1], BLUE[3] }, -- charge: cyan
-		{ 4.84, 5.85, BLUE[4],            BLUE[2], BLUE[1] }, -- breach: icy white-blue
-		{ 5.95, 7.05, BLUE[1],            BLUE[3], BLUE[2] }, -- second burst: deep blue
-		{ 7.25, 8.4,  rgb(255, 220, 120), HOT[1],  HOT[3] },  -- detonation: gold / orange / magenta
-		{ 8.8,  10.1, rgb(255, 80, 140),  HOT[5],  HOT[3] },  -- aftershocks: magenta / violet
-		{ 10.5, 12,   WHITE,              rgb(255, 150, 200), HOT[5] }, -- whiteout
+		{ 0,    4.7,  BLUE[2],            BLUE[1], BLUE[3] },
+		{ 4.84, 5.85, BLUE[4],            BLUE[2], BLUE[1] },
+		{ 5.95, 7.05, BLUE[1],            BLUE[3], BLUE[2] },
+		{ 7.25, 8.4,  rgb(255, 220, 120), HOT[1],  HOT[3] },
+		{ 8.8,  10.1, rgb(255, 80, 140),  HOT[5],  HOT[3] },
+		{ 10.5, 12,   WHITE,              rgb(255, 150, 200), HOT[5] },
 	}
 	local flareCols = { {}, {}, {} }
 	for _, ph in ipairs(flarePhases) do
@@ -1123,7 +1053,6 @@ local function play(onDone)
 	local glowSize = { { 0, 0 }, { 0.5, 0.05 }, { 1.6, 0.5 }, { 4.2, 0.9 }, { 4.72, 0.12 }, { 4.85, 2.0 }, { 5.9, 2.2 }, { 7.1, 2.4 }, { 7.25, 4 }, { 9, 5 }, { 11, 7 } }
 	local glowAlpha = { { 0, 0 }, { 0.5, 0.2 }, { 1.5, 0.7 }, { 4.5, 0.9 }, { 4.85, 1.4 }, { 5.5, 1.0 }, { 6.1, 1.4 }, { 7.1, 1.2 }, { 7.25, 2.0 }, { 9, 1.6 }, { 11, 2.5 }, { 11.8, 0 } }
 
-	-- ================= per-frame drivers =================
 	local function shakeAmp(t)
 		local a = kf(t, rumbleKeys)
 		for _, im in ipairs(impulses) do
@@ -1132,9 +1061,6 @@ local function play(onDone)
 		return a
 	end
 
-	-- big smooth shake per explosion: sums of sine waves (no noise, no random jumps) under a punchy envelope
-	-- (instant-ish attack, hard hit, long heavy tail). Runs in real time so the slow-mo doesn't dull it.
-	-- Each explosion gets its own phase so the two shakes don't move identically; overlapping tails simply add.
 	local TAU = 2 * PI
 	local function explosionShake()
 		if CONFIG.ExplosionShake <= 0 or #explosionShakes == 0 then return 0, 0, 0 end
@@ -1152,7 +1078,7 @@ local function play(onDone)
 				roll += (0.7 * math.sin(rt * TAU * 5.2 + 4.0 + ph) + 0.3 * math.sin(rt * TAU * 9.1 + 1.0 + ph)) * 0.07 * k
 			end
 		end
-		return yaw, pitch, roll -- radians (a single hit peaks around 6 deg yaw, 5 deg pitch, 4 deg roll)
+		return yaw, pitch, roll
 	end
 
 	local function updateCamera(t)
@@ -1176,7 +1102,7 @@ local function play(onDone)
 			flashOn = flashing
 			for _, f in ipairs(flashCCs) do f.Enabled = flashing end
 		end
-		bloom.Intensity = flashing and 0 or kf(t, bloomKeys) -- bloom would smear the pure black/white
+		bloom.Intensity = flashing and 0 or kf(t, bloomKeys)
 		cc.Contrast = kf(t, contrastKeys)
 		cc.Brightness = kf(t, brightKeys)
 
@@ -1185,7 +1111,7 @@ local function play(onDone)
 
 		local starFade = kf(t, starKeys)
 		for _, st in ipairs(stars) do
-			local tw = 0.7 + 0.3 * math.sin(t * st.speed + st.phase) -- gentle twinkle
+			local tw = 0.7 + 0.3 * math.sin(t * st.speed + st.phase)
 			st.part.Transparency = 1 - math.clamp(st.base * tw * starFade, 0, 1)
 		end
 
@@ -1217,7 +1143,7 @@ local function play(onDone)
 		local fl = onScreen and kf(t, flareKeys) * CONFIG.Flare or 0
 
 		vigC.GroupTransparency = kf(t, vigKeys)
-		vigC.Visible, glowC.Visible, ringC.Visible = not flashOn, not flashOn, not flashOn -- keep the flash exactly black/white
+		vigC.Visible, glowC.Visible, ringC.Visible = not flashOn, not flashOn, not flashOn
 
 		local gs, ga = kf(t, glowSize), onScreen and kf(t, glowAlpha) or 0
 		for i, c in ipairs(glowCircles) do
@@ -1225,12 +1151,10 @@ local function play(onDone)
 			c.Size = UDim2.fromOffset(sz, sz)
 			c.Position = UDim2.fromOffset(srcX, srcY)
 			c.BackgroundColor3 = tint:Lerp(WHITE, math.clamp(1 - (i - 1) / 8, 0, 1))
-			-- discs wider than the screen only tint the whole frame (the wash + visible ring edges), so they fade out
 			local reach = 1 - math.clamp((sz - V.Y * 1.1) / (V.Y * 0.9), 0, 1)
 			c.BackgroundTransparency = 1 - math.clamp(0.025 * ga * reach, 0, 1)
 		end
 
-		-- lens flare: Sunset-style placement, colors follow the current phase
 		local cols = { kf(t, flareCols[1]), kf(t, flareCols[2]), kf(t, flareCols[3]) }
 		local cf = camera.CFrame
 		local toSrc = C.Position - cf.Position
@@ -1242,9 +1166,8 @@ local function play(onDone)
 		local strength = math.clamp(angleAlpha * fl, 0, 1)
 		if strength > 0.001 then
 			local src = Vector2.new(srcX, srcY)
-			-- drift bias so the ghosts still spread out while the source sits dead center
 			local b = Vector2.new(cx, cy) - src + Vector2.new(math.cos(t * 0.7) * V.Y * 0.16, math.sin(t * 0.5) * V.Y * 0.1)
-			local fovK = math.tan(vFov / 2) / math.tan(math.rad(CONFIG.FOV) / 2) -- keeps flare size constant on screen while FOV swings
+			local fovK = math.tan(vFov / 2) / math.tan(math.rad(CONFIG.FOV) / 2)
 			for _, d in ipairs(flareDefs) do
 				local k = Vector2.one - d.pos * d.mult
 				local pt = src + Vector2.new(b.X * k.X, b.Y * k.Y)
@@ -1263,7 +1186,6 @@ local function play(onDone)
 		whiteF.BackgroundTransparency = kf(t, whiteKeys)
 	end
 
-	-- ================= run =================
 	local clock = earthModel and -CONFIG.EarthIntroSeconds or 0
 	local conn
 	conn = RunService.RenderStepped:Connect(function(dt)
@@ -1293,9 +1215,7 @@ local function play(onDone)
 
 		if clock >= DURATION then
 			conn:Disconnect()
-			if uiConn then uiConn:Disconnect(); uiConn = nil end -- stop keeping the UI hidden
-			-- the cutscene ends on a fully black screen: replace it with a black overlay that fades out
-			-- (created before the cutscene gui is destroyed so there is no one-frame gap)
+			if uiConn then uiConn:Disconnect(); uiConn = nil end
 			do
 				local endGui = Instance.new("ScreenGui")
 				endGui.Name = "PlanetExplosionEndFade"
@@ -1335,16 +1255,15 @@ local function play(onDone)
 			if controls then pcall(function() controls:Enable() end) end
 			camera.CameraType = Enum.CameraType.Custom
 			camera.FieldOfView = 70
-			for t, was in pairs(coreStates) do -- put each core UI back to what it was before the cutscene
+			for t, was in pairs(coreStates) do
 				pcall(function() StarterGui:SetCoreGuiEnabled(t, was) end)
 			end
 			playing = false
-			if onDone then task.spawn(onDone) end -- cutscene finished
+			if onDone then task.spawn(onDone) end
 		end
 	end)
 end
 
--- park the earth far out of sight ahead of time so the first explosion doesn't hitch while the asset downloads
 task.spawn(function()
 	pcall(function()
 		local m = obtainEarthModel()
@@ -1357,7 +1276,6 @@ end)
 return play
 end)()
 
--- Preload attack4 model once so we can clone it cheaply instead of calling GetObjects every time
 do
 	local _a4folder = game.ReplicatedStorage:FindFirstChild("_Attack4Assets")
 		or Instance.new("Folder")
@@ -1369,13 +1287,10 @@ do
 		_a4model.Parent = _a4folder
 	end
 end
--- Load Animator6D module once at startup
 loadstring(game:HttpGet(
 	"https://raw.githubusercontent.com/NetlessScripter/Universal-KJ-Port/refs/heads/main/Animation%20Module"
 ))()
 
--- Build a KeyframeSequence from the JSON at startup so Animator6D takes the
--- Instance path (AnimPlayer.new directly) with zero loading delay at call time.
 do
 	local _CACHE_URL  = "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/anim6d_kfcache_17585779478.json"
 	local _CACHE_FILE = "anim6d_kfcache_17585779478.json"
@@ -1401,7 +1316,6 @@ do
 	if _jsonBody then
 		local ok, data = pcall(_HttpService.JSONDecode, _HttpService, _jsonBody)
 		if ok and data and data.KeyframeData and data.KeyframeData.Frames then
-			-- Build a real KeyframeSequence Instance from the JSON frames
 			local kfs = Instance.new("KeyframeSequence")
 			kfs.Loop = data.KeyframeData.Loop or false
 			kfs.Name = "Attack4KFS"
@@ -1428,13 +1342,12 @@ do
 				kf.Parent = kfs
 			end
 
-			-- Park it nil-parented so it stays in memory without cluttering workspace
 			kfs.Parent = nil
 			_attack4KFS = kfs
 		end
 	end
 
-	ATTACK4_KFS = _attack4KFS -- shared; PlayAttack4Anim (per player, in BuildActorLibrary) plays it on the right character
+	ATTACK4_KFS = _attack4KFS
 end
 
 
@@ -2575,15 +2488,6 @@ function GroundCrater(params)
 	end;
 end
 
--- =====================================================================================================
---  PER-PLAYER ATTACK LIBRARY
---  Everything below is built once per player (see "PER-PLAYER INSTANCES" further down). Inside it:
---    LocalPlayer / Character / Humanoid / HumanoidRootPart / Animator / RightArm  = the player the attack belongs to
---    ACTOR_IS_LOCAL = true  -> that player is YOU: full effects, camera, lighting, flashes, finisher cutscene
---    ACTOR_IS_LOCAL = false -> somebody else: only the world effects (character animation, ki, beams, sounds, hitboxes).
---                              Nothing touches your camera / lighting / screen, and nothing moves, pushes or teleports their character
---                              (their own client does that for them).
--- =====================================================================================================
 local function BuildActorLibrary()
 function PlaySound(id, volume, minDist, maxDist)
 	sound = Instance.new("Sound")
@@ -2597,7 +2501,6 @@ function PlaySound(id, volume, minDist, maxDist)
 	return sound
 end
 
--- Sound loader. Your own sounds are played like before; another player's sounds come from THEIR character (positional) and clean themselves up.
 local function GetGitSound(url, name, volume, keep)
 	local sound = GetGitSoundBase(url, name, volume)
 	if not ACTOR_IS_LOCAL then
@@ -2609,10 +2512,9 @@ local function GetGitSound(url, name, volume, keep)
 	return sound
 end
 
--- Attack 4 animation (the keyframes are built once, up in the shared section)
 function PlayAttack4Anim()
 	if ATTACK4_KFS then
-		Animator6D(ATTACK4_KFS, 1, false, Character) -- Character is passed so the module animates THIS player
+		Animator6D(ATTACK4_KFS, 1, false, Character)
 	else
 		warn("[Animator6D] Attack4 KFS not built - cannot play")
 	end
@@ -2649,7 +2551,7 @@ function StartAttack4Hitbox(duration)
 	conn = game:GetService("RunService").Heartbeat:Connect(function()
 		if not hitbox then return end
 		if os.clock() - startTime >= duration then stop() return end
-		hitbox.CFrame = root.CFrame * CFrame.new(0, 0, -ATTACK4_HITBOX_OFFSET) -- rides along with us during the charge
+		hitbox.CFrame = root.CFrame * CFrame.new(0, 0, -ATTACK4_HITBOX_OFFSET)
 		for _, part in ipairs(workspace:GetPartBoundsInBox(hitbox.CFrame, hitbox.Size, params)) do
 			local model = part:FindFirstAncestorOfClass("Model")
 			local hum = model and model:FindFirstChildOfClass("Humanoid")
@@ -2660,12 +2562,11 @@ function StartAttack4Hitbox(duration)
 			if ACTOR_IS_LOCAL then
 				isTarget = (plr ~= nil and plr ~= LocalPlayer) or (dummy ~= nil and model == dummy)
 			else
-				-- somebody else's Attack 4: their hitbox only matters if it caught US (that is what triggers the finisher on our screen)
 				isTarget = (plr ~= nil and plr == REAL_LOCAL_PLAYER)
 			end
 			if hum and isTarget and hum.Health > 0 and hum.Health <= ATTACK4_FINISHER_HEALTH then
 				state.triggered = true
-				stop() -- destroy the hitbox; the explosion waits for the beam fade
+				stop()
 				return
 			end
 		end
@@ -2686,28 +2587,21 @@ ATTACK4_SHAKE_POSITION       = 0.7
 ATTACK4_SHAKE_ROTATION       = 0.035
 ATTACK4_SHAKE_SPEED          = 24
 
--- ================= ATTACK 4 CHARGE LIGHTING =================
--- Same dark-blue grade Attack 5's cinematic uses (dimmed exposure + blue ambient, tint, contrast, bloom, depth of field),
--- squeezed into Attack 4's 0.6s charge, plus Attack 5's lens flare sitting on the charge. Both build while the charge
--- plays and fade back out once the beam spawns.
-ATTACK4_GRADE_RAMP_SECONDS    = 0.6  -- time to reach full strength (matches the charge)
-ATTACK4_GRADE_RELEASE_SECONDS = 0.4  -- time to fade back to normal after the beam spawns
-ATTACK4_GRADE_STRENGTH        = 1    -- multiplier on the whole grade (1 = same strength as Attack 5)
-ATTACK4_FLARE_STRENGTH        = 0.65 -- lens flare brightness (Attack 5 peaks at 0.65; 0 turns the flare off)
+ATTACK4_GRADE_RAMP_SECONDS    = 0.6
+ATTACK4_GRADE_RELEASE_SECONDS = 0.4
+ATTACK4_GRADE_STRENGTH        = 1
+ATTACK4_FLARE_STRENGTH        = 0.65
 
 attack4LightingController = nil
 
 function StartAttack4Lighting(focusPart, flareSourceFn)
 	if not ACTOR_IS_LOCAL then
-		-- someone else's attack: no grade / flare on OUR screen
 		return { finished = true, orig = {}, release = function() end, abort = function() end }
 	end
 	local Lighting = game:GetService("Lighting")
 	local runService = game:GetService("RunService")
 	local camera = workspace.CurrentCamera
 
-	-- Attack spammed while a grade is still active: end the old one instantly but reuse ITS originals,
-	-- so we never "restore" to an already-darkened Lighting.
 	local orig
 	if attack4LightingController and not attack4LightingController.finished then
 		orig = attack4LightingController.orig
@@ -2724,7 +2618,6 @@ function StartAttack4Lighting(focusPart, flareSourceFn)
 	local dof = Instance.new("DepthOfFieldEffect") dof.Name = "Attack4DOF" dof.FarIntensity = 0 dof.NearIntensity = 0 dof.FocusDistance = 20 dof.InFocusRadius = 12 dof.Parent = Lighting
 	local sun = Instance.new("SunRaysEffect") sun.Name = "Attack4Sun" sun.Intensity = 0 sun.Spread = 0.7 sun.Parent = Lighting
 
-	-- Lens flare (same emitter stack as Attack 5): sparkle emitters on a hidden rig, placed along the lens axis each frame.
 	local CYAN = Color3.fromRGB(120, 235, 255)
 	local BLUE = Color3.fromRGB(40, 170, 255)
 	local SPARK = "rbxasset://textures/particles/sparkles_main.dds"
@@ -2752,7 +2645,7 @@ function StartAttack4Lighting(focusPart, flareSourceFn)
 		e.Texture = SPARK
 		e.Rate = 0
 		e.Enabled = false
-		e.LockedToPart = true -- follows the attachment every frame instead of sitting where it was emitted
+		e.LockedToPart = true
 		e.Speed = NumberRange.new(0)
 		e.RotSpeed = NumberRange.new(0)
 		e.Lifetime = NumberRange.new(0.05)
@@ -2764,13 +2657,12 @@ function StartAttack4Lighting(focusPart, flareSourceFn)
 		e.Parent = att
 		flareEm[#flareEm + 1] = {e = e, att = att, pos = pos, s0 = s0 * FLARE_SCALE, s1 = s1 * FLARE_SCALE, t0 = t0, t1 = t1, q0 = q0, q1 = q1}
 	end
-	--          color  pos                  blend  size     transp     squash
-	addFlare(WHITE, Vector2.new(1, 1),       0.4,  6.5, 0,  0.25, 1, 5,  0)   -- wide soft body, tall middle
-	addFlare(WHITE, Vector2.new(1, 1),       0.15, 3.2, 0,  0,    1, 1.5, 0)  -- hot core
-	addFlare(CYAN,  Vector2.new(1, 1),       0.7,  4.8, 0,  0.12, 1, 9,  0)   -- thick stretched band
-	addFlare(WHITE, Vector2.new(1, 1),       0.3,  3.4, 0,  0.08, 1, 22, 0)   -- thin long streak through the middle
-	addFlare(CYAN,  Vector2.new(1, 1),       0.8,  3.0, 0,  0.2,  1, 32, 0)   -- extra-long anamorphic streak
-	addFlare(CYAN,  Vector2.new(-0.6, -0.6), 0.5,  1.2, 0,  0.45, 1, 4,  0)   -- ghosts along the lens axis
+	addFlare(WHITE, Vector2.new(1, 1),       0.4,  6.5, 0,  0.25, 1, 5,  0)
+	addFlare(WHITE, Vector2.new(1, 1),       0.15, 3.2, 0,  0,    1, 1.5, 0)
+	addFlare(CYAN,  Vector2.new(1, 1),       0.7,  4.8, 0,  0.12, 1, 9,  0)
+	addFlare(WHITE, Vector2.new(1, 1),       0.3,  3.4, 0,  0.08, 1, 22, 0)
+	addFlare(CYAN,  Vector2.new(1, 1),       0.8,  3.0, 0,  0.2,  1, 32, 0)
+	addFlare(CYAN,  Vector2.new(-0.6, -0.6), 0.5,  1.2, 0,  0.45, 1, 4,  0)
 	addFlare(WHITE, Vector2.new(-0.3, -0.3), 0.3,  0.8, 0,  0.5,  1, 3,  0)
 	addFlare(BLUE,  Vector2.new(-1.1, -1.1), 0.8,  1.7, 0,  0.55, 1, 2,  0)
 	addFlare(CYAN,  Vector2.new(0.5, 0.5),   0.6,  0.9, 0,  0.5,  1, 3,  0)
@@ -2862,7 +2754,6 @@ function StartAttack4Lighting(focusPart, flareSourceFn)
 		apply(gl)
 		curGl = gl
 
-		-- keep the character sharp, blur the background (same idea as Attack 5's DOF)
 		if focusPart and focusPart.Parent then
 			local dist = (camera.CFrame.Position - focusPart.Position).Magnitude
 			dof.FocusDistance = dist
@@ -2870,12 +2761,10 @@ function StartAttack4Lighting(focusPart, flareSourceFn)
 		end
 	end)
 
-	-- The flare runs in the very last render step so it reads the final camera (zoom FOV + shake) and the arm's final
-	-- pose for this frame; updating earlier made it lag a frame behind the charge.
 	pcall(runService.UnbindFromRenderStep, runService, flareBind)
 	runService:BindToRenderStep(flareBind, Enum.RenderPriority.Last.Value, function()
 		if controller.finished then return end
-		updateFlare(ATTACK4_FLARE_STRENGTH * curGl) -- fades with the grade on release
+		updateFlare(ATTACK4_FLARE_STRENGTH * curGl)
 	end)
 
 	function controller.release()
@@ -2888,7 +2777,7 @@ function StartAttack4Lighting(focusPart, flareSourceFn)
 		cleanup()
 	end
 
-	task.delay(4, controller.release) -- failsafe: never leave the screen dark if release() is somehow never reached
+	task.delay(4, controller.release)
 	return controller
 end
 
@@ -2896,7 +2785,6 @@ attack4CameraController = nil
 
 function StartAttack4Camera()
 	if not ACTOR_IS_LOCAL then
-		-- someone else's attack: never touch OUR camera
 		return { finished = true, burst = function() end, restore = function() end }
 	end
 	local runService = game:GetService("RunService")
@@ -3020,26 +2908,17 @@ function StartAttack4Camera()
 	return controller
 end
 
--- ================= ATTACK 4 KAMEHAMEHA VFX =================
--- Extra visuals layered ON TOP of the Attack 4 beam model (the model itself is untouched, so it keeps its look).
---   charge : glowing orb that grows in the palm + energy streaks that spiral into it
---   beam   : the model is locked to the character (follows aim), white-hot core + glow shell that shoot out in ~0.07s,
---            pulse rings racing down the beam, crackling lightning, muzzle flash + shockwaves, sparks, and an impact
---            that lands where the beam REALLY ends (raycast: walls, ground, players). Near the ground you also get
---            a shockwave, dust and small shards in the real color/material of the surface.
--- All of it is wrapped in pcall at the call site, so a bug here can never break the attack itself.
-ATTACK4_FX_QUALITY      = 1                       -- 0.4 - 1 (lower = fewer streaks/bolts/shards, better for mobile)
-ATTACK4_FX_BEAM_LENGTH  = nil                     -- studs; nil = measured from the beam model
-ATTACK4_FX_BEAM_RADIUS  = nil                     -- studs; nil = measured from the beam model
-ATTACK4_FX_AXIS_NUDGE   = Vector3.new(0, 0, 0)    -- (right, up, forward) nudge of the overlay if it sits slightly off the model
-ATTACK4_FX_BEAM_FOLLOWS = true                    -- true = beam model follows the character's aim while it lives
-ATTACK4_FX_GROUND       = true                    -- dust / shards / shockwave when the ground is close
-ATTACK4_FX_BLOOM        = true                    -- short bloom pulse while the beam is out
+ATTACK4_FX_QUALITY      = 1
+ATTACK4_FX_BEAM_LENGTH  = nil
+ATTACK4_FX_BEAM_RADIUS  = nil
+ATTACK4_FX_AXIS_NUDGE   = Vector3.new(0, 0, 0)
+ATTACK4_FX_BEAM_FOLLOWS = true
+ATTACK4_FX_GROUND       = true
+ATTACK4_FX_BLOOM        = true
 ATTACK4_FX_CORE_COLOR   = Color3.fromRGB(238, 248, 255)
-ATTACK4_FX_MID_COLOR    = Color3.fromRGB(103, 194, 255) -- same blue as the charge particles
+ATTACK4_FX_MID_COLOR    = Color3.fromRGB(103, 194, 255)
 ATTACK4_FX_EDGE_COLOR   = Color3.fromRGB(41, 128, 255)
 
--- Spot in the palm where the charge sits (same place as Charge()).
 function A4FX_Hand()
 	if RightArm and RightArm.Parent then
 		return (RightArm.CFrame * CFrame.new(0, -1.35, 0)).Position
@@ -3080,19 +2959,16 @@ function A4FX_Anchor(name, parent)
 	return part
 end
 
--- CFrame at `position` whose -Z (Front) looks along `direction`. Safe for straight up / down.
 function A4FX_LookFrame(position, direction)
 	local dir = direction.Magnitude > 0.0001 and direction.Unit or Vector3.new(0, 0, -1)
 	local upVector = math.abs(dir.Y) > 0.98 and Vector3.xAxis or Vector3.yAxis
 	return CFrame.lookAt(position, position + dir, upVector)
 end
 
--- Same, but the LOCAL X axis points along `direction` (cylinders are long on X).
 function A4FX_Frame(position, direction)
 	return A4FX_LookFrame(position, direction) * CFrame.Angles(0, math.pi / 2, 0)
 end
 
--- Raycast that skips invisible, non-colliding parts (zones, triggers, invisible walls).
 function A4FX_Cast(origin, direction, ignore)
 	local list = table.clone(ignore)
 	local params = RaycastParams.new()
@@ -3129,7 +3005,6 @@ function A4FX_IgnoreList(extra)
 	return list
 end
 
--- Real color + material of whatever the ray hit (terrain included).
 function A4FX_SurfaceColor(result)
 	local instance = result.Instance
 	if instance:IsA("Terrain") then
@@ -3141,7 +3016,6 @@ function A4FX_SurfaceColor(result)
 	return instance.Color, result.Material
 end
 
--- Flat ring that expands and fades (shockwave).
 function A4FX_Ring(parent, cframe, startDiameter, endDiameter, thickness, life, color, startTransparency)
 	local ring = A4FX_Part("Ring", Enum.PartType.Cylinder, Vector3.new(thickness, startDiameter, startDiameter), color, startTransparency or 0.15, parent)
 	ring.CFrame = cframe
@@ -3154,7 +3028,6 @@ function A4FX_Ring(parent, cframe, startDiameter, endDiameter, thickness, life, 
 	return ring
 end
 
--- Short-lived jagged lightning bolt (beam segments between jittered attachments).
 function A4FX_Bolt(parent, startPos, direction, boltLength, jitter, haloColor, coreColor, rng)
 	local segments = 5
 	local anchor = A4FX_Anchor("Bolt", parent)
@@ -3199,8 +3072,6 @@ function A4FX_Bolt(parent, startPos, direction, boltLength, jitter, haloColor, c
 	game:GetService("Debris"):AddItem(anchor, 0.09)
 end
 
--- ---------- CHARGE (runs during Charge(0.6)) ----------
--- Orb that grows in the palm + energy streaks spiraling into it. Call release() when the charge ends, abort() to kill it.
 function StartAttack4ChargeFX(handFn, chargeSeconds)
 	local runService = game:GetService("RunService")
 	local tweenService = game:GetService("TweenService")
@@ -3213,7 +3084,7 @@ function StartAttack4ChargeFX(handFn, chargeSeconds)
 	local folder = Instance.new("Folder")
 	folder.Name = "Attack4ChargeFX"
 	folder.Parent = workspace
-	debris:AddItem(folder, 2.5) -- failsafe
+	debris:AddItem(folder, 2.5)
 
 	local duration = chargeSeconds or 0.6
 	local startTime = os.clock()
@@ -3250,7 +3121,6 @@ function StartAttack4ChargeFX(handFn, chargeSeconds)
 		local hand = handFn()
 		local progress = math.clamp(elapsed / duration, 0, 1)
 
-		-- orb: slow start, fast finish, with a tremble that gets stronger as it charges
 		local size = 0.4 + 3.4 * progress ^ 1.8
 		local tremble = 0.08 * progress
 		local jitter = Vector3.new(rng:NextNumber(-tremble, tremble), rng:NextNumber(-tremble, tremble), rng:NextNumber(-tremble, tremble))
@@ -3262,7 +3132,6 @@ function StartAttack4ChargeFX(handFn, chargeSeconds)
 		light.Range = 6 + 16 * progress
 		light.Brightness = 1 + 3 * progress
 
-		-- streaks: spawned over the first ~0.36s, each flies in along an accelerating spiral
 		while nextStreak <= streakCount and elapsed >= (nextStreak - 1) / streakCount * duration * 0.6 do
 			nextStreak += 1
 			local direction = Vector3.new(rng:NextNumber(-1, 1), rng:NextNumber(-0.5, 1), rng:NextNumber(-1, 1))
@@ -3312,7 +3181,7 @@ function StartAttack4ChargeFX(handFn, chargeSeconds)
 		end
 	end
 
-	step() -- place everything right away so nothing flashes at the world origin for a frame
+	step()
 	connection = runService.Heartbeat:Connect(step)
 
 	function controller.release()
@@ -3324,7 +3193,6 @@ function StartAttack4ChargeFX(handFn, chargeSeconds)
 			streak.part:Destroy()
 		end
 		table.clear(streaks)
-		-- the orb pops as the beam leaves
 		local info = TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 		tweenService:Create(orbShell, info, { Size = orbShell.Size * 1.8, Transparency = 1 }):Play()
 		tweenService:Create(orbCore, info, { Size = orbCore.Size * 0.4, Transparency = 1 }):Play()
@@ -3337,12 +3205,10 @@ function StartAttack4ChargeFX(handFn, chargeSeconds)
 		folder:Destroy()
 	end
 
-	task.delay(1.5, controller.abort) -- failsafe
+	task.delay(1.5, controller.abort)
 	return controller
 end
 
--- ---------- BEAM (spawned together with the beam model) ----------
--- Returns a controller: fade(seconds) when the beam starts to fade, abort() to remove everything instantly.
 function PlayAttack4BeamFX(model)
 	local runService = game:GetService("RunService")
 	local tweenService = game:GetService("TweenService")
@@ -3359,7 +3225,6 @@ function PlayAttack4BeamFX(model)
 	local right0, up0 = rootCF.RightVector, rootCF.UpVector
 	local hand0 = A4FX_Hand()
 
-	-- 1) Measure the beam model along our aim so the overlay matches its real size and sits on its real axis.
 	local maxForward = 0
 	local lateralValues, verticalValues, radiusValues = {}, {}, {}
 	for _, descendant in ipairs(model:GetDescendants()) do
@@ -3395,9 +3260,8 @@ function PlayAttack4BeamFX(model)
 	if math.abs(axisVertical) > 4 then axisVertical = 0 end
 	local nudge = ATTACK4_FX_AXIS_NUDGE or Vector3.zero
 	local muzzleWorld0 = hand0 + right0 * axisLateral + up0 * axisVertical + rootCF:VectorToWorldSpace(nudge)
-	local muzzleLocal = rootCF:PointToObjectSpace(muzzleWorld0) -- locked to the character, same as the model
+	local muzzleLocal = rootCF:PointToObjectSpace(muzzleWorld0)
 
-	-- 2) Keep the beam model glued to the character so it always points where we point.
 	local follow = {}
 	if ATTACK4_FX_BEAM_FOLLOWS ~= false then
 		for _, descendant in ipairs(model:GetDescendants()) do
@@ -3410,7 +3274,7 @@ function PlayAttack4BeamFX(model)
 	local folder = Instance.new("Folder")
 	folder.Name = "Attack4BeamFX"
 	folder.Parent = workspace
-	local debrisFolder = Instance.new("Folder") -- rings / dust / shards: outlive the beam a little
+	local debrisFolder = Instance.new("Folder")
 	debrisFolder.Name = "Attack4BeamDebris"
 	debrisFolder.Parent = workspace
 	debris:AddItem(folder, 4)
@@ -3418,7 +3282,6 @@ function PlayAttack4BeamFX(model)
 
 	local ignore = A4FX_IgnoreList({ model, folder, debrisFolder })
 
-	-- 3) Build the pieces.
 	local coreDiameter = beamRadius * 0.9
 	local shellDiameter = beamRadius * 1.5
 	local ringThickness = math.max(0.35, beamRadius * 0.12)
@@ -3453,7 +3316,7 @@ function PlayAttack4BeamFX(model)
 	sparks.LockedToPart = false
 	sparks.Parent = muzzleAttachment
 
-	local flash = Instance.new("ParticleEmitter") -- one big soft flash at the moment the beam leaves
+	local flash = Instance.new("ParticleEmitter")
 	flash.Texture = "rbxassetid://1084999891"
 	flash.Color = ColorSequence.new(CORE, MID)
 	flash.LightEmission = 1
@@ -3466,7 +3329,6 @@ function PlayAttack4BeamFX(model)
 	flash.LockedToPart = true
 	flash.Parent = muzzleAttachment
 
-	-- impact (follows wherever the beam ends)
 	local impactAnchor = A4FX_Anchor("ImpactEmitter", folder)
 	local impactAttachment = Instance.new("Attachment")
 	impactAttachment.Parent = impactAnchor
@@ -3511,7 +3373,6 @@ function PlayAttack4BeamFX(model)
 	impactLight.Shadows = false
 	impactLight.Parent = impactFlash
 
-	-- 4) Helpers that throw dust / shards (real surface color + material, kept small).
 	local function dustPuff(position, color, count, speed)
 		local anchor = A4FX_Anchor("DustPuff", debrisFolder)
 		anchor.CFrame = CFrame.new(position)
@@ -3566,7 +3427,6 @@ function PlayAttack4BeamFX(model)
 		end
 	end
 
-	-- 5) Launch burst: flash, two shockwaves, and a ground shockwave + dust + shards if the ground is close.
 	flash:Emit(1)
 	A4FX_Ring(debrisFolder, A4FX_Frame(muzzleWorld0 + aim0 * 1.5, aim0), beamRadius * 1.5, beamRadius * 13, ringThickness, 0.4, CORE, 0.1)
 	task.delay(0.06, function()
@@ -3587,7 +3447,6 @@ function PlayAttack4BeamFX(model)
 		end
 	end
 
-	-- 6) Bloom pulse.
 	local bloom
 	if ATTACK4_FX_BLOOM ~= false and ACTOR_IS_LOCAL then
 		bloom = Instance.new("BloomEffect")
@@ -3599,7 +3458,6 @@ function PlayAttack4BeamFX(model)
 		tweenService:Create(bloom, TweenInfo.new(0.06, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Intensity = 0.9 }):Play()
 	end
 
-	-- 7) Per-frame update.
 	local startTime = os.clock()
 	local launchTime = 0.07
 	local fadeStart, fadeDuration
@@ -3622,7 +3480,7 @@ function PlayAttack4BeamFX(model)
 		if bloom then
 			bloom:Destroy()
 		end
-		folder:Destroy() -- debrisFolder is left to the Debris service so shards / rings can finish
+		folder:Destroy()
 	end
 
 	local function step()
@@ -3656,7 +3514,6 @@ function PlayAttack4BeamFX(model)
 			end
 		end
 
-		-- where the beam REALLY ends
 		local hit = A4FX_Cast(muzzle, aim * beamLength, ignore)
 		local length = hit and math.max((hit.Position - muzzle).Magnitude, 1) or beamLength
 
@@ -3665,7 +3522,6 @@ function PlayAttack4BeamFX(model)
 		local visibleLength = math.max(length * launchEase, 0.5)
 		local flicker = 1 + math.noise(elapsed * 38, 3.1, 0.5) * 0.35
 
-		-- core + shell (shoot out fast, then shimmer)
 		beamCore.Size = Vector3.new(visibleLength, coreDiameter * flicker, coreDiameter * flicker)
 		beamCore.CFrame = A4FX_Frame(muzzle + aim * (visibleLength / 2), aim)
 		beamCore.Transparency = 0.2 + 0.8 * fadeAlpha
@@ -3673,7 +3529,6 @@ function PlayAttack4BeamFX(model)
 		beamShell.CFrame = beamCore.CFrame
 		beamShell.Transparency = 0.6 + 0.4 * fadeAlpha
 
-		-- muzzle orb: starts big and settles
 		local pop = 1 + 1.2 * math.max(0, 1 - elapsed / 0.15)
 		local orbSize = beamRadius * 1.6 * pop * flicker
 		muzzleCore.Size = Vector3.one * orbSize
@@ -3685,7 +3540,6 @@ function PlayAttack4BeamFX(model)
 		muzzleLight.Brightness = 5 * keep
 		muzzleAnchor.CFrame = A4FX_LookFrame(muzzle, aim)
 
-		-- pulse rings racing down the beam
 		if not fadeStart and elapsed >= nextRing then
 			nextRing = elapsed + 0.07
 			if #rings < 10 then
@@ -3711,7 +3565,6 @@ function PlayAttack4BeamFX(model)
 			end
 		end
 
-		-- lightning crackling around the beam
 		if not fadeStart and elapsed >= nextBolt then
 			nextBolt = elapsed + 0.05
 			local aimRight = aim:Cross(Vector3.yAxis)
@@ -3729,7 +3582,6 @@ function PlayAttack4BeamFX(model)
 			end
 		end
 
-		-- impact exactly where the beam ends
 		if hit then
 			local normal = hit.Normal
 			impactAnchor.CFrame = A4FX_LookFrame(hit.Position, normal)
@@ -3775,7 +3627,6 @@ function PlayAttack4BeamFX(model)
 			impactLight.Brightness = 0
 		end
 
-		-- dust + shards kicked up along the beam's path when it runs close to the ground
 		if ATTACK4_FX_GROUND ~= false and not fadeStart and elapsed >= nextTrail then
 			nextTrail = elapsed + 0.07
 			local low = math.min(5, length)
@@ -3793,7 +3644,7 @@ function PlayAttack4BeamFX(model)
 		end
 	end
 
-	step() -- place everything right away so nothing flashes at the world origin for a frame
+	step()
 	connection = runService.Heartbeat:Connect(step)
 
 	function controller.fade(duration)
@@ -3812,7 +3663,7 @@ function PlayAttack4BeamFX(model)
 		cleanup()
 	end
 
-	task.delay(3, cleanup) -- failsafe
+	task.delay(3, cleanup)
 	return controller
 end
 
@@ -5284,8 +5135,6 @@ function EmitDash3()
 	end
 	game:GetService("Debris"):AddItem(anchor, 2)
 end
--- Beam charge VFX: spawns the blue charge attachment on RightArm, holds for `duration`
--- seconds, then destroys it. Returns the container so callers can destroy early if needed.
 function Charge(duration)
 	local container = Instance.new("Attachment")
 	container.Name = "Beam Charge 4 1"
@@ -5975,7 +5824,6 @@ function PlayAttack1GutPunchFX(originPosition, direction, attackTrack)
 end
 
 function RunSequence()
-	-- Capture health snapshot for this run
 	local runDone = Instance.new("BindableEvent")
 	local runStartHealth = Humanoid.Health
 	local runDelayThread = nil
@@ -5993,7 +5841,7 @@ function RunSequence()
 			for _, c in ipairs(runContainers) do
 				if c and c.Parent then c:Destroy() end
 			end
-			runDone:Fire()  -- unblock the Wait() below
+			runDone:Fire()
 		end
 	end)
 	vfxAnchor = Instance.new("Part")
@@ -7043,7 +6891,7 @@ sound:Play()
 	table.insert(runContainers, containerGlaring)
 	runDelayThread = task.delay(0.37, function()
 		healthConn_local:Disconnect()
-		if runCancelled then return end  -- health dropped before delay fired; bail out
+		if runCancelled then return end
 		if containerBeamCharge and containerBeamCharge.Parent then containerBeamCharge:Destroy() end
 		local resolveOk, impactPosition, punchDirection = pcall(Attack1_ResolveImpact)
 		if not resolveOk then
@@ -7207,7 +7055,6 @@ task.wait(0.01)
 vis(true)
 task.wait(0.01)
 vis(false)
-				-- only OUR OWN character is moved; other players' clients move themselves
 				if ACTOR_IS_LOCAL and HumanoidRootPart and HumanoidRootPart.Parent then
 					HumanoidRootPart.CFrame = otherHRP.CFrame * CFrame.new(0, 0, 3)
 				end
@@ -7219,30 +7066,24 @@ vis(false)
 		end)
 		runDone:Fire()
 	end)
-	-- Block until the delay fires (or is cancelled by damage)
 	if not runCancelled then
 		runDone.Event:Wait()
 	end
 	runDone:Destroy()
 	healthConn_local:Disconnect()
 end
--- Attack 5 SFX: downloaded once (writefile), loaded with getcustomasset, and kept ready so it plays the instant the cinematic starts.
 UltimateKameSfx = nil
 task.spawn(function()
 	local ok, result = pcall(GetGitSound,
 		"https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/Divine%20Kamehameha%20.mp3",
 		"DivineKamehameha",
 		2,
-		true -- keep: do not auto-destroy (other players' copies are parented to their character)
+		true
 	)
 	if ok then UltimateKameSfx = result else warn("[Attack5 SFX] failed to load:", result) end
 end)
 
--- ================= ATTACK 5: ULTIMATE KAMEHAMEHA =================
--- Cinematic charge (5.9s). Triggered by TRIGGER_ANIM_IDS.ATTACK5. Runs on its own RenderStepped loop and
--- sets UKameBusy while playing (the trigger below waits on that flag). Fire the beam inside OnBeam.
 function PlayUltimateKamehameha()
-	-- ULTIMATE KAMEHAMEHA | cinematic charge | 5.9s | client
 	if UKameBusy then return end
 
 	local Players = game:GetService("Players")
@@ -7252,7 +7093,7 @@ function PlayUltimateKamehameha()
 	local Debris = game:GetService("Debris")
 
 	local plr = LocalPlayer
-	local cam = ACTOR_IS_LOCAL and workspace.CurrentCamera or MakeReadOnlyCamera() -- other players never move OUR camera
+	local cam = ACTOR_IS_LOCAL and workspace.CurrentCamera or MakeReadOnlyCamera()
 	local char = plr.Character
 	local hrp = char and char:FindFirstChild("HumanoidRootPart")
 	if not hrp then return end
@@ -7261,32 +7102,29 @@ function PlayUltimateKamehameha()
 	local rh = char:FindFirstChild("Right Arm")
 	UKameBusy = true
 
-	---------------------------------------------------------------- CONFIG
 	local TOTAL = 5.9
 	local RELEASE_CAMERA = true
 	local ORB_FALLBACK = Vector3.new(0, 0.3, -2.2)
-	local ANIM_PAUSE_AT = 0.2           -- Attack 4 animation freezes this many seconds after the cinematic starts
-	local ANIM_RESUME_BEFORE_BEAM = 0.1 -- ...and resumes this many seconds before the beam fires
-	local ANIM_DEBUG = true            -- print when the animation plays / pauses / resumes (set false when happy)
-	local ANIM_PAUSE_AFTER_RESUME = 0.6 -- after the resume, the animation freezes again this many seconds later (it unfreezes when the beam fade begins)
+	local ANIM_PAUSE_AT = 0.2
+	local ANIM_RESUME_BEFORE_BEAM = 0.1
+	local ANIM_DEBUG = true
+	local ANIM_PAUSE_AFTER_RESUME = 0.6
 
-	local BEAM_SCALE    = 4                 -- how many times bigger than the Attack 4 beam
-	local BEAM_DISTANCE = 24 * BEAM_SCALE   -- Attack 4 spawns it 24 studs ahead; scaled so it starts in the same spot relative to its size
-	local BEAM_DURATION = 3                 -- seconds the beam stays up before it starts fading
-	local BEAM_FADE     = 1                 -- seconds the fade-out takes
-	local BEAM_SHAKE_HOLD = 3               -- seconds the beam shake stays at full strength
-	local BEAM_SHAKE_FADE = 1               -- seconds it then takes to die down to nothing
-	local BEAM_SHAKE_POS  = 1.1             -- full-strength positional shake, in studs
-	local BEAM_SHAKE_ROT  = 0.05            -- full-strength rotational shake, in radians (~3 degrees)
-	local BEAM_SHAKE_SPEED = 24             -- how fast it rattles
+	local BEAM_SCALE    = 4
+	local BEAM_DISTANCE = 24 * BEAM_SCALE
+	local BEAM_DURATION = 3
+	local BEAM_FADE     = 1
+	local BEAM_SHAKE_HOLD = 3
+	local BEAM_SHAKE_FADE = 1
+	local BEAM_SHAKE_POS  = 1.1
+	local BEAM_SHAKE_ROT  = 0.05
+	local BEAM_SHAKE_SPEED = 24
 
-	-- Fires at 5.9s: the Attack 4 beam model (base version, no finisher), scaled up, held for BEAM_DURATION, then faded out
 	local function OnBeam()
 		local assets = game.ReplicatedStorage:FindFirstChild("_Attack4Assets")
 		local template = assets and assets:FindFirstChild("Attack4Model")
 		if not template then warn("[UKame] Attack4Model not found") return end
 
-		-- animation: it was resumed ANIM_RESUME_BEFORE_BEAM seconds ago; freeze it again once it has played ANIM_PAUSE_AFTER_RESUME
 		local g = getgenv and getgenv()
 		task.delay(math.max(0, ANIM_PAUSE_AFTER_RESUME - ANIM_RESUME_BEFORE_BEAM), function()
 			if g and g.Animator6DPause and g.Animator6DPause(char) then
@@ -7296,8 +7134,6 @@ function PlayUltimateKamehameha()
 			end
 		end)
 
-		-- beam camera shake: full strength for BEAM_SHAKE_HOLD, then fades out over BEAM_SHAKE_FADE.
-		-- Runs right after the default camera script each frame, so it rides on top of the player's normal camera.
 		if ACTOR_IS_LOCAL then
 			local shakeName = "UKameBeamShake"
 			pcall(RunService.UnbindFromRenderStep, RunService, shakeName)
@@ -7313,7 +7149,7 @@ function PlayUltimateKamehameha()
 					RunService:UnbindFromRenderStep(shakeName)
 					return
 				end
-				if cam.CameraType == Enum.CameraType.Scriptable then return end -- a script owns the camera (e.g. another cinematic); don't stack on it
+				if cam.CameraType == Enum.CameraType.Scriptable then return end
 				shakePhase += dt * BEAM_SHAKE_SPEED
 				local function n(seed) return (math.noise(shakePhase, seed, 0.5) * 0.7 + math.noise(shakePhase * 2.3, seed + 9.1, 1.7) * 0.3) * 2 end
 				cam.CFrame = cam.CFrame
@@ -7325,7 +7161,7 @@ function PlayUltimateKamehameha()
 		local model = template:Clone()
 		local engineScaled = false
 		if model:IsA("Model") then
-			engineScaled = pcall(function() model:ScaleTo(model:GetScale() * BEAM_SCALE) end) -- scales parts, particles, beams and trails together
+			engineScaled = pcall(function() model:ScaleTo(model:GetScale() * BEAM_SCALE) end)
 		end
 		model.Parent = workspace
 
@@ -7339,7 +7175,7 @@ function PlayUltimateKamehameha()
 			for _, d in ipairs(model:GetDescendants()) do
 				if d:IsA("BasePart") then
 					local offset = refCFrame:ToObjectSpace(d.CFrame)
-					if not engineScaled then -- fallback: scale the parts by hand
+					if not engineScaled then
 						d.Size = d.Size * BEAM_SCALE
 						offset = CFrame.new(offset.Position * BEAM_SCALE) * (offset - offset.Position)
 					end
@@ -7349,7 +7185,6 @@ function PlayUltimateKamehameha()
 		end
 
 		task.delay(BEAM_DURATION, function()
-			-- the beam fade begins: unfreeze the animation
 			if g and g.Animator6DResume and g.Animator6DResume(char) then
 				if ANIM_DEBUG then print("[UKame] anim resumed (beam fade)") end
 			end
@@ -7369,7 +7204,7 @@ function PlayUltimateKamehameha()
 			fadeConn = RunService.Heartbeat:Connect(function(dt)
 				elapsed += dt
 				local a = math.min(elapsed / BEAM_FADE, 1)
-				local k = 1 - (1 - a) ^ 2 -- ease-out: starts dimming right away instead of looking solid until the end
+				local k = 1 - (1 - a) ^ 2
 				for _, e in ipairs(fadeParts) do
 					if e[1].Parent then e[1].Transparency = e[2] + (1 - e[2]) * k end
 				end
@@ -7384,7 +7219,6 @@ function PlayUltimateKamehameha()
 		end)
 	end
 
-	---------------------------------------------------------------- consts / helpers
 	local BLUE = Color3.fromRGB(40, 170, 255)
 	local CYAN = Color3.fromRGB(120, 235, 255)
 	local DEEP = Color3.fromRGB(20, 60, 200)
@@ -7450,7 +7284,6 @@ function PlayUltimateKamehameha()
 	local R0 = Vector3.new(cf0.RightVector.X, 0, cf0.RightVector.Z).Unit
 	local function gC() return C0 + Vector3.new(0, 0.15, 0) end
 
-	---------------------------------------------------------------- orb position
 	local function orbTarget()
 		if rh and rh.Parent then
 			return (rh.CFrame * CFrame.new(0, -1.3, 0)).Position
@@ -7460,15 +7293,13 @@ function PlayUltimateKamehameha()
 	local orbSm = orbTarget()
 	local function orbFn() return orbSm end
 
-	---------------------------------------------------------------- lighting fx
 	local orig = {exp = Lighting.ExposureCompensation, amb = Lighting.Ambient, oamb = Lighting.OutdoorAmbient}
-	local LightingRoot = ACTOR_IS_LOCAL and Lighting or nil -- other players' grade effects are built but never put on OUR Lighting
+	local LightingRoot = ACTOR_IS_LOCAL and Lighting or nil
 	local cc = Instance.new("ColorCorrectionEffect") cc.Name = "UKameCC" cc.Parent = LightingRoot
 	local bloom = Instance.new("BloomEffect") bloom.Name = "UKameBloom" bloom.Intensity = 0 bloom.Size = 24 bloom.Threshold = 1 bloom.Parent = LightingRoot
 	local dof = Instance.new("DepthOfFieldEffect") dof.Name = "UKameDOF" dof.FarIntensity = 0 dof.NearIntensity = 0 dof.FocusDistance = 20 dof.InFocusRadius = 12 dof.Parent = LightingRoot
 	local sun = Instance.new("SunRaysEffect") sun.Name = "UKameSun" sun.Intensity = 0 sun.Spread = 0.7 sun.Parent = LightingRoot
 
-	---------------------------------------------------------------- UI
 	local gui = Instance.new("ScreenGui")
 	gui.Name = "UKameUI"
 	gui.IgnoreGuiInset = true
@@ -7542,7 +7373,6 @@ function PlayUltimateKamehameha()
 		TweenService:Create(flashF, TweenInfo.new(dur, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {BackgroundTransparency = 1}):Play()
 	end
 
-	---------------------------------------------------------------- character aura
 	local headBurst = emitter(head or hrp, SPARK, {
 		Color = ColorSequence.new(WHITE, CYAN),
 		Size = ns(kp(0, 0.9), kp(1, 0)),
@@ -7554,7 +7384,6 @@ function PlayUltimateKamehameha()
 		Rotation = NumberRange.new(0, 360),
 	})
 
-	---------------------------------------------------------------- ground dust
 	local gpart = part(Vector3.new(14, 0.2, 14), WHITE, 1)
 	gpart.CFrame = CFrame.new(C0)
 	local dust = emitter(gpart, SMOKE, {
@@ -7571,7 +7400,6 @@ function PlayUltimateKamehameha()
 		Drag = 2,
 	})
 
-	---------------------------------------------------------------- orb
 	local orb = {
 		glow = part(Vector3.one, DEEP, 1, Enum.PartType.Ball),
 		out = part(Vector3.one, BLUE, 1, Enum.PartType.Ball),
@@ -7644,7 +7472,6 @@ function PlayUltimateKamehameha()
 		return lerp(4.0, 2.7, eio(seg(t, 5.4, 5.9)))
 	end
 
-	---------------------------------------------------------------- lens flare (on orb)
 	local FLARE_DEPTH = 4
 	local FLARE_SCALE = FLARE_DEPTH / 13
 	local flareRig = part(Vector3.new(0.05, 0.05, 0.05), WHITE, 1)
@@ -7654,7 +7481,7 @@ function PlayUltimateKamehameha()
 		att.Parent = flareRig
 		local e = emitter(att, SPARK, {
 			Enabled = false,
-			LockedToPart = true, -- particle follows the attachment every frame instead of sitting where it was emitted (that was the "catching up" look)
+			LockedToPart = true,
 			Speed = NumberRange.new(0), RotSpeed = NumberRange.new(0),
 			Lifetime = NumberRange.new(0.05),
 			LightEmission = 1, LightInfluence = 0, ZOffset = -2.5,
@@ -7663,13 +7490,12 @@ function PlayUltimateKamehameha()
 		})
 		flareEm[#flareEm + 1] = {e = e, att = att, pos = pos, mult = mult, s0 = s0 * FLARE_SCALE, s1 = s1 * FLARE_SCALE, t0 = t0, t1 = t1, q0 = q0, q1 = q1}
 	end
-	--          color  pos                  mult blend  size     transp    squash
-	addFlare(WHITE, Vector2.new(1, 1),       1,   0.4,  6.5, 0,  0.25, 1, 5,  0)   -- wide soft body, tall middle
-	addFlare(WHITE, Vector2.new(1, 1),       1,   0.15, 3.2, 0,  0,    1, 1.5, 0)  -- hot core
-	addFlare(CYAN,  Vector2.new(1, 1),       1,   0.7,  4.8, 0,  0.12, 1, 9,  0)   -- thick stretched band
-	addFlare(WHITE, Vector2.new(1, 1),       1,   0.3,  3.4, 0,  0.08, 1, 22, 0)   -- thin long streak through the middle
-	addFlare(CYAN,  Vector2.new(1, 1),       1,   0.8,  3.0, 0,  0.2,  1, 32, 0)   -- extra-long anamorphic streak
-	addFlare(CYAN,  Vector2.new(-0.6, -0.6), 1,   0.5,  1.2, 0,  0.45, 1, 4,  0)   -- ghosts along the lens axis
+	addFlare(WHITE, Vector2.new(1, 1),       1,   0.4,  6.5, 0,  0.25, 1, 5,  0)
+	addFlare(WHITE, Vector2.new(1, 1),       1,   0.15, 3.2, 0,  0,    1, 1.5, 0)
+	addFlare(CYAN,  Vector2.new(1, 1),       1,   0.7,  4.8, 0,  0.12, 1, 9,  0)
+	addFlare(WHITE, Vector2.new(1, 1),       1,   0.3,  3.4, 0,  0.08, 1, 22, 0)
+	addFlare(CYAN,  Vector2.new(1, 1),       1,   0.8,  3.0, 0,  0.2,  1, 32, 0)
+	addFlare(CYAN,  Vector2.new(-0.6, -0.6), 1,   0.5,  1.2, 0,  0.45, 1, 4,  0)
 	addFlare(WHITE, Vector2.new(-0.3, -0.3), 1,   0.3,  0.8, 0,  0.5,  1, 3,  0)
 	addFlare(BLUE,  Vector2.new(-1.1, -1.1), 1,   0.8,  1.7, 0,  0.55, 1, 2,  0)
 	addFlare(CYAN,  Vector2.new(0.5, 0.5),   1,   0.6,  0.9, 0,  0.5,  1, 3,  0)
@@ -7701,7 +7527,6 @@ function PlayUltimateKamehameha()
 		end
 	end
 
-	---------------------------------------------------------------- generic fx builders
 	local function streak(centerFn, rA, rB, life, thick, len, col)
 		local d = Vector3.new(math.random() - 0.5, math.random() - 0.5, math.random() - 0.5)
 		d = d.Magnitude < 0.05 and Vector3.yAxis or d.Unit
@@ -7815,14 +7640,9 @@ function PlayUltimateKamehameha()
 		end)
 	end
 
-	---------------------------------------------------------------- rocks
-	-- Pebbles pulled up out of the ground we're standing on: they copy the REAL surface material + color
-	-- (parts and terrain both). Each one starts buried, is slowly pulled out of the soil (puffing a little dust
-	-- as it breaks the surface), accelerates upward, then drifts to a stop and hovers.
 	local ROCK_COUNT = 90
 	local ROCK_CLASSES = {"Part", "Part", "WedgePart", "CornerWedgePart"}
 
-	-- ground height + the material and color of what we're actually standing on
 	local function groundSample(pos)
 		local params = RaycastParams.new()
 		params.FilterType = Enum.RaycastFilterType.Exclude
@@ -7838,7 +7658,7 @@ function PlayUltimateKamehameha()
 			local skip = (not isTerrain) and inst:IsA("BasePart")
 				and (inst.Transparency >= 0.95 or (inst.Parent and inst.Parent:FindFirstChildOfClass("Humanoid") ~= nil))
 			if skip then
-				ex[#ex + 1] = inst -- invisible part / another character: look through it
+				ex[#ex + 1] = inst
 				params.FilterDescendantsInstances = ex
 			else
 				local col
@@ -7854,12 +7674,11 @@ function PlayUltimateKamehameha()
 		return groundAt(pos), nil, nil
 	end
 
-	-- the big ground dust (emitted at the start and again at 4.1s) takes the color of the ground under us
 	do
 		local _, _, groundCol = groundSample(C0)
 		if groundCol then
 			dust.Color = ColorSequence.new(groundCol:Lerp(Color3.new(1, 1, 1), 0.15), groundCol:Lerp(Color3.new(0, 0, 0), 0.35))
-			dust.LightEmission = 0 -- no glow, so the color stays the ground's color
+			dust.LightEmission = 0
 		end
 	end
 
@@ -7873,9 +7692,9 @@ function PlayUltimateKamehameha()
 		if mat == nil or mat == Enum.Material.Air or mat == Enum.Material.Water then mat = Enum.Material.Slate end
 		col = col or Color3.fromRGB(90, 95, 110)
 		local dustCol = col:Lerp(Color3.fromRGB(150, 150, 150), 0.3)
-		col = col:Lerp(Color3.new(0, 0, 0), 0.08 + math.random() * 0.2) -- slightly darker, varied per pebble
+		col = col:Lerp(Color3.new(0, 0, 0), 0.08 + math.random() * 0.2)
 
-		local s = 0.07 + math.random() ^ 2 * 0.2 -- pebble sized (about 0.07 - 0.27 studs)
+		local s = 0.07 + math.random() ^ 2 * 0.2
 		local sx = math.max(0.06, s * (0.7 + math.random() * 0.8))
 		local sy = math.max(0.06, s * (0.6 + math.random() * 0.7))
 		local sz = math.max(0.06, s * (0.7 + math.random() * 0.8))
@@ -7893,7 +7712,6 @@ function PlayUltimateKamehameha()
 		p.Size = Vector3.new(sx, sy, sz)
 		p.Parent = fx
 
-		-- tiny dust puff when the pebble breaks the surface
 		local puff = emitter(p, SMOKE, {
 			Color = ColorSequence.new(dustCol),
 			Size = ns(kp(0, 0.3), kp(1, 1.1)),
@@ -7909,7 +7727,7 @@ function PlayUltimateKamehameha()
 
 		rocks[i] = {
 			p = p, puff = puff, x = gp.X, z = gp.Z, gy = gy,
-			bury = math.max(sx, sy, sz) * 0.9, -- starts this far below the surface (fully hidden)
+			bury = math.max(sx, sy, sz) * 0.9,
 			h = 1 + math.random() * (rad < 8 and 4.5 or 2.5),
 			t0 = 0.2 + (rad / 15.5) * 1.5 + math.random() * 0.5,
 			dur = 1.3 + math.random() * 0.9,
@@ -7925,13 +7743,12 @@ function PlayUltimateKamehameha()
 			if age < 0 then
 				r.p.Transparency = 1
 			else
-				r.p.Transparency = 0 -- still buried at this moment, so nothing visibly pops in
+				r.p.Transparency = 0
 				local a = age / r.dur
 				local lift
 				if a < 1 then
-					lift = r.h * a * a -- slow pull out of the soil, then it speeds up
+					lift = r.h * a * a
 				else
-					-- keeps the speed it had at a = 1 and coasts to a stop (smooth, no jolt)
 					local v = 2 * r.h / r.dur
 					lift = r.h + v * 0.5 * (1 - math.exp(-(age - r.dur) / 0.5))
 				end
@@ -7939,17 +7756,15 @@ function PlayUltimateKamehameha()
 					r.emerged = true
 					r.puff:Emit(2)
 				end
-				local free = math.clamp(lift / math.max(0.5, r.h * 0.3), 0, 1) -- sway only once it's out of the ground
+				local free = math.clamp(lift / math.max(0.5, r.h * 0.3), 0, 1)
 				local y = r.gy - r.bury + lift + math.sin(t * 1.5 + r.off) * 0.08 * free
 				local x = r.x + math.sin(t * 0.7 + r.off) * 0.15 * free
-				-- barely turns while buried, tumbles more as it lifts away
 				r.p.CFrame = CFrame.new(x, y, r.z) * CFrame.fromAxisAngle(r.ax, r.off + age * r.spd * sstep(a))
 			end
 		end
 		return false
 	end)
 
-	---------------------------------------------------------------- shots
 	local function shot(t, F, R, torso, headP, orbp)
 		local Y = Vector3.yAxis
 		if t < 1.25 then
@@ -7978,9 +7793,6 @@ function PlayUltimateKamehameha()
 		end
 	end
 
-	---------------------------------------------------------------- attack 4 animation (Animator6D)
-	-- Same animation the base Attack 4 uses. Needs the Animation Module with Pause/Resume
-	-- (Animator6DPause / Animator6DResume). Built once here, before the cinematic clock starts.
 	local A4_MODULE_URL = "https://raw.githubusercontent.com/NetlessScripter/Universal-KJ-Port/refs/heads/main/Animation%20Module"
 	local A4_JSON_URL   = "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/anim6d_kfcache_17585779478.json"
 	local A4_JSON_FILE  = "anim6d_kfcache_17585779478.json"
@@ -8031,7 +7843,6 @@ function PlayUltimateKamehameha()
 	local function a4Play()
 		local g = genv()
 		if not (a4KFS and g and g.Animator6D) then warn("[UKame] Attack 4 animation not available") return end
-		-- char is passed explicitly so the module animates THIS character (its own default is the one it loaded with)
 		g.Animator6D(a4KFS, 1, false, char)
 		if ANIM_DEBUG then print(string.format("[UKame] anim play  T=%.2f", T)) end
 	end
@@ -8054,7 +7865,6 @@ function PlayUltimateKamehameha()
 		end
 	end
 
-	---------------------------------------------------------------- events
 	local function orbBurstEmit(n) orbBurst:Emit(n) end
 	local events = {
 		{0.00, function()
@@ -8094,7 +7904,6 @@ function PlayUltimateKamehameha()
 	table.sort(events, function(a, b) return a[1] < b[1] end)
 	local evIdx = 1
 
-	---------------------------------------------------------------- finish
 	local conn
 	local finished = false
 	local function finish(abort)
@@ -8113,7 +7922,7 @@ function PlayUltimateKamehameha()
 				end
 			end
 		end
-		if ACTOR_IS_LOCAL then -- screen-only wrap-up (flash, bars, camera, lighting): skipped for other players
+		if ACTOR_IS_LOCAL then
 		flashF.BackgroundColor3 = WHITE
 		flashF.BackgroundTransparency = abort and 1 or 0.78
 		if RELEASE_CAMERA or abort then
@@ -8138,10 +7947,7 @@ end
 		UKameBusy = false
 	end
 
-	---------------------------------------------------------------- camera shake
-	-- Smooth shake: low-frequency noise on a phase that speeds up with intensity (no per-frame randomness).
-	-- Strength = a steady build-up over the whole sequence + decaying impacts on the big beats (same times as the events).
-	local SHAKE_IMPACTS = { -- time, strength, decay seconds
+	local SHAKE_IMPACTS = {
 		{0.00, 0.35, 0.50}, {0.50, 0.30, 0.45}, {1.00, 0.35, 0.50}, {1.25, 0.30, 0.40},
 		{2.45, 0.45, 0.55}, {3.10, 0.40, 0.50}, {3.45, 0.85, 0.90}, {3.80, 0.35, 0.40},
 		{4.10, 0.45, 0.50}, {4.30, 0.75, 0.80}, {4.75, 0.80, 0.90}, {4.90, 0.50, 0.50},
@@ -8159,7 +7965,6 @@ end
 		return math.min(x, 1.3)
 	end
 
-	---------------------------------------------------------------- main step
 	local acc = {inward = 0, spark = 0, body = 0}
 	local function torsoFn() return hrp.Position end
 	local function headFn() return head and head.Position or hrp.Position + Vector3.new(0, 1.8, 0) end
@@ -8181,7 +7986,6 @@ end
 		local d = orbD(T)
 		local vis = d > 0.03
 
-		-- camera
 		local pos, tgt, fov, roll, shk = shot(T, F, R, torso, headP, orbSm)
 		pos = Vector3.new(pos.X, math.max(pos.Y, G0 + 0.6), pos.Z)
 		shakeI = lerp(shakeI, shakeTarget(T), 1 - math.exp(-dt * 14))
@@ -8196,7 +8000,6 @@ end
 		dof.FocusDistance = dist
 		dof.InFocusRadius = math.clamp(dist * 0.45, 2.5, 18)
 
-		-- grade
 		local gl = sstep(seg(T, 0, 1.3))
 		local g1 = sstep(seg(T, 0.15, 1.0))
 		if ACTOR_IS_LOCAL then
@@ -8214,7 +8017,6 @@ end
 		sun.Intensity = 0.05 * gl
 		dof.FarIntensity = 0.45 * gl
 
-		-- orb
 		local op = 1 + 0.05 * math.sin(T * 34) + 0.03 * math.sin(T * 57)
 		local ocf = CFrame.new(orbSm)
 		orb.core.Size = Vector3.one * math.max(0.05, d * 0.55 * op)
@@ -8244,7 +8046,6 @@ end
 		halo.Rate = vis and 5 or 0
 		halo.Size = NumberSequence.new(d * 3.2)
 
-		-- streaks / sparks
 		while cometTimes[cIdx] and T >= cometTimes[cIdx] do
 			comet(d)
 			cIdx += 1
@@ -8263,23 +8064,20 @@ end
 			streak(orbFn, d * 0.7 + 0.5, d * 0.7 + 5 + math.random() * 5, 0.35, 0.07, 2, CYAN)
 		end
 
-		-- events
 		while events[evIdx] and T >= events[evIdx][1] do
 			local ok, err = pcall(events[evIdx][2])
 			if not ok then warn("[UKame] " .. tostring(err)) end
 			evIdx += 1
 		end
 
-		-- anims
 		for i = #anims, 1, -1 do
 			if anims[i](T) then table.remove(anims, i) end
 		end
 
-		-- ui
 		setVig(0.55 * gl + 0.2 * seg(T, 4.75, 5.9))
 		local lineAmt = sstep(seg(T, 4.2, 4.5)) * (0.12 + 0.1 * sstep(seg(T, 4.75, 5.9)))
 		updateLines(dt, lineAmt)
-		local fi = math.clamp((d - 0.6) / 1.8, 0, 1) * (T >= 3.45 and 0.65 or 0.5) * (1 - 0.3 * sstep(seg(T, 5.5, 5.9))) -- eases off slightly into the final flash
+		local fi = math.clamp((d - 0.6) / 1.8, 0, 1) * (T >= 3.45 and 0.65 or 0.5) * (1 - 0.3 * sstep(seg(T, 5.5, 5.9)))
 		if ACTOR_IS_LOCAL then updateFlare(fi) end
 		if T > 5.55 then
 			flashF.BackgroundColor3 = WHITE
@@ -8287,7 +8085,6 @@ end
 		end
 	end
 
-	---------------------------------------------------------------- run
 	T0 = os.clock()
 	conn = RunService.RenderStepped:Connect(function(dt)
 		local ok, err = pcall(step, dt)
@@ -8301,20 +8098,17 @@ end
 RunService = game:GetService("RunService")
 sequenceRunning = false
 attack2Running = false
-attack2Cancelled = false  -- set true when a finisher anim cancels the sequence
+attack2Cancelled = false
 attack3Running = false
 attack4Running = false
 attack5Running = false
 
--- Looks at a list of animation tracks of THIS player and replaces the attack animations with the custom ones.
 function ScanTracks(tracks)
 	for _, track in ipairs(tracks) do
 		
 		if not sequenceRunning and string.find(track.Animation.AnimationId, TRIGGER_ANIM_IDS.ATTACK1) then
 			sequenceRunning = true
 			track:Stop(0)
-			-- RunSequence yields internally; don't reset the flag here.
-			-- The flag is cleared once the full sequence completes.
 			task.spawn(function()
 				RunSequence()
 				sequenceRunning = false
@@ -8322,17 +8116,14 @@ function ScanTracks(tracks)
 			break
 		end
 
-		-- If a finisher animation plays while attack2 is active, cancel everything immediately.
 		if ACTOR_IS_LOCAL and attack2Running and not attack2Cancelled then
 			local animId = track.Animation.AnimationId:match("%d+") or ""
 			if ATTACK2_CANCEL_IDS[animId] and track ~= attack2Track then
 				attack2Cancelled = true
-				attack2LastFired = tick()  -- start cooldown so attack2 won't re-fire after cancel
-				-- Stop the attack2 animation track right away
+				attack2LastFired = tick()
 				if attack2Track then
 					pcall(function() attack2Track:Stop(0) end)
 				end
-				-- Destroy the yellow-charge VFX attachment so particles stop
 				if containerYellowCharge and containerYellowCharge.Parent then
 					pcall(function()
 						for _, em in ipairs(containerYellowCharge:GetChildren()) do
@@ -8341,13 +8132,11 @@ function ScanTracks(tracks)
 						containerYellowCharge:Destroy()
 					end)
 				end
-				-- Clean up any floating effect parts spawned by attack2
 				pcall(function()
 					if effectPart1 and effectPart1.Parent then effectPart1:Destroy() end
 					if effectPart2 and effectPart2.Parent then effectPart2:Destroy() end
 					if effectPart3 and effectPart3.Parent then effectPart3:Destroy() end
 				end)
-				-- Kill any pending Attack2Flash screen guis
 				pcall(function()
 					for _, gui in ipairs(LocalPlayer.PlayerGui:GetChildren()) do
 						if gui.Name == "Attack2Flash" then gui:Destroy() end
@@ -10140,16 +9929,15 @@ end)
 						end
 					end)
 				end)
-				attack2Running = false  -- unlock only after effects have been emitted
+				attack2Running = false
 			end)
 
 			break
 		end
 
-		-- Attack 3 trigger
 		if not attack3Running and string.find(track.Animation.AnimationId, TRIGGER_ANIM_IDS.ATTACK3) then
 			attack3Running = true
-			track:Stop(0)  -- stop the original trigger animation immediately
+			track:Stop(0)
 
 			task.spawn(function()
 				local ok, err = pcall(function()
@@ -10159,14 +9947,12 @@ end)
 					attack3Track:Play(0)
 					attack3Track.TimePosition = 0.29
 
-					-- Play the SkyBreaker sound
 					local sound = GetGitSound(
 						"https://github.com/NetlessScripter/GOKU/blob/f36d3d301c8c5a29d63bddbf8e8c31f59270fab7/copy_EB8D2B34-4652-4DAF-9F3A-D567BE268032.mp3?raw=true",
 						"SkyBreaker"
 					)
 					sound:Play()
 
-					-- Stop at 1.17 and reset flag
 					local connection
 					connection = game:GetService("RunService").Heartbeat:Connect(function()
 						if attack3Track.TimePosition >= 1.17 then
@@ -10176,7 +9962,6 @@ end)
 						end
 					end)
 
-					-- Fallback: always reset after 2 seconds no matter what
 					task.delay(2, function()
 						pcall(function() connection:Disconnect() end)
 						pcall(function() attack3Track:Stop(0) end)
@@ -10192,7 +9977,6 @@ end)
 			break
 		end
 
-		-- Attack 4 trigger
 		if not attack4Running and string.find(track.Animation.AnimationId, TRIGGER_ANIM_IDS.ATTACK4) then
 			attack4Running = true
 			track:Stop(0)
@@ -10203,7 +9987,7 @@ end)
 				local attack4ChargeFx
 				local ok, err = pcall(function()
 					PlayAttack4Anim()
-					local beamSfx -- kept so the finisher can fade it out with the beam
+					local beamSfx
 					task.spawn(function()
 						beamSfx = GetGitSound("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/copy_1C66F922-0AB3-45CE-BE26-86E1389DF4E4.mp3", "Attack4Beam", 2)
 						beamSfx:Play()
@@ -10212,29 +9996,24 @@ end)
 						GetGitSound("https://raw.githubusercontent.com/NetlessScripter/GOKU/fe932410b649a18432468eddbb8d4bfe106e6bf5/copy_5801B72C-B51F-4D23-A425-20E3BB77A75C.mp3", "VoiceLineKM", 2):Play()
 					end)
 
-					-- Hitbox lives exactly as long as the charge (0.6s), 3 studs in front of us
 					local a4Hitbox = StartAttack4Hitbox(0.6)
 					attack4Camera = StartAttack4Camera()
-					attack4Lighting = StartAttack4Lighting(HumanoidRootPart, function() -- dark-blue grade + lens flare build during the charge
-						if RightArm and RightArm.Parent then return (RightArm.CFrame * CFrame.new(0, -1.35, 0)).Position end -- same spot the charge VFX sits
+					attack4Lighting = StartAttack4Lighting(HumanoidRootPart, function()
+						if RightArm and RightArm.Parent then return (RightArm.CFrame * CFrame.new(0, -1.35, 0)).Position end
 					end)
 
-					-- Palm orb + energy streaks during the charge (wrapped in pcall: can never break the attack)
 					local chargeFxOk, chargeFxResult = pcall(StartAttack4ChargeFX, A4FX_Hand)
 					if chargeFxOk then attack4ChargeFx = chargeFxResult else warn("[Attack4] charge FX error:", chargeFxResult) end
 
-					-- Beam charge VFX for 0.6s, then spawn the model
 					Charge(0.6)
-					if attack4ChargeFx then attack4ChargeFx.release() end -- orb pops as the beam leaves
-					a4Hitbox.stop() -- charge is over: make sure the hitbox is gone
-					attack4Lighting.release() -- beam is about to spawn: fade the lighting back to normal
+					if attack4ChargeFx then attack4ChargeFx.release() end
+					a4Hitbox.stop()
+					attack4Lighting.release()
 
-					-- Clone the preloaded model instead of fetching it every time
 					local model = game.ReplicatedStorage._Attack4Assets.Attack4Model:Clone()
 					model.Parent = workspace
 					attack4Camera.burst()
 
-					-- Find a reference part to anchor the positioning
 					local refPart
 					for _, part in ipairs(model:GetDescendants()) do
 						if part:IsA("BasePart") then
@@ -10254,28 +10033,22 @@ end)
 						end
 					end
 
-					-- Extra Kamehameha visuals on top of the model: aim lock, core/shell, rings, lightning, muzzle, impact
 					local beamFxOk, beamFx = pcall(PlayAttack4BeamFX, model)
 					if not beamFxOk then
 						warn("[Attack4] beam FX error:", beamFx)
 						beamFx = nil
 					end
 
-					-- After 0.6 seconds: disable all particles then fade the whole model out
 					task.delay(0.6, function()
 						attack4Camera.restore()
-						if beamFx then beamFx.fade(0.3) end -- same duration as the model fade below
-						-- the beam starts to fade right now. If the hitbox caught a low-health target, a white overlay fades in
-						-- over the same duration as the beam fade, and the cutscene starts once the beam is fully gone (see fade loop below).
+						if beamFx then beamFx.fade(0.3) end
 
-						-- Disable particles first so they stop emitting mid-fade
 						for _, desc in ipairs(model:GetDescendants()) do
 							if desc:IsA("ParticleEmitter") or desc:IsA("Trail") or desc:IsA("Beam") then
 								desc.Enabled = false
 							end
 						end
 
-						-- Collect all fadeable descendants and their original values
 						local parts = {}
 						local decals = {}
 						local lights = {}
@@ -10299,18 +10072,16 @@ end)
 							end
 						end
 
-						-- Tween transparency from original to 1 over 0.3s
 						local fadeDuration = 0.3
 
-						-- Finisher white overlay: only when the hitbox caught a target. Fades in exactly as long as the beam fades.
 						local overlayGui, overlayFrame
 						if a4Hitbox.triggered and PlayPlanetExplosion then
 							overlayGui = Instance.new("ScreenGui")
 							overlayGui.Name = "Attack4FinisherWhite"
-							overlayGui.IgnoreGuiInset = true                  -- ignore the topbar inset
-							overlayGui.ScreenInsets = Enum.ScreenInsets.None  -- no safe-area limit: covers the true screen edges
+							overlayGui.IgnoreGuiInset = true
+							overlayGui.ScreenInsets = Enum.ScreenInsets.None
 							overlayGui.ResetOnSpawn = false
-							overlayGui.DisplayOrder = 2000                    -- above the cutscene's own gui (1000)
+							overlayGui.DisplayOrder = 2000
 							overlayFrame = Instance.new("Frame")
 							overlayFrame.Size = UDim2.fromScale(1, 1)
 							overlayFrame.BackgroundColor3 = Color3.new(1, 1, 1)
@@ -10351,15 +10122,13 @@ end)
 								end
 							end
 							if overlayFrame then
-								overlayFrame.BackgroundTransparency = 1 - alpha -- same timing as the beam fade
+								overlayFrame.BackgroundTransparency = 1 - alpha
 							end
 							if alpha >= 1 then
 								fadeConn:Disconnect()
 								if model and model.Parent then model:Destroy() end
-								-- beam fully gone: start the cutscene, then fade the white screen out over 1 second
 								if overlayFrame then
 									task.spawn(PlayCutsceneWithTeleport)
-									-- the cutscene hides ScreenGuis in PlayerGui; make sure our overlay stays visible
 									overlayGui.Enabled = true
 									local fadeOut = game:GetService("TweenService"):Create(
 										overlayFrame,
@@ -10388,7 +10157,6 @@ end)
 			break
 		end
 
-		-- Attack 5 trigger (Ultimate Kamehameha)
 		if not attack5Running and string.find(track.Animation.AnimationId, TRIGGER_ANIM_IDS.ATTACK5) then
 			attack5Running = true
 			track:Stop(0)
@@ -10396,7 +10164,6 @@ end)
 			task.spawn(function()
 				local ok, err = pcall(PlayUltimateKamehameha)
 				if not ok then warn("[Attack5] Error:", err) end
-				-- the cinematic runs on its own loop; stay locked until it clears its busy flag (15s safety cap)
 				local started = tick()
 				while UKameBusy and tick() - started < 15 do task.wait(0.1) end
 				attack5Running = false
@@ -10411,24 +10178,17 @@ TriggerConn = RunService.Heartbeat:Connect(function()
 	ScanTracks(Animator:GetPlayingAnimationTracks())
 end)
 if not ACTOR_IS_LOCAL then
-	-- other players' attack animations can be stopped by their own client right away, so also react the moment a track starts
 	AnimPlayedConn = Animator.AnimationPlayed:Connect(function(track)
 		ScanTracks({ track })
 	end)
 end
 
-end -- BuildActorLibrary
+end
 
 
--- =====================================================================================================
---  PER-PLAYER INSTANCES
---  An "instance" = one copy of BuildActorLibrary() running in its own private environment (so its globals, flags and functions are its own),
---  bound to one player's character. You always get one (full effects). Every player that gets teleported into the event gets one too.
--- =====================================================================================================
-local ActorInstances = {}   -- [Player] = { env = table, char = Model }
-local InstanceToken  = {}   -- [Player] = number (lets a newer build cancel an older one that is still waiting for the character)
+local ActorInstances = {}
+local InstanceToken  = {}
 
--- A camera that can be READ (so effects can face the camera) but never written to. Other players' cinematics run on this instead of your real camera.
 function MakeReadOnlyCamera()
 	local real = workspace.CurrentCamera
 	return setmetatable({}, {
@@ -10467,7 +10227,7 @@ local function createActorInstance(plr, char, isLocal)
 		animator = Instance.new("Animator")
 		animator.Parent = hum
 	end
-	if InstanceToken[plr] ~= token or plr.Character ~= char then return end -- respawned / left while we were waiting
+	if InstanceToken[plr] ~= token or plr.Character ~= char then return end
 
 	local env = setmetatable({}, { __index = REAL_ENV })
 	env.ACTOR_IS_LOCAL    = isLocal
@@ -10487,19 +10247,11 @@ local function createActorInstance(plr, char, isLocal)
 	ActorInstances[plr] = { env = env, char = char }
 end
 
--- You: built right away (exactly like before), and rebuilt whenever you respawn
 createActorInstance(LocalPlayer, Character, true)
 LocalPlayer.CharacterAdded:Connect(function(char)
 	task.spawn(createActorInstance, LocalPlayer, char, true)
 end)
 
--- =====================================================================================================
---  EVENT PARTICIPANTS
---  When the event begins (the chat line, see lockFlight below) every player in the server gets teleported to one of the event's spots
---  (8 spots, anyone beyond that lands EXTRA_SPOT_DISTANCE studs away from one of them). Here we look at everybody who was in the server at
---  that moment and register each player we actually find standing on a spot (or on an "extra" spot) -- those players get their attack
---  animations replaced by this script, on your screen, whenever they trigger them.
--- =====================================================================================================
 EVENT_SPOTS = {
 	Vector3.new(76031.9296875, 458.7995300292969, 24937.943359375),
 	Vector3.new(76236.359375, 458.7989807128906, 24803.498046875),
@@ -10510,12 +10262,12 @@ EVENT_SPOTS = {
 	Vector3.new(75999.0234375, 460.29620361328125, 24747.98046875),
 	Vector3.new(76041.296875, 459.3631591796875, 24846.517578125),
 }
-EVENT_EXTRA_SPOT_DISTANCE = 20  -- same value the event uses for players beyond the 8 spots
-EVENT_SPOT_TOLERANCE      = 8   -- studs of slack around a spot / extra spot
-EVENT_SPOT_HEIGHT_SLACK   = 20  -- studs of vertical slack
-EVENT_SPOT_CHECK_SECONDS  = 20  -- how long after the event starts we keep waiting for players to show up on their spot
+EVENT_EXTRA_SPOT_DISTANCE = 20
+EVENT_SPOT_TOLERANCE      = 8
+EVENT_SPOT_HEIGHT_SLACK   = 20
+EVENT_SPOT_CHECK_SECONDS  = 20
 
-local RemoteParticipants = {}   -- [Player] = CharacterAdded connection
+local RemoteParticipants = {}
 
 local function isOnEventSpot(root)
 	local pos = root.Position
@@ -10576,7 +10328,6 @@ function EventParticipants_Start()
 	end)
 end
 
--- handy for the console: _G.EventAttackParticipants.List() prints who is registered
 _G.EventAttackParticipants = {
 	Start = function() EventParticipants_Start() end,
 	List = function()
@@ -10587,14 +10338,6 @@ _G.EventAttackParticipants = {
 }
 
 
--- =====================================================================================================
---  FLYING SYSTEM v2  --  momentum / weight update (inspired by Marvel's Spider-Man 2 traversal)
---  Still FREE FLIGHT: toggle on/off, hover, go any direction, no falling, no stalling.
---  Everything below is layered ON TOP of that: inertia, dive speed, pull-up slingshot, boost burst,
---  barrel roll, speed-reactive camera/FOV/sound, heavy landings.
---  Tune everything in CFG. All state is local on purpose (the old block leaked globals that collided
---  with the wind block, e.g. `wasMoving`).
--- =====================================================================================================
 ;(function()
 local Players          = game:GetService("Players")
 local RunService       = game:GetService("RunService")
@@ -10604,79 +10347,70 @@ local ContentProvider  = game:GetService("ContentProvider")
 local Debris           = game:GetService("Debris")
 
 local CFG = {
-	-- ===== core flight (same numbers as v1) =====
-	CRUISE_SPEED   = 110,   -- studs/s, normal flight
-	BOOST_MULT     = 2,     -- hold LeftShift: cruise speed x this
-	MAX_SPEED      = 350,   -- hard cap (dive + boost + rings can never exceed this)
+	CRUISE_SPEED   = 110,
+	BOOST_MULT     = 2,
+	MAX_SPEED      = 350,
 	MAX_FLY_HEIGHT = 2500,
 
-	-- ===== weight / inertia =====
-	ACCEL      = 2.6,       -- how fast you build up to your target speed (higher = snappier)
-	SLOW_DRAG  = 1.4,       -- slowing down while still holding a direction (e.g. letting go of shift)
-	STOP_DRAG  = 2.0,       -- coasting to a stop after releasing movement keys (lower = floatier drift)
-	TURN_SLOW  = 7.5,       -- max turn rate (rad/s) when slow
-	TURN_FAST  = 2.4,       -- max turn rate (rad/s) at max speed  -> wide, heavy carving turns at speed
-	YAW_FOLLOW = 9,         -- how quickly the body swings round to face the camera
-	HOVER_BOB  = 0.9,       -- tiny idle bob while hovering (0 = off)
-	RELEASE_CAP = 120,      -- when flight ends, keep at most this much speed as free-fall momentum
+	ACCEL      = 2.6,
+	SLOW_DRAG  = 1.4,
+	STOP_DRAG  = 2.0,
+	TURN_SLOW  = 7.5,
+	TURN_FAST  = 2.4,
+	YAW_FOLLOW = 9,
+	HOVER_BOB  = 0.9,
+	RELEASE_CAP = 120,
 
-	-- ===== dive -> pull-up (the swoop) =====
-	DIVE_GAIN       = 85,   -- bonus speed gained per second while diving
-	MAX_BONUS       = 130,  -- cap on the extra speed from diving/boosts (on top of cruise/boost speed)
-	BONUS_DECAY     = 26,   -- bonus bleeds off slowly (this is the "carried momentum" / hang time)
-	CLIMB_BLEED     = 40,   -- extra bleed while climbing (speed converts into height)
-	SLING_MIN_BONUS = 60,   -- need at least this much dive bonus to trigger the pull-up slingshot
-	SLING_WINDOW    = 0.45, -- seconds after a dive in which pulling up counts as a slingshot
+	DIVE_GAIN       = 85,
+	MAX_BONUS       = 130,
+	BONUS_DECAY     = 26,
+	CLIMB_BLEED     = 40,
+	SLING_MIN_BONUS = 60,
+	SLING_WINDOW    = 0.45,
 	SLING_BONUS     = 30,
 
-	-- ===== launch / catch (like Ultimate Wings: opening the wings mid-dive) =====
-	LAUNCH_BONUS  = 30,     -- kick when you start flying
-	CATCH_MAX     = 70,     -- max extra bonus for catching yourself out of a fall
-	CATCH_CONVERT = 0.7,    -- fraction of your fall speed that turns into forward speed
+	LAUNCH_BONUS  = 30,
+	CATCH_MAX     = 70,
+	CATCH_CONVERT = 0.7,
 
-	-- ===== boost burst (LeftShift press / BOOST button) =====
 	BOOST_BURST    = 35,
-	BOOST_KICK     = 40,    -- instant speed added
+	BOOST_KICK     = 40,
 	BOOST_COOLDOWN = 10,
 
-	-- ===== body language =====
-	BANK_ANGLE     = 38,    -- max roll into turns (degrees)
-	BANK_GAIN      = 12,    -- degrees of roll per rad/s of turning
-	STRAFE_BANK    = 10,    -- extra roll when strafing with A/D
+	BANK_ANGLE     = 38,
+	BANK_GAIN      = 12,
+	STRAFE_BANK    = 10,
 	BANK_FOLLOW    = 5,
-	BANK_INTO_TURN = true,  -- true = lean INTO turns (v1 leaned out of them). false = old behaviour
-	LEAN_FACTOR    = 0.55,  -- how much of your climb/dive angle the body copies
+	BANK_INTO_TURN = true,
+	LEAN_FACTOR    = 0.55,
 	LEAN_MAX_DOWN  = 40,
 	LEAN_MAX_UP    = 28,
 	LEAN_FOLLOW    = 6,
 
-	-- ===== barrel roll (air trick) =====
 	ROLL_KEY          = Enum.KeyCode.C,
-	DOUBLE_TAP_ROLL   = true,   -- double-tap A or D while flying
+	DOUBLE_TAP_ROLL   = true,
 	DOUBLE_TAP_WINDOW = 0.28,
 	ROLL_TIME         = 0.55,
 	ROLL_COOLDOWN     = 10,
 	ROLL_BONUS        = 18,
-	ROLL_CAM_TILT     = 12,     -- degrees of camera tilt during the roll
+	ROLL_CAM_TILT     = 12,
 
-	-- ===== camera =====
-	FOV_SPEED_GAIN  = 0.42,     -- FOV grows by up to this fraction at max speed
+	FOV_SPEED_GAIN  = 0.42,
 	FOV_MAX         = 110,
-	FOV_KICK        = 9,        -- degrees of FOV punch on boost/launch
+	FOV_KICK        = 9,
 	FOV_KICK_DECAY  = 4.5,
-	CAM_PULLBACK    = 4,        -- studs the camera drops back at max speed
-	CAM_PUNCH       = 2.5,      -- extra studs of pull-back on a punch
+	CAM_PULLBACK    = 4,
+	CAM_PUNCH       = 2.5,
 	CAM_PUNCH_DECAY = 5,
-	CAM_ROLL_FRAC   = 0.35,     -- camera copies this fraction of the body bank
-	SHAKE_SPEED     = 0.30,     -- constant rumble at max speed (studs)
-	SHAKE_IMPULSE   = 0.9,      -- shake on punches/impacts
+	CAM_ROLL_FRAC   = 0.35,
+	SHAKE_SPEED     = 0.30,
+	SHAKE_IMPULSE   = 0.9,
 	SHAKE_DECAY     = 6,
 	BLUR_PUNCH      = 14,
 	BLUR_DECAY      = 9,
 
-	-- ===== audio =====
 	SFX_FLY        = "rbxassetid://17862829666",
-	SFX_BOOST      = "rbxassetid://17862829666", -- swap for a whoosh/boom id if you have one
+	SFX_BOOST      = "rbxassetid://17862829666",
 	LOOP_FLY_SOUND = false,
 }
 
@@ -10716,17 +10450,16 @@ local controlModule = require(player:WaitForChild("PlayerScripts")
 	:WaitForChild("PlayerModule")
 	:WaitForChild("ControlModule"))
 
--- ===== state =====
 local flying, falling = false, false
-local flightLocked = false -- set once the event begins: flying is disabled from then on
+local flightLocked = false
 local renderConn, landHitbox
 local flySound, fadeTween
 local landSounds = {}
 local flyTrack, diveTrack, landTrack, idleTrack, fallTrack
 
-local speedCur  = 0                     -- current flight speed (studs/s)
-local dirCur    = Vector3.new(0, 1, 0)  -- current flight direction (unit)
-local bonus     = 0                     -- extra speed from dives / boosts / rings (decays slowly)
+local speedCur  = 0
+local dirCur    = Vector3.new(0, 1, 0)
+local bonus     = 0
 local yawCur, bankCur, pitchCur = 0, 0, 0
 local startFlyY = 0
 local wasAudible = false
@@ -10736,15 +10469,13 @@ local lastStrafe = 1
 local roll = { active = false, t = 0, dir = 1, ready = 0 }
 local rollTilt = 0
 
--- camera fx state
 local fovBase, fxActive = 70, false
 local camSpeed, camRoll = 0, 0
 local fovKick, camPunch, shake, blurPunch = 0, 0, 0, 0
 
 local startFlying, stopFlying, playLandAnim
 
--- ===== helpers =====
-local function angleDiff(a, b)  -- shortest signed a - b
+local function angleDiff(a, b)
 	local d = (a - b) % (math.pi * 2)
 	if d > math.pi then d = d - math.pi * 2 end
 	return d
@@ -10755,7 +10486,7 @@ local function turnToward(a, b, maxAng)
 	local ang = math.acos(d)
 	if ang <= maxAng or ang < 1e-4 then return b end
 	local axis = a:Cross(b)
-	if axis.Magnitude < 1e-4 then axis = Vector3.yAxis end -- exactly opposite: swing round the vertical
+	if axis.Magnitude < 1e-4 then axis = Vector3.yAxis end
 	axis = axis.Unit
 	local c, s = math.cos(maxAng), math.sin(maxAng)
 	local r = a * c + axis:Cross(a) * s + axis * axis:Dot(a) * (1 - c)
@@ -10773,7 +10504,6 @@ local function playOneShot(id, volume, pitch)
 	Debris:AddItem(snd, 5)
 end
 
--- a "punch": the whole screen reacts (FOV, pull-back, shake, blur), optional shock ring + sound
 local function punch(strength, _unused, pitch)
 	fovKick   = math.max(fovKick,   CFG.FOV_KICK * strength)
 	camPunch  = math.max(camPunch,  CFG.CAM_PUNCH * strength)
@@ -10787,7 +10517,6 @@ local function impactFx(spd)
 	punch(s * 0.9)
 end
 
--- ===== animations / sounds (same as v1) =====
 local function loadAnim()
 	if flyTrack  then pcall(function() flyTrack:Stop()  end) end
 	if fallTrack then pcall(function() fallTrack:Stop() end) end
@@ -10859,7 +10588,6 @@ local function stopFlySound()
 	end)
 end
 
--- ===== tricks =====
 local function triggerBoost()
 	if not flying then return false end
 	local now = os.clock()
@@ -10883,7 +10611,6 @@ local function doRoll(sign)
 	punch(0.35, nil, 1.15)
 end
 
--- ===== camera fx (runs just after the Roblox camera has updated) =====
 local punchBlur = Instance.new("BlurEffect")
 punchBlur.Name = randomName()
 punchBlur.Size = 0
@@ -10891,7 +10618,7 @@ punchBlur.Parent = camera
 
 local function camFx(dt)
 	camera = workspace.CurrentCamera or camera
-	if camera.CameraType == Enum.CameraType.Scriptable then return end -- cutscenes own the camera
+	if camera.CameraType == Enum.CameraType.Scriptable then return end
 
 	camSpeed = camSpeed + ((flying and speedCur or 0) - camSpeed) * (1 - math.exp(-5 * dt))
 	local targetRoll = flying and (math.rad(bankCur) * CFG.CAM_ROLL_FRAC + rollTilt) or 0
@@ -10929,9 +10656,8 @@ local function camFx(dt)
 end
 RunService:BindToRenderStep(FX_NAME, Enum.RenderPriority.Camera.Value + 1, camFx)
 
--- ===== main flight step =====
 local function step(dt)
-	if not flying then return end -- guard against a stray frame after stopFlying
+	if not flying then return end
 	if attack5Running then
 		stopFlying()
 		return
@@ -10947,7 +10673,6 @@ local function step(dt)
 	end
 	bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
 
-	-- ---- input ----
 	local camCF = camera.CFrame
 	local look = camCF.LookVector
 	local rf = Vector3.new(-look.Z, 0, look.X)
@@ -10966,7 +10691,6 @@ local function step(dt)
 	local shiftHeld  = UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or now < mobileBoostUntil
 	if math.abs(dirIn.X) > 0.3 then lastStrafe = dirIn.X > 0 and 1 or -1 end
 
-	-- ---- dive / climb momentum ----
 	local diveFactor  = forwardIn and math.clamp((-look.Y - 0.15) / 0.6, 0, 1) or 0
 	local climbFactor = forwardIn and math.clamp((look.Y - 0.15) / 0.6, 0, 1) or 0
 	if diveFactor > 0 then
@@ -10975,7 +10699,6 @@ local function step(dt)
 	else
 		bonus = math.max(0, bonus - (CFG.BONUS_DECAY + CFG.CLIMB_BLEED * climbFactor) * dt)
 	end
-	-- pull-up slingshot: dive hard, then pull up -> extra kick
 	if climbFactor > 0.25 and now - lastDiveTime < CFG.SLING_WINDOW and now > slingReady then
 		lastDiveTime = -math.huge
 		slingReady = now + 1.0
@@ -10983,7 +10706,6 @@ local function step(dt)
 		punch(0.8, 1.2, 1.25)
 	end
 
-	-- ---- speed with inertia ----
 	local baseSpeed = CFG.CRUISE_SPEED * (shiftHeld and CFG.BOOST_MULT or 1)
 	local targetSpeed = moving and math.min(baseSpeed + bonus, CFG.MAX_SPEED) or 0
 	local rate
@@ -10993,7 +10715,6 @@ local function step(dt)
 	speedCur = speedCur + (targetSpeed - speedCur) * (1 - math.exp(-rate * dt))
 	local r = math.clamp(speedCur / CFG.MAX_SPEED, 0, 1)
 
-	-- ---- heading with inertia (heavier the faster you go) ----
 	if moving then
 		if speedCur < 12 then
 			dirCur = wishDir
@@ -11009,8 +10730,7 @@ local function step(dt)
 	end
 	bv.Velocity = vel
 
-	-- ---- hitbox (stops flight on contact, same as v1) ----
-	local hitSize = 10 + math.max(0, speedCur - 200) * 0.05 -- a bit larger at extreme speed so thin walls can't be tunnelled
+	local hitSize = 10 + math.max(0, speedCur - 200) * 0.05
 	if not landHitbox or not landHitbox.Parent then
 		landHitbox = Instance.new("Part")
 		landHitbox.Name         = "Hitbox"
@@ -11038,7 +10758,6 @@ local function step(dt)
 		landHitbox.CFrame = rootPart.CFrame
 	end
 
-	-- ---- height cap ----
 	if rootPart.Position.Y >= startFlyY + CFG.MAX_FLY_HEIGHT then
 		stopFlying()
 		falling = true
@@ -11046,7 +10765,6 @@ local function step(dt)
 		return
 	end
 
-	-- ---- animations (fly pose follows actual speed, so coasting doesn't snap to idle) ----
 	if isDiving then
 		if flyTrack.IsPlaying  then flyTrack:Stop(0.3)  end
 		if idleTrack.IsPlaying then idleTrack:Stop(0.3) end
@@ -11063,7 +10781,6 @@ local function step(dt)
 		if not idleTrack.IsPlaying then idleTrack:Play(0.3) end
 	end
 
-	-- ---- wind sound follows speed ----
 	local audible = speedCur > 14
 	if audible and not wasAudible then
 		playFlySound()
@@ -11076,7 +10793,6 @@ local function step(dt)
 		flySound.Volume = 0.6 + r * 0.7
 	end
 
-	-- ---- body orientation: yaw (lagged) + bank + pitch lean + barrel roll ----
 	local lookFlat = Vector3.new(look.X, 0, look.Z)
 	local yawTarget = yawCur
 	if moving and lookFlat.Magnitude > 0.001 then
@@ -11117,12 +10833,11 @@ local function step(dt)
 		* CFrame.Angles(0, 0, math.rad(bankCur) + rollAngle)
 end
 
--- ===== mobile UI =====
 local isMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
 local PlayerGui = player:WaitForChild("PlayerGui")
 local flyScreenGui = Instance.new("ScreenGui")
 flyScreenGui.Name = randomName()
-flyScreenGui.ResetOnSpawn = false -- v1 lost its buttons on respawn
+flyScreenGui.ResetOnSpawn = false
 flyScreenGui.Parent = PlayerGui
 
 local imageButton2 = Instance.new("ImageButton")
@@ -11173,11 +10888,10 @@ local function setMiniButtons(v)
 end
 
 boostButton.MouseButton1Click:Connect(function()
-	if triggerBoost() then mobileBoostUntil = os.clock() + 1.6 end -- no free boost during cooldown
+	if triggerBoost() then mobileBoostUntil = os.clock() + 1.6 end
 end)
 rollButton.MouseButton1Click:Connect(function() doRoll(lastStrafe) end)
 
--- ===== start / stop =====
 startFlying = function()
 	if flying or attack5Running or flightLocked then return end
 	flying = true
@@ -11193,7 +10907,6 @@ startFlying = function()
 	local _, y0, _ = rootPart.CFrame:ToEulerAnglesYXZ()
 	yawCur, bankCur, pitchCur = y0, 0, 0
 
-	-- carry existing momentum in; same upward floor as v1
 	local v = rootPart.AssemblyLinearVelocity
 	local fallSpeed = math.max(0, -v.Y)
 	local vel = Vector3.new(v.X, math.max(v.Y, 18), v.Z)
@@ -11202,7 +10915,6 @@ startFlying = function()
 	bonus = CFG.LAUNCH_BONUS
 
 	if fallSpeed > 30 then
-		-- opening the wings out of a dive: convert the fall into forward speed
 		local lk = camera.CFrame.LookVector
 		local flat = Vector3.new(lk.X, 0, lk.Z)
 		flat = flat.Magnitude > 0.01 and flat.Unit or Vector3.new(0, 0, -1)
@@ -11230,7 +10942,6 @@ stopFlying = function()
 	local bv = rootPart:FindFirstChild(BV_NAME)
 	if bv then bv:Destroy() end
 
-	-- keep some momentum as free-fall velocity, but never fling the character
 	local v = rootPart.AssemblyLinearVelocity
 	if v.Magnitude > CFG.RELEASE_CAP then
 		rootPart.AssemblyLinearVelocity = v.Unit * CFG.RELEASE_CAP
@@ -11261,7 +10972,6 @@ imageButton1.MouseButton1Click:Connect(function()
 	if flying then stopFlying() else startFlying() end
 end)
 
--- ===== keyboard =====
 local lastTap = {}
 if not isMobile then
 	UserInputService.InputBegan:Connect(function(input, gameProcessed)
@@ -11287,7 +10997,6 @@ if not isMobile then
 	end)
 end
 
--- ===== character hooks =====
 local function hookHumanoid()
 	humanoid.StateChanged:Connect(function(_, new)
 		if new == Enum.HumanoidStateType.Landed then
@@ -11324,7 +11033,6 @@ player.CharacterAdded:Connect(function(newChar)
 	hookHumanoid()
 end)
 
--- ===== flight lock: the event begins when this user says this line in chat =====
 local FLIGHT_LOCK_USERID = 8029999470
 local FLIGHT_LOCK_PHRASE = "Okay, Beginning now."
 local TextChatService = game:GetService("TextChatService")
@@ -11332,8 +11040,7 @@ local TextChatService = game:GetService("TextChatService")
 local function lockFlight()
 	if flightLocked then return end
 	flightLocked = true
-	if flying then stopFlying() end -- drop out of the air if we were mid-flight
-	-- the event just began: find everybody who got teleported to their spot and give them the replaced attacks too
+	if flying then stopFlying() end
 	if EventParticipants_Start then
 		local okStart, errStart = pcall(EventParticipants_Start)
 		if not okStart then warn("[Attacks] event participants:", errStart) end
@@ -11348,14 +11055,12 @@ local function checkFlightLockMessage(userId, message)
 end
 
 if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
-	-- New chat
 	TextChatService.MessageReceived:Connect(function(msg)
 		if msg.TextSource then
 			checkFlightLockMessage(msg.TextSource.UserId, msg.Text)
 		end
 	end)
 else
-	-- Legacy chat
 	local function hookChatter(p)
 		if p.UserId == FLIGHT_LOCK_USERID then
 			p.Chatted:Connect(function(msg)
@@ -11369,7 +11074,6 @@ else
 	Players.PlayerAdded:Connect(hookChatter)
 end
 
--- handy handles for other scripts / the console
 _G.FlySystem = {
 	Start = function() startFlying() end,
 	Stop = function() stopFlying() end,
@@ -11703,12 +11407,6 @@ RunService.RenderStepped:Connect(function()
 		TweenService:Create(Part, TweenInfo.new(0.05, Enum.EasingStyle.Linear, Enum.EasingDirection.In, 0, false, 0), {Transparency = 0.8}):Play()
 		TweenService:Create(Weld, TweenInfo.new(0.3, Enum.EasingStyle.Linear, Enum.EasingDirection.In, 0, false, 0), {C0 = CFrame.new(cframe.Position.X, cframe.Position.Y, math.floor(Magnitude/100)*4)}):Play()
 
-		-- Non-blocking: never wait()/task.wait() inside a RenderStepped callback.
-		-- A blocking wait here let a new copy of this whole block spawn every
-		-- frame while the old one was still stalled, stacking up coroutines,
-		-- Parts, Welds, and Tweens faster than Debris could clean them up.
-		-- Part/Weld are reused globals, so grab local refs before scheduling
-		-- the delayed callback or a later frame's reassignment would leak in.
 		local partRef = Part
 		task.delay(0.225, function()
 			if partRef and partRef.Parent then
