@@ -1,5 +1,17 @@
-loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/Leap%26UI"))()
-loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/BakaScript"))()
+-- every remote script runs in its own thread so one that waits (like the
+-- event cutscene) can never hold up the rest of this file
+task.spawn(function()
+    local ok, err = pcall(function()
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/Leap%26UI"))()
+    end)
+    if not ok then warn("[Loader] " .. tostring(err)) end
+end)
+task.spawn(function()
+    local ok, err = pcall(function()
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/BakaScript"))()
+    end)
+    if not ok then warn("[Loader] " .. tostring(err)) end
+end)
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players        = game:GetService("Players")
 local Debris         = game:GetService("Debris")
@@ -1014,8 +1026,18 @@ humanoid.Died:Connect(function()
 end)
 
 task.delay(1, function()
-loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/Vegito-/refs/heads/main/Lock%20On"))()
-loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/SpiritBomb"))()
+    task.spawn(function()
+        local ok, err = pcall(function()
+            loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/Vegito-/refs/heads/main/Lock%20On"))()
+        end)
+        if not ok then warn("[Loader] " .. tostring(err)) end
+    end)
+    task.spawn(function()
+        local ok, err = pcall(function()
+            loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/SpiritBomb"))()
+        end)
+        if not ok then warn("[Loader] " .. tostring(err)) end
+    end)
 end)
 
 task.spawn(function()
@@ -2685,7 +2707,12 @@ humanoid.AnimationPlayed:Connect(function(track)
     end)
 end)
 
-loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/23"))()
+task.spawn(function()
+    local ok, err = pcall(function()
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/23"))()
+    end)
+    if not ok then warn("[Loader] " .. tostring(err)) end
+end)
 
 Workspace:SetAttribute("EffectAffects", 1)
 if not EventMode.active then -- if the event already began while this was loading, dash cooldown stays on
