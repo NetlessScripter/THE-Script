@@ -571,6 +571,64 @@ local playbackGeneration     = 0
 -- switches it on and this one off.
 local activePack = "Regular"
 
+-- ===== Tournament of Power event hook =====================================
+-- Kept in ONE table (not many locals) because this file is close to Luau's
+-- local-variable limit. The trigger is the same condition the event script
+-- waits for: this user saying this exact line in chat. When it fires, the
+-- current song fades out, the event songs take over (and can't be changed),
+-- and teleporting is locked for a cooldown.
+local EventMode = {
+    userId           = 8029999470,
+    phrase           = "Okay, Beginning now.",
+    fadeTime         = 0.7,   -- seconds the current song takes to fade out
+    teleportCooldown = 15,    -- seconds teleporting is locked once the event begins
+    -- The first two songs always play in this order: { pack, name }. A song whose
+    -- pack isn't installed (Super Saiyan Blue without the DLC) is skipped, and
+    -- nothing is ever downloaded for the event.
+    openingSongs     = { { "DB", "Super Saiyan Blue" }, { "Regular", "where am i supposed to go" } },
+    -- After those, the shuffle runs forever. DLC installed: the best DLC songs
+    -- (only installed ones) plus the regular songs below. DLC not installed: the
+    -- regular songs only.
+    dbSongPool       = { "Super Saiyan Blue", "Fighting Spirit", "Sparking Battle", "Final Battle", "Vegito Vs Zamasu", "Trouble Erupts" },
+    regularSongPool  = { "where am i supposed to go", "Kanye West - Flashing Lights", "yves tumor - limerence", "oblivion", "do i clench my fists?" },
+    opening          = {},        -- the openingSongs that can actually play, set when the event begins
+    pool             = {},        -- { pack, name } entries the shuffle draws from, set when the event begins
+    lastPick         = nil,       -- the last { pack, name } played (so the shuffle never repeats it)
+    active           = false,     -- true from the moment the event begins
+    teleportReadyAt  = 0,         -- os.clock() time teleporting becomes available again
+    songsStarted     = 0,
+}
+
+-- Plays the opening songs in order, then shuffles the pool forever (never the
+-- same song twice in a row). Songs can come from either pack, so this also
+-- switches activePack to the pack the song lives in before returning its index.
+function EventMode.PickNextSongIndex()
+    EventMode.songsStarted = EventMode.songsStarted + 1
+
+    local pick = EventMode.opening[EventMode.songsStarted]
+    if not pick then
+        local pool = EventMode.pool
+        local previous = EventMode.lastPick
+        if #pool == 1 then
+            pick = pool[1]
+        else
+            repeat
+                pick = pool[math.random(#pool)]
+            until not previous or previous[1] ~= pick[1] or previous[2] ~= pick[2]
+        end
+    end
+    EventMode.lastPick = pick
+
+    activePack = pick[1]
+    local songs = pick[1] == "DB" and dbSongs or musicSongs
+    for index, song in ipairs(songs) do
+        if song.name == pick[2] then
+            return index
+        end
+    end
+    return 1
+end
+
 local function GetSongsForPack(packName)
     return packName == "DB" and dbSongs or musicSongs
 end
@@ -693,7 +751,9 @@ local function PlaySoundCycle(isRetryingCurrentSong, forcedSongIndex)
         prematureEndRetryCount = prematureEndRetryCount + 1
     else
         prematureEndRetryCount = 0
-        if not usedStartingSong then
+        if EventMode.active then
+            currentSongIndex = EventMode.PickNextSongIndex()
+        elseif not usedStartingSong then
             usedStartingSong = true
             local startIndex = (typeof(_G.StartingSong) == "string" and _G.StartingSong ~= "") and FindSongIndexByName(_G.StartingSong)
             if typeof(_G.StartingSong) == "string" and _G.StartingSong ~= "" and not startIndex then
@@ -805,6 +865,7 @@ end
 -- ("Regular" or "DB"; defaults to the active one) and makes that pack the active
 -- pack. Used by the panel's song dropdowns.
 local function PlaySongAtIndex(index, packName)
+    if EventMode.active then return end -- songs can't be changed once the event has begun
     packName = packName or activePack
     if not GetSongsForPack(packName)[index] then return end
 
@@ -824,6 +885,116 @@ local function PlaySongAtIndex(index, packName)
     _G.Music    = true
     musicActive = true
     task.spawn(PlaySoundCycle, false, index)
+end
+
+-- The event begins: lock teleporting for its cooldown, fade the current song out
+-- (0.7s, Sine InOut), then start the event songs. Defined here (after
+-- PlaySoundCycle) so it can call it.
+function EventMode.Begin()
+    EventMode.teleportReadyAt = os.clock() + EventMode.teleportCooldown
+
+    if EventMode.active then return end -- the music only switches over once
+    EventMode.active       = true
+    EventMode.songsStarted = 0
+
+    -- Work out which DLC songs are installed. Opening songs and the shuffle pool
+    -- are built from that; nothing is ever downloaded for the event.
+    local statusOk, installedNames = pcall(GetDbPackStatus)
+    local installed = {}
+    if statusOk then
+        for _, installedName in ipairs(installedNames) do
+            installed[installedName] = true
+        end
+    end
+
+    EventMode.opening  = {}
+    EventMode.pool     = {}
+    EventMode.lastPick = nil
+
+    for _, openingSong in ipairs(EventMode.openingSongs) do
+        if openingSong[1] == "Regular" or installed[openingSong[2]] then
+            table.insert(EventMode.opening, openingSong)
+        end
+    end
+    for _, poolName in ipairs(EventMode.dbSongPool) do
+        if installed[poolName] then
+            table.insert(EventMode.pool, { "DB", poolName })
+        end
+    end
+    for _, poolName in ipairs(EventMode.regularSongPool) do
+        table.insert(EventMode.pool, { "Regular", poolName })
+    end
+    activePack = EventMode.opening[1] and EventMode.opening[1][1] or "Regular"
+
+    -- Take over: any running song cycle sees the new generation and stops chaining
+    playbackGeneration = playbackGeneration + 1
+    if currentFadeInTween then
+        currentFadeInTween:Cancel()
+        currentFadeInTween = nil
+    end
+
+    local oldSound = currentMusicSound
+    task.spawn(function()
+        local fadeStartedAt = os.clock()
+        if oldSound and oldSound.Parent then
+            TweenService:Create(
+                oldSound,
+                TweenInfo.new(EventMode.fadeTime, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut),
+                { Volume = 0 }
+            ):Play()
+        end
+
+        local remaining = EventMode.fadeTime - (os.clock() - fadeStartedAt)
+        if remaining > 0 then
+            task.wait(remaining)
+        end
+
+        if oldSound then
+            oldSound:Stop()
+            oldSound:Destroy()
+            if currentMusicSound == oldSound then
+                currentMusicSound = nil
+            end
+        end
+
+        -- If music is switched off in the panel nothing plays now, but turning it
+        -- back on goes straight to the event songs
+        if musicActive then
+            PlaySoundCycle()
+        end
+    end)
+end
+
+-- The condition that triggers it: same user, same exact line as the event script
+do
+    local TextChatService = game:GetService("TextChatService")
+
+    local function CheckEventLine(senderUserId, message)
+        if senderUserId ~= EventMode.userId then return end
+        if message:match("^%s*(.-)%s*$") == EventMode.phrase then
+            EventMode.Begin()
+        end
+    end
+
+    if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+        TextChatService.MessageReceived:Connect(function(incomingMessage)
+            if incomingMessage.TextSource then
+                CheckEventLine(incomingMessage.TextSource.UserId, incomingMessage.Text)
+            end
+        end)
+    else
+        local function HookPlayer(chattingPlayer)
+            if chattingPlayer.UserId == EventMode.userId then
+                chattingPlayer.Chatted:Connect(function(chatMessage)
+                    CheckEventLine(chattingPlayer.UserId, chatMessage)
+                end)
+            end
+        end
+        for _, existingPlayer in ipairs(Players:GetPlayers()) do
+            HookPlayer(existingPlayer)
+        end
+        Players.PlayerAdded:Connect(HookPlayer)
+    end
 end
 
 if _G.Music then
@@ -1601,6 +1772,7 @@ task.spawn(function()
     local songHoverColor = Color3.fromRGB(104, 72, 60)
 
     local function PlaySelectedSong(songIndex, packName)
+        if EventMode.active then return end -- songs are locked once the event has begun
         -- If music was switched off in the Music Volume row, picking a song turns
         -- it back on (at Max) and updates that row so the panel stays truthful.
         if musicVolumeOptions[musicVolumeIndex].value == "Disabled" then
@@ -2258,6 +2430,7 @@ afterImageIcon.ScaleType            = Enum.ScaleType.Fit
 afterImageIcon.Parent               = afterImageBtn
 
 local function DoTeleport()
+    if os.clock() < EventMode.teleportReadyAt then return end -- event cooldown (15s from when it begins)
     local char = localPlayer.Character or localPlayer.CharacterAdded:Wait()
     local hrp  = char:WaitForChild("HumanoidRootPart")
 
@@ -2270,7 +2443,7 @@ local function DoTeleport()
     end
 
     local liveFolder = Workspace:FindFirstChild("Live")
-    if liveFolder then
+    if liveFolder and not EventMode.active then -- Weakest Dummy can't be teleported to once the event has begun
         for _, obj in ipairs(liveFolder:GetChildren()) do
             if obj.Name == "Weakest Dummy" and obj:FindFirstChild("HumanoidRootPart") then
                 table.insert(allTargets, obj.HumanoidRootPart)
