@@ -1720,20 +1720,10 @@ local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
     return connections
 end
 
-local EVENT_SPOTS = {
-    Vector3.new(76031.9296875, 458.7995300292969, 24937.943359375),
-    Vector3.new(76236.359375, 458.7989807128906, 24803.498046875),
-    Vector3.new(76241.71875, 458.7989501953125, 24691.03125),
-    Vector3.new(76173.796875, 458.798583984375, 24608.583984375),
-    Vector3.new(76075.6640625, 458.7984924316406, 24589.060546875),
-    Vector3.new(76074.1015625, 459.3154296875, 24682.763671875),
-    Vector3.new(75999.0234375, 460.29620361328125, 24747.98046875),
-    Vector3.new(76041.296875, 459.3631591796875, 24846.517578125),
-}
-local EVENT_EXTRA_SPOT_DISTANCE = 20
-local EVENT_SPOT_TOLERANCE = 8
-local EVENT_SPOT_HEIGHT_SLACK = 20
-local EVENT_SPOT_CHECK_SECONDS = 20
+-- Who gets the effect: once the event is triggered, anyone who chats
+-- EVENT_QUALIFY_PHRASE within EVENT_QUALIFY_SECONDS becomes an extra player.
+local EVENT_QUALIFY_PHRASE = "GX-LIMITLESS!"
+local EVENT_QUALIFY_SECONDS = 20
 local EVENT_HOST_USERID = 8029999470
 local EVENT_START_PHRASE = "Okay, Beginning now."
 
@@ -1783,18 +1773,6 @@ local function CreateRemoteActorInstance(player, character)
     ActorConnections[player] = result
 end
 
-local function IsOnEventSpot(rootPart)
-    local position = rootPart.Position
-    for _, spot in ipairs(EVENT_SPOTS) do
-        local flatDistance = Vector2.new(position.X - spot.X, position.Z - spot.Z).Magnitude
-        if flatDistance <= EVENT_EXTRA_SPOT_DISTANCE + EVENT_SPOT_TOLERANCE
-            and math.abs(position.Y - spot.Y) <= EVENT_SPOT_HEIGHT_SLACK then
-            return true
-        end
-    end
-    return false
-end
-
 local function RegisterParticipant(player)
     if RemoteParticipants[player] then
         return
@@ -1817,37 +1795,49 @@ Players.PlayerRemoving:Connect(function(player)
     DestroyActorInstance(player)
 end)
 
+local eventQualifyDeadline = 0
+
+local function SendQualifyChat()
+    if _G.GXLimitlessSent then return end
+    _G.GXLimitlessSent = true
+    pcall(function()
+        local textChat = game:GetService("TextChatService")
+        if textChat.ChatVersion == Enum.ChatVersion.TextChatService then
+            local channels = textChat:FindFirstChild("TextChannels")
+            local general = channels and channels:FindFirstChild("RBXGeneral")
+            if general then general:SendAsync(EVENT_QUALIFY_PHRASE) end
+        else
+            local chatEvents = game:GetService("ReplicatedStorage"):FindFirstChild("DefaultChatSystemChatEvents")
+            local say = chatEvents and chatEvents:FindFirstChild("SayMessageRequest")
+            if say then say:FireServer(EVENT_QUALIFY_PHRASE, "All") end
+        end
+    end)
+end
+
 local function StartEventParticipants()
     if eventParticipantsStarted then
         return
     end
     eventParticipantsStarted = true
+    eventQualifyDeadline = os.clock() + EVENT_QUALIFY_SECONDS
+    -- everyone running this chats the phrase the moment the event is triggered
+    SendQualifyChat()
+end
 
-    local pending = {}
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer then
-            pending[player] = true
-        end
+local function CheckQualifyMessage(userId, message)
+    if not eventParticipantsStarted or os.clock() > eventQualifyDeadline then
+        return
     end
-
-    task.spawn(function()
-        local deadline = os.clock() + EVENT_SPOT_CHECK_SECONDS
-        while next(pending) and os.clock() < deadline do
-            for player in pairs(pending) do
-                if player.Parent == nil then
-                    pending[player] = nil
-                else
-                    local character = player.Character
-                    local rootPart = character and character:FindFirstChild("HumanoidRootPart")
-                    if rootPart and IsOnEventSpot(rootPart) then
-                        pending[player] = nil
-                        RegisterParticipant(player)
-                    end
-                end
-            end
-            task.wait(0.25)
-        end
-    end)
+    if userId == LocalPlayer.UserId then
+        return
+    end
+    if message:match("^%s*(.-)%s*$"):lower() ~= EVENT_QUALIFY_PHRASE:lower() then
+        return
+    end
+    local player = Players:GetPlayerByUserId(userId)
+    if player then
+        RegisterParticipant(player)
+    end
 end
 
 local function CheckEventStartMessage(userId, message)
@@ -1862,16 +1852,17 @@ end
 if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
     TextChatService.MessageReceived:Connect(function(textChatMessage)
         if textChatMessage.TextSource then
-            CheckEventStartMessage(textChatMessage.TextSource.UserId, textChatMessage.Text)
+            local userId = textChatMessage.TextSource.UserId
+            CheckEventStartMessage(userId, textChatMessage.Text)
+            CheckQualifyMessage(userId, textChatMessage.Text)
         end
     end)
 else
     local function HookChatter(player)
-        if player.UserId == EVENT_HOST_USERID then
-            player.Chatted:Connect(function(message)
-                CheckEventStartMessage(player.UserId, message)
-            end)
-        end
+        player.Chatted:Connect(function(message)
+            CheckEventStartMessage(player.UserId, message)
+            CheckQualifyMessage(player.UserId, message)
+        end)
     end
     for _, player in ipairs(Players:GetPlayers()) do
         HookChatter(player)
