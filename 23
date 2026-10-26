@@ -2501,12 +2501,12 @@ function PlaySound(id, volume, minDist, maxDist)
 	return sound
 end
 
-local function GetGitSound(url, name, volume, keep)
+local function GetGitSound(url, name, volume, keep, minDist, maxDist)
 	local sound = GetGitSoundBase(url, name, volume)
 	if not ACTOR_IS_LOCAL then
 		sound.Parent = HumanoidRootPart
-		sound.RollOffMinDistance = 10
-		sound.RollOffMaxDistance = 150
+		sound.RollOffMinDistance = minDist or 10
+		sound.RollOffMaxDistance = maxDist or 150
 		if not keep then game:GetService("Debris"):AddItem(sound, 30) end
 	end
 	return sound
@@ -7078,7 +7078,9 @@ task.spawn(function()
 		"https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/Divine%20Kamehameha%20.mp3",
 		"DivineKamehameha",
 		2,
-		true
+		true,
+		80,   -- participants: full volume within 80 studs (an astronomically loud move)
+		2000  -- ...and still audible up to 2000 studs away
 	)
 	if ok then UltimateKameSfx = result else warn("[Attack5 SFX] failed to load:", result) end
 end)
