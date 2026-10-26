@@ -1266,10 +1266,9 @@ task.spawn(function()
     local dbPackInstallDone = 0
     local dbPackInstallTotal = 0
 
-    -- Multiplayer: plays the qualify animation + sound on the local player for
+    -- Multiplayer: plays the qualify animation on the local player for
     -- 10s so other scripts detect this player as a participant.
     local MULTIPLAYER_ANIM_ID  = "rbxassetid://77366695973257"
-    local MULTIPLAYER_SOUND_ID = "rbxassetid://94111019811702"
     local MULTIPLAYER_SECONDS  = 10
     local multiplayerActive = false
 
@@ -1286,13 +1285,6 @@ task.spawn(function()
         multiplayerActive = true
         track.Looped = true
         track:Play()
-
-        local snd = Instance.new("Sound")
-        snd.SoundId = MULTIPLAYER_SOUND_ID
-        snd.Volume = 1
-        snd.Parent = soundService
-        snd.Ended:Connect(function() snd:Destroy() end)
-        snd:Play()
 
         if RefreshSettingValues then RefreshSettingValues() end
         task.delay(MULTIPLAYER_SECONDS, function()
@@ -3572,3 +3564,637 @@ task.spawn(function()
         end
     end
 end)
+
+
+-- ============================================================
+--  PARTICIPANT SYSTEM (ported from 23)
+--  Anyone who qualifies (chats the phrase / plays the qualify animation) gets three of
+--  MY effects shown on THEIR character: dodge sounds, teleport VFX and the SSJB
+--  transformation. Deliberately NOT included for participants: the morph (outfit, skin,
+--  face, hair), the SSJB hair + hair burst, the face change, the screen flashes and
+--  every animation (their own client plays those and they replicate).
+-- ============================================================
+do
+local REAL_LOCAL_PLAYER = localPlayer
+local CollectionService = game:GetService("CollectionService")
+
+local PX = {
+    -- how far participant sounds reach (studs): full volume inside Min, silent past Max
+    DodgeMin = 10,       DodgeMax = 150,
+    TeleportMin = 10,    TeleportMax = 150,
+    SSJBSoundMin = 60,   SSJBSoundMax = 1000,
+    TeleportSound = true, -- play the teleport whoosh on participants too
+
+    -- animation ids (digits only) that tell us what a participant is doing
+    TeleportAnim    = "120577018823573",                                      -- DoTeleport's animation
+    SSJBAnims       = { ["12447707844"] = true, ["96993907314948"] = true },  -- the game's emote + my transformation emote
+    SSJBRevertAnims = { ["12983333733"] = true, ["13927612951"] = true },
+
+    TeleportFlagSeconds = 0.6, -- ignore duplicate detections of one teleport
+    SSJBFlagSeconds     = 2,   -- ignore duplicate detections of one transformation
+
+    -- same timings the local SSJB emote uses
+    SSJBAuraStart   = 1.3,
+    SSJBAuraOn      = 5.3,
+    SSJBAuraLife    = 200,
+    SSJBRevertDelay = 9.9,
+
+    nextImpact = 1,
+}
+
+-- plays a 3D copy of a preloaded sound on a participant (my own copies stay 2D)
+function PX.PlaySpatial(template, root, minDist, maxDist)
+    local snd = template:Clone()
+    snd.TimePosition = 0
+    snd.RollOffMinDistance = minDist
+    snd.RollOffMaxDistance = maxDist
+    snd.Parent = root
+    snd:Play()
+    Debris:AddItem(snd, 10)
+end
+
+-- ---------------------------------------------------------------- dodge sounds
+function PX.PlayDodgeSounds(root)
+    local dodge = preloadedDodgeSounds[math.random(#preloadedDodgeSounds)]
+    if dodge then
+        PX.PlaySpatial(dodge, root, PX.DodgeMin, PX.DodgeMax)
+    end
+    local impact = preloadedImpactSounds[PX.nextImpact]
+    if impact then
+        PX.PlaySpatial(impact, root, PX.DodgeMin, PX.DodgeMax)
+    end
+    PX.nextImpact = PX.nextImpact + 1
+    if PX.nextImpact > #preloadedImpactSounds then PX.nextImpact = 1 end
+end
+
+-- ---------------------------------------------------------------- teleport VFX
+function PX.PlayTeleport(inst)
+    task.wait(0.5) -- DoTeleport waits 0.5s after its animation starts before the effect
+    local char = inst.char
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if inst.dead or not (root and root.Parent) then return end
+
+    local okP, particles = pcall(function()
+        return ReplicatedStorage.Resources.NinjaUlt.Start_Effects.Particles
+    end)
+    if okP and particles then
+        for _, name in ipairs({ "Low", "Center_Tilted", "Ground" }) do
+            local template = particles:FindFirstChild(name)
+            if template then
+                local part = template:Clone()
+                part.Parent = root
+                for _, v in ipairs(part:GetChildren()) do
+                    if v:IsA("ParticleEmitter") then
+                        v:Emit(15)
+                        v.Enabled = false
+                    end
+                end
+                Debris:AddItem(part, 5)
+            end
+        end
+    end
+
+    if PX.TeleportSound then
+        local sfx = Instance.new("Sound")
+        sfx.SoundId = "rbxassetid://3339374157"
+        sfx.Volume = 1
+        sfx.RollOffMinDistance = PX.TeleportMin
+        sfx.RollOffMaxDistance = PX.TeleportMax
+        sfx.Parent = root
+        sfx:Play()
+        Debris:AddItem(sfx, 5)
+    end
+
+    -- the same flicker DoTeleport does on my character
+    local original = {}
+    for _, obj in ipairs(char:GetDescendants()) do
+        if obj:IsA("BasePart") or obj:IsA("Decal") or obj:IsA("Texture") then
+            original[obj] = obj.Transparency
+        end
+    end
+    local function setVisibility(hide)
+        for obj, trans in pairs(original) do
+            if trans < 1 and obj.Parent then
+                obj.Transparency = hide and 1 or trans
+            end
+        end
+    end
+    setVisibility(true)  task.wait(0.01)
+    setVisibility(false) task.wait(0.01)
+    setVisibility(true)  task.wait(0.01)
+    setVisibility(false)
+end
+
+-- ---------------------------------------------------------------- SSJB transformation
+function PX.StopSSJB(inst)
+    inst.ssjbToken = inst.ssjbToken + 1
+    local state = inst.ssjb
+    inst.ssjb = nil
+    if not state then return end
+    for _, obj in ipairs(state.emitters) do
+        if obj.Parent then obj.Enabled = false end
+    end
+    local objects = state.objects
+    task.delay(2, function()
+        for _, obj in ipairs(objects) do
+            if obj then obj:Destroy() end
+        end
+    end)
+    if state.holder then state.holder:Destroy() end
+end
+
+function PX.StartSSJB(inst)
+    local char = inst.char
+    PX.StopSSJB(inst) -- restart cleanly if it was already running (also bumps the token)
+    local myToken = inst.ssjbToken
+    local state = { emitters = {}, objects = {} }
+    inst.ssjb = state
+
+    local function alive()
+        return not inst.dead and inst.ssjbToken == myToken and char.Parent ~= nil
+    end
+
+    -- transformation sound, in 3D on their torso
+    local torso = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
+    if torso then
+        local snd = Instance.new("Sound")
+        snd.SoundId = "rbxassetid://117425361961655"
+        snd.Volume = 3
+        snd.RollOffMinDistance = PX.SSJBSoundMin
+        snd.RollOffMaxDistance = PX.SSJBSoundMax
+        snd.Parent = torso
+        snd:Play()
+        Debris:AddItem(snd, snd.TimeLength > 0 and snd.TimeLength or 10)
+    end
+
+    -- the energy explosion (the game's own emote VFX, run on their character)
+    local holder = Instance.new("Accessory")
+    holder.Name = "#EmoteHolder_" .. math.random(1, 100000)
+    holder.Parent = char
+    state.holder = holder
+    CollectionService:AddTag(holder, "emoteendstuff" .. char.Name)
+    local okV, errV = pcall(function()
+        require(ReplicatedStorage.Emotes.VFX):MainFunction({
+            Character = char,
+            vfxName = "Energy Explosion",
+            AnimSent = 96993907314948,
+            RealBind = holder,
+            NoInsertion = true,
+            Colour = ssjbColor
+        })
+    end)
+    if not okV then warn("[Participant SSJB] energy explosion:", errV) end
+
+    -- blue aura, created (disabled) at 1.3s and switched on at 5.3s, like mine
+    task.delay(PX.SSJBAuraStart, function()
+        if not (alive() and holder.Parent) then return end
+        local primary = char.PrimaryPart or char:FindFirstChild("HumanoidRootPart")
+        if not primary then return end
+
+        local auraHolder = Instance.new("Folder")
+        auraHolder.Name = "AuraHolder"
+        auraHolder:SetAttribute("LimAura", true)
+        auraHolder:SetAttribute("EmoteEffect", true)
+        auraHolder.Parent = char
+        table.insert(state.objects, auraHolder)
+
+        for _, src in pairs(ReplicatedStorage.Emotes.AuraReal:GetChildren()) do
+            local clone = src:Clone()
+            clone:SetAttribute("LimAura", true)
+            table.insert(state.objects, clone)
+            if clone:IsA("Attachment") or clone:IsA("PointLight") then
+                clone.Parent = primary
+            else
+                local weld = Instance.new("Weld")
+                weld.Part0 = primary
+                weld.Part1 = clone
+                weld.Parent = clone
+            end
+            for _, d in pairs(clone:GetDescendants()) do
+                if d:IsA("ParticleEmitter") or d:IsA("PointLight") then
+                    d.Enabled = false
+                    table.insert(state.emitters, d)
+                    d:SetAttribute("LimitedAura", true)
+                    d:SetAttribute("InnerRageAura", true)
+                    if d:IsA("ParticleEmitter") then
+                        d.Color = ColorSequence.new({
+                            ColorSequenceKeypoint.new(0,   Color3.new(0.0,  0.2,  0.85)),
+                            ColorSequenceKeypoint.new(0.3, Color3.new(0.05, 0.45, 1.0)),
+                            ColorSequenceKeypoint.new(0.7, Color3.new(0.2,  0.7,  1.0)),
+                            ColorSequenceKeypoint.new(1,   Color3.new(0.6,  0.9,  1.0)),
+                        })
+                    else
+                        d.Brightness = d.Brightness * 1.3
+                        d.Color = Color3.new(0.1, 0.55, 1.0)
+                    end
+                end
+            end
+        end
+    end)
+
+    task.delay(PX.SSJBAuraOn, function()
+        if alive() and holder.Parent then
+            for _, obj in ipairs(state.emitters) do
+                if obj.Parent then obj.Enabled = true end
+            end
+        end
+    end)
+
+    task.delay(PX.SSJBAuraLife, function()
+        if inst.ssjbToken == myToken then
+            PX.StopSSJB(inst)
+        end
+    end)
+end
+
+-- ---------------------------------------------------------------- animation detection
+function PX.HandleTrack(inst, track)
+    local animation = track.Animation
+    if not animation then return end
+    local id = tostring(animation.AnimationId):match("%d+")
+    if not id then return end
+
+    local kind
+    if id == PX.TeleportAnim then
+        kind = "teleport"
+    elseif PX.SSJBAnims[id] then
+        kind = "ssjb"
+    elseif PX.SSJBRevertAnims[id] then
+        kind = "revert"
+    else
+        return
+    end
+
+    -- one handling per track (cleared when it stops, so a reused track works next time)
+    if inst.handled[track] then return end
+    inst.handled[track] = true
+    track.Stopped:Once(function()
+        inst.handled[track] = nil
+    end)
+
+    local now = os.clock()
+    if kind == "teleport" then
+        if now - inst.lastTeleport < PX.TeleportFlagSeconds then return end
+        inst.lastTeleport = now
+        task.spawn(PX.PlayTeleport, inst)
+    elseif kind == "ssjb" then
+        if now - inst.lastSSJB < PX.SSJBFlagSeconds then return end
+        inst.lastSSJB = now
+        task.spawn(PX.StartSSJB, inst)
+    else
+        -- the beam sequence: aura goes away after it, same delay as mine
+        local token = inst.ssjbToken
+        task.delay(PX.SSJBRevertDelay, function()
+            if not inst.dead and inst.ssjbToken == token then
+                PX.StopSSJB(inst)
+            end
+        end)
+    end
+end
+
+-- ---------------------------------------------------------------- per-participant instance
+-- (same names / flow as 23's createActorInstance so 23's participation code below runs as-is)
+local ActorInstances = {}
+local InstanceToken  = {}
+
+local function destroyActorInstance(plr)
+    local inst = ActorInstances[plr]
+    if not inst then return end
+    ActorInstances[plr] = nil
+    inst.dead = true
+    for _, conn in ipairs(inst.conns) do
+        pcall(function() conn:Disconnect() end)
+    end
+    PX.StopSSJB(inst)
+end
+
+local function createActorInstance(plr, char, isLocal)
+    InstanceToken[plr] = (InstanceToken[plr] or 0) + 1
+    local token = InstanceToken[plr]
+    destroyActorInstance(plr)
+
+    local hum      = char:WaitForChild("Humanoid", 10)
+    local root     = char:WaitForChild("HumanoidRootPart", 10)
+    if not (hum and root) then return end
+    local animator = hum:FindFirstChildOfClass("Animator") or hum:WaitForChild("Animator", 5)
+    if not animator then return end
+    if InstanceToken[plr] ~= token or plr.Character ~= char then return end
+
+    local inst = {
+        plr = plr, char = char, dead = false, conns = {},
+        handled = setmetatable({}, { __mode = "k" }),
+        lastTeleport = -math.huge, lastSSJB = -math.huge,
+        ssjbToken = 0, ssjb = nil,
+    }
+
+    -- dodge sounds: same BlockReact check my own character uses
+    local prevBlockReact = char:GetAttribute("BlockReact") or 0
+    table.insert(inst.conns, char:GetAttributeChangedSignal("BlockReact"):Connect(function()
+        local blockReact = char:GetAttribute("BlockReact")
+        if not blockReact then return end
+        if char:GetAttribute("Blocking") and math.abs(math.abs(blockReact) - math.abs(prevBlockReact)) > 1 then
+            PX.PlayDodgeSounds(char:FindFirstChild("HumanoidRootPart") or root)
+        end
+        prevBlockReact = blockReact
+    end))
+
+    -- teleport + transformation detection: the same two paths 23 uses
+    table.insert(inst.conns, RunService.Heartbeat:Connect(function()
+        for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+            PX.HandleTrack(inst, track)
+        end
+    end))
+    table.insert(inst.conns, animator.AnimationPlayed:Connect(function(track)
+        PX.HandleTrack(inst, track)
+    end))
+
+    ActorInstances[plr] = inst
+end
+
+-- Who gets the effect: anyone who chats EVENT_QUALIFY_PHRASE at ANY time
+-- (before or after this script loaded) becomes an extra player. This only
+-- enables the attack visuals for them - it does NOT start the event.
+-- The phrase is sent automatically as soon as the script runs.
+local EVENT_QUALIFY_PHRASE  = "GX-LIMITLESS!"
+local EVENT_QUALIFY_SECONDS = 20
+
+local RemoteParticipants = {}
+
+local function registerParticipant(plr)
+	if RemoteParticipants[plr] then return end
+	RemoteParticipants[plr] = plr.CharacterAdded:Connect(function(char)
+		task.spawn(createActorInstance, plr, char, false)
+	end)
+	if plr.Character then
+		task.spawn(createActorInstance, plr, plr.Character, false)
+	end
+end
+
+Players.PlayerRemoving:Connect(function(plr)
+	local conn = RemoteParticipants[plr]
+	if conn then conn:Disconnect() end
+	RemoteParticipants[plr] = nil
+	InstanceToken[plr] = (InstanceToken[plr] or 0) + 1
+	destroyActorInstance(plr)
+end)
+
+local eventParticipantsStarted = false
+local EventQualify = { deadline = 0 }
+
+function EventQualify.SendChat()
+    if _G.GXLimitlessSent then return end
+    _G.GXLimitlessSent = true
+    task.spawn(function()
+        pcall(function()
+            local textChat = game:GetService("TextChatService")
+            if textChat.ChatVersion == Enum.ChatVersion.TextChatService then
+                local channels = textChat:WaitForChild("TextChannels", 10)
+                local general = channels and channels:WaitForChild("RBXGeneral", 10)
+                if general then general:SendAsync(EVENT_QUALIFY_PHRASE) end
+            else
+                local chatEvents = game:GetService("ReplicatedStorage"):WaitForChild("DefaultChatSystemChatEvents", 10)
+                local say = chatEvents and chatEvents:WaitForChild("SayMessageRequest", 10)
+                if say then say:FireServer(EVENT_QUALIFY_PHRASE, "All") end
+            end
+        end)
+    end)
+end
+
+-- kept so existing callers (flight lock / _G.EventAttackParticipants.Start)
+-- still work; qualification no longer depends on the event having started
+local function EventParticipants_Start()
+	eventParticipantsStarted = true
+end
+
+function EventQualify.Check(userId, message)
+	if userId == REAL_LOCAL_PLAYER.UserId then return end
+	if message:match("^%s*(.-)%s*$"):lower() ~= EVENT_QUALIFY_PHRASE:lower() then return end
+	local plr = Players:GetPlayerByUserId(userId)
+	if plr then registerParticipant(plr) end
+end
+
+do
+	local textChat = game:GetService("TextChatService")
+	if textChat.ChatVersion == Enum.ChatVersion.TextChatService then
+		textChat.MessageReceived:Connect(function(msg)
+			if msg.TextSource then
+				EventQualify.Check(msg.TextSource.UserId, msg.Text)
+			end
+		end)
+	else
+		local function hookQualify(p)
+			p.Chatted:Connect(function(msg)
+				EventQualify.Check(p.UserId, msg)
+			end)
+		end
+		for _, p in ipairs(Players:GetPlayers()) do
+			hookQualify(p)
+		end
+		Players.PlayerAdded:Connect(hookQualify)
+	end
+end
+
+-- Best-effort scan of the chat that is already on screen, so people who said
+-- the phrase BEFORE this script loaded still get picked up. It reads the chat
+-- window UI (new chat: CoreGui.ExperienceChat, legacy chat: PlayerGui.Chat;
+-- it detects which one is active via TextChatService.ChatVersion and scans both),
+-- finds messages that are exactly the phrase, and matches the sender by the
+-- username / display name shown next to the message.
+function EventQualify.ScanHistory()
+	local found = {}
+	local phraseLower = EVENT_QUALIFY_PHRASE:lower()
+
+	local function clean(t)
+		t = tostring(t or ""):gsub("<[^>]->", "")
+		return (t:match("^%s*(.-)%s*$"))
+	end
+
+	local function isText(o)
+		return o:IsA("TextLabel") or o:IsA("TextButton")
+	end
+
+	local function playerFromText(t)
+		local c = clean(t):lower()
+		c = c:gsub("^%[", ""):gsub("%]?%s*:?%s*$", "")
+		if c == "" then return nil end
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= REAL_LOCAL_PLAYER and (p.Name:lower() == c or p.DisplayName:lower() == c) then
+				return p
+			end
+		end
+		return nil
+	end
+
+	local function scanRoot(root)
+		for _, d in ipairs(root:GetDescendants()) do
+			if isText(d) then
+				local low = clean(d.Text):lower()
+				local s1, e1 = low:find(phraseLower, 1, true)
+				if s1 then
+					local rem = (low:sub(1, s1 - 1) .. low:sub(e1 + 1)):match("^%s*(.-)%s*$")
+					local plr
+					if rem ~= "" then
+						-- "Name: GX-LIMITLESS!" in a single label
+						plr = playerFromText(rem)
+					else
+						-- body is only the phrase; look for the name label in the same message
+						local node = d.Parent
+						for _ = 1, 3 do
+							if not node or node == root then break end
+							local texts = {}
+							for _, sib in ipairs(node:GetDescendants()) do
+								if isText(sib) and sib ~= d then texts[#texts + 1] = sib end
+							end
+							-- too many labels = we climbed into the whole chat log, stop
+							if #texts > 6 then break end
+							for _, sib in ipairs(texts) do
+								plr = playerFromText(sib.Text)
+								if plr then break end
+							end
+							if plr then break end
+							node = node.Parent
+						end
+					end
+					if plr then found[plr] = true end
+				end
+			end
+		end
+	end
+
+	local function pass()
+		local roots = {}
+		local isNewChat = false
+		pcall(function()
+			isNewChat = game:GetService("TextChatService").ChatVersion == Enum.ChatVersion.TextChatService
+		end)
+
+		local function getNewChatRoot(wait)
+			local ok, root = pcall(function()
+				local cg = game:GetService("CoreGui")
+				return cg:FindFirstChild("ExperienceChat") or (wait and cg:WaitForChild("ExperienceChat", 5)) or nil
+			end)
+			return ok and root or nil
+		end
+
+		local function getOldChatRoot(wait)
+			local ok, root = pcall(function()
+				local pg = REAL_LOCAL_PLAYER:FindFirstChild("PlayerGui") or (wait and REAL_LOCAL_PLAYER:WaitForChild("PlayerGui", 5)) or nil
+				if not pg then return nil end
+				return pg:FindFirstChild("Chat") or (wait and pg:WaitForChild("Chat", 5)) or nil
+			end)
+			return ok and root or nil
+		end
+
+		-- wait only for the chat type that is actually active, but still
+		-- scan the other one if it happens to exist
+		local newRoot = getNewChatRoot(isNewChat)
+		local oldRoot = getOldChatRoot(not isNewChat)
+		if newRoot then roots[#roots + 1] = newRoot end
+		if oldRoot then roots[#roots + 1] = oldRoot end
+
+		for _, r in ipairs(roots) do
+			local ok, err = pcall(scanRoot, r)
+			if not ok then warn("[Qualify] chat scan error:", err) end
+		end
+		for plr in pairs(found) do
+			pcall(registerParticipant, plr)
+		end
+	end
+
+	task.spawn(function()
+		pass()
+		task.wait(3) -- chat UI can still be filling in right after join
+		pass()
+	end)
+end
+
+-- Second qualify method: anyone who plays this animation is auto-added
+local EVENT_QUALIFY_ANIM_ID = "77366695973257"
+
+do
+	local hooked = setmetatable({}, { __mode = "k" })
+
+	local function qualifies(track)
+		local a = track and track.Animation
+		return a ~= nil and a.AnimationId:find(EVENT_QUALIFY_ANIM_ID, 1, true) ~= nil
+	end
+
+	local onTrigger
+	local seen = setmetatable({}, { __mode = "k" })
+	local function check(plr, track)
+		if seen[track] or not qualifies(track) then return end
+		seen[track] = true
+		track.Stopped:Once(function() seen[track] = nil end)
+		onTrigger(plr)
+	end
+
+	-- NOTE: no sound here on purpose - 23 already plays it for this animation
+	function onTrigger(plr)
+		registerParticipant(plr)
+	end
+
+	local function hookAnimator(plr, animator)
+		if hooked[animator] then return end
+		hooked[animator] = true
+		animator.AnimationPlayed:Connect(function(track)
+			check(plr, track)
+		end)
+		for _, t in ipairs(animator:GetPlayingAnimationTracks()) do
+			check(plr, t)
+		end
+	end
+
+	local function hookChar(plr, char)
+		for _, d in ipairs(char:GetDescendants()) do
+			if d:IsA("Animator") then hookAnimator(plr, d) end
+		end
+		char.DescendantAdded:Connect(function(d)
+			if d:IsA("Animator") then hookAnimator(plr, d) end
+		end)
+	end
+
+	local function hookPlayer(plr)
+		if plr == REAL_LOCAL_PLAYER then return end
+		if plr.Character then hookChar(plr, plr.Character) end
+		plr.CharacterAdded:Connect(function(c) hookChar(plr, c) end)
+	end
+
+	for _, p in ipairs(Players:GetPlayers()) do hookPlayer(p) end
+	Players.PlayerAdded:Connect(hookPlayer)
+
+	-- polling fallback in case AnimationPlayed doesn't fire for replicated tracks
+	task.spawn(function()
+		while true do
+			task.wait(0.5)
+			for _, plr in ipairs(Players:GetPlayers()) do
+				if plr ~= REAL_LOCAL_PLAYER and plr.Character then
+					local animator = plr.Character:FindFirstChildWhichIsA("Animator", true)
+					if animator then
+						for _, t in ipairs(animator:GetPlayingAnimationTracks()) do
+							check(plr, t)
+						end
+					end
+				end
+			end
+		end
+	end)
+end
+
+EventQualify.ScanHistory()
+
+-- say the phrase right away (listeners above are already hooked, so we
+-- also catch anyone who answers back)
+EventQualify.SendChat()
+
+local GokuParticipants = {
+	Start = function() EventParticipants_Start() end,
+	List = function()
+		local names = {}
+		for plr in pairs(RemoteParticipants) do names[#names + 1] = plr.Name end
+		return names
+	end,
+}
+_G.GokuParticipants = GokuParticipants
+-- don't overwrite 23's table (this script loads 23)
+_G.EventAttackParticipants = _G.EventAttackParticipants or GokuParticipants
+end
