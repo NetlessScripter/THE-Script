@@ -5,6 +5,12 @@ Humanoid = Character:WaitForChild("Humanoid")
 HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
 Animator = Humanoid:WaitForChild("Animator")
 RightArm = Character:WaitForChild("Right Arm")
+-- ===== multiplayer attack support =====
+-- Everything that draws an attack (animation + VFX + sounds) now lives in BuildActorLibrary() further down. It is built ONCE PER PLAYER
+-- (you, plus every player that was teleported into the event) inside its own private environment, so each player's attack has its own
+-- state and can never collide with someone else's. These two globals are what the private environments fall back to.
+REAL_ENV          = (getfenv and getfenv(1)) or (getgenv and getgenv())
+REAL_LOCAL_PLAYER = LocalPlayer
 TRIGGER_ANIM_IDS = {
 	ATTACK1 = "10471336737",
 	ATTACK2 = "10466974800",
@@ -19,19 +25,7 @@ ATTACK2_CANCEL_IDS = {
 }
 attack2LastFired = -math.huge  -- tick() timestamp; prevents finisher re-triggering attack2
 ATTACK2_COOLDOWN = 3           -- seconds to lock out after attack2 completes
-function PlaySound(id, volume, minDist, maxDist)
-	sound = Instance.new("Sound")
-	sound.SoundId = id
-	sound.Volume = volume
-	sound.RollOffMinDistance = minDist
-	sound.RollOffMaxDistance = maxDist
-	sound.Parent = HumanoidRootPart
-	sound:Play()
-	game:GetService("Debris"):AddItem(sound, 10)
-	return sound
-end
-
-local function GetGitSound(GithubSnd, SoundName, Volume)
+local function GetGitSoundBase(GithubSnd, SoundName, Volume)
     local url = GithubSnd
     local fileName = SoundName .. ".mp3"
 
@@ -65,7 +59,7 @@ CUTSCENE_TELEPORT_POS    = Vector3.new(377.1642761230469, 699.103271484375, 360.
 -- Cutscene SFX: downloaded once (writefile), loaded with getcustomasset, and kept ready so it plays the instant the cutscene starts.
 local cutsceneSfx
 task.spawn(function()
-	local ok, result = pcall(GetGitSound,
+	local ok, result = pcall(GetGitSoundBase,
 		"https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/9214A6CF-F225-4604-81AF-6AA5D26ABA56.mp3",
 		"PlanetCutsceneSFX",
 		2
@@ -74,7 +68,11 @@ task.spawn(function()
 end)
 
 -- Saves where we are, teleports to CUTSCENE_TELEPORT_POS, plays the cutscene, then teleports back to the saved spot.
+cutsceneActive = false -- only one finisher cutscene at a time (several attackers could catch us at once)
 function PlayCutsceneWithTeleport()
+	if cutsceneActive then return end
+	cutsceneActive = true
+	task.delay(25, function() cutsceneActive = false end) -- failsafe: never stay locked if the cutscene dies midway
 	local function getRoot()
 		local c = LocalPlayer.Character
 		return c and c:FindFirstChild("HumanoidRootPart")
@@ -104,6 +102,7 @@ function PlayCutsceneWithTeleport()
 	end
 
 	PlayPlanetExplosion(function()
+		cutsceneActive = false
 		if pinConn then pinConn:Disconnect() end
 		local r = getRoot()
 		if r and savedCFrame then
@@ -112,1190 +111,6 @@ function PlayCutsceneWithTeleport()
 			r.AssemblyAngularVelocity = Vector3.zero
 		end
 	end)
-end
-
-function StartAttack4Hitbox(duration)
-	local state = { triggered = false }
-	local char = LocalPlayer.Character or Character
-	local root = (char and char:FindFirstChild("HumanoidRootPart")) or HumanoidRootPart
-
-	local hitbox = Instance.new("Part")
-	hitbox.Name = "Attack4Hitbox"
-	hitbox.Size = ATTACK4_HITBOX_SIZE
-	hitbox.Anchored = true
-	hitbox.CanCollide, hitbox.CanQuery, hitbox.CanTouch, hitbox.CastShadow = false, false, false, false
-	hitbox.Transparency = ATTACK4_HITBOX_DEBUG and 0.7 or 1
-	hitbox.Color = Color3.new(1, 0, 0)
-	hitbox.Material = Enum.Material.SmoothPlastic
-	hitbox.CFrame = root.CFrame * CFrame.new(0, 0, -ATTACK4_HITBOX_OFFSET)
-	hitbox.Parent = workspace
-
-	local params = OverlapParams.new()
-	params.FilterType = Enum.RaycastFilterType.Exclude
-	params.FilterDescendantsInstances = { char, hitbox }
-
-	local startTime = os.clock()
-	local conn
-	local function stop()
-		if conn then conn:Disconnect(); conn = nil end
-		if hitbox then hitbox:Destroy(); hitbox = nil end
-	end
-	state.stop = stop
-
-	conn = game:GetService("RunService").Heartbeat:Connect(function()
-		if not hitbox then return end
-		if os.clock() - startTime >= duration then stop() return end
-		hitbox.CFrame = root.CFrame * CFrame.new(0, 0, -ATTACK4_HITBOX_OFFSET) -- rides along with us during the charge
-		for _, part in ipairs(workspace:GetPartBoundsInBox(hitbox.CFrame, hitbox.Size, params)) do
-			local model = part:FindFirstAncestorOfClass("Model")
-			local hum = model and model:FindFirstChildOfClass("Humanoid")
-			local plr = model and Players:GetPlayerFromCharacter(model)
-			local live = workspace:FindFirstChild("Live")
-			local dummy = live and live:FindFirstChild("Weakest Dummy")
-			local isTarget = (plr ~= nil and plr ~= LocalPlayer) or (dummy ~= nil and model == dummy)
-			if hum and isTarget and hum.Health > 0 and hum.Health <= ATTACK4_FINISHER_HEALTH then
-				state.triggered = true
-				stop() -- destroy the hitbox; the explosion waits for the beam fade
-				return
-			end
-		end
-	end)
-	return state
-end
-
-ATTACK4_ZOOM_FOV             = 55
-ATTACK4_BURST_FOV            = 120
-ATTACK4_SETTLE_FOV           = 80
-ATTACK4_ZOOM_SECONDS         = 0.6
-ATTACK4_BURST_RISE_SECONDS   = 0.08
-ATTACK4_SETTLE_SECONDS       = 0.3
-ATTACK4_RESTORE_SECONDS      = 0.25
-ATTACK4_SHAKE_HOLD_SECONDS   = 0.6
-ATTACK4_SHAKE_FADE_SECONDS   = 0.4
-ATTACK4_SHAKE_POSITION       = 0.7
-ATTACK4_SHAKE_ROTATION       = 0.035
-ATTACK4_SHAKE_SPEED          = 24
-
--- ================= ATTACK 4 CHARGE LIGHTING =================
--- Same dark-blue grade Attack 5's cinematic uses (dimmed exposure + blue ambient, tint, contrast, bloom, depth of field),
--- squeezed into Attack 4's 0.6s charge, plus Attack 5's lens flare sitting on the charge. Both build while the charge
--- plays and fade back out once the beam spawns.
-ATTACK4_GRADE_RAMP_SECONDS    = 0.6  -- time to reach full strength (matches the charge)
-ATTACK4_GRADE_RELEASE_SECONDS = 0.4  -- time to fade back to normal after the beam spawns
-ATTACK4_GRADE_STRENGTH        = 1    -- multiplier on the whole grade (1 = same strength as Attack 5)
-ATTACK4_FLARE_STRENGTH        = 0.65 -- lens flare brightness (Attack 5 peaks at 0.65; 0 turns the flare off)
-
-attack4LightingController = nil
-
-function StartAttack4Lighting(focusPart, flareSourceFn)
-	local Lighting = game:GetService("Lighting")
-	local runService = game:GetService("RunService")
-	local camera = workspace.CurrentCamera
-
-	-- Attack spammed while a grade is still active: end the old one instantly but reuse ITS originals,
-	-- so we never "restore" to an already-darkened Lighting.
-	local orig
-	if attack4LightingController and not attack4LightingController.finished then
-		orig = attack4LightingController.orig
-		attack4LightingController.abort()
-	end
-	orig = orig or { exp = Lighting.ExposureCompensation, amb = Lighting.Ambient, oamb = Lighting.OutdoorAmbient }
-
-	local WHITE     = Color3.new(1, 1, 1)
-	local DARK_BLUE = Color3.fromRGB(25, 40, 95)
-	local TINT      = Color3.fromRGB(165, 205, 255)
-
-	local cc = Instance.new("ColorCorrectionEffect") cc.Name = "Attack4CC" cc.Parent = Lighting
-	local bloom = Instance.new("BloomEffect") bloom.Name = "Attack4Bloom" bloom.Intensity = 0 bloom.Size = 24 bloom.Threshold = 1 bloom.Parent = Lighting
-	local dof = Instance.new("DepthOfFieldEffect") dof.Name = "Attack4DOF" dof.FarIntensity = 0 dof.NearIntensity = 0 dof.FocusDistance = 20 dof.InFocusRadius = 12 dof.Parent = Lighting
-	local sun = Instance.new("SunRaysEffect") sun.Name = "Attack4Sun" sun.Intensity = 0 sun.Spread = 0.7 sun.Parent = Lighting
-
-	-- Lens flare (same emitter stack as Attack 5): sparkle emitters on a hidden rig, placed along the lens axis each frame.
-	local CYAN = Color3.fromRGB(120, 235, 255)
-	local BLUE = Color3.fromRGB(40, 170, 255)
-	local SPARK = "rbxasset://textures/particles/sparkles_main.dds"
-	local FLARE_DEPTH = 4
-	local FLARE_SCALE = FLARE_DEPTH / 13
-
-	local flareRig = Instance.new("Part")
-	flareRig.Name = "Attack4FlareRig"
-	flareRig.Size = Vector3.new(0.05, 0.05, 0.05)
-	flareRig.Anchored = true
-	flareRig.CanCollide = false
-	flareRig.CanQuery = false
-	flareRig.CanTouch = false
-	flareRig.CastShadow = false
-	flareRig.Massless = true
-	flareRig.Material = Enum.Material.Neon
-	flareRig.Transparency = 1
-	flareRig.Parent = workspace
-
-	local flareEm = {}
-	local function addFlare(col, pos, blend, s0, s1, t0, t1, q0, q1)
-		local att = Instance.new("Attachment")
-		att.Parent = flareRig
-		local e = Instance.new("ParticleEmitter")
-		e.Texture = SPARK
-		e.Rate = 0
-		e.Enabled = false
-		e.LockedToPart = true -- follows the attachment every frame instead of sitting where it was emitted
-		e.Speed = NumberRange.new(0)
-		e.RotSpeed = NumberRange.new(0)
-		e.Lifetime = NumberRange.new(0.05)
-		e.LightEmission = 1
-		e.LightInfluence = 0
-		e.ZOffset = -2.5
-		e.Orientation = Enum.ParticleOrientation.FacingCamera
-		e.Color = ColorSequence.new(col:Lerp(CYAN, blend))
-		e.Parent = att
-		flareEm[#flareEm + 1] = {e = e, att = att, pos = pos, s0 = s0 * FLARE_SCALE, s1 = s1 * FLARE_SCALE, t0 = t0, t1 = t1, q0 = q0, q1 = q1}
-	end
-	--          color  pos                  blend  size     transp     squash
-	addFlare(WHITE, Vector2.new(1, 1),       0.4,  6.5, 0,  0.25, 1, 5,  0)   -- wide soft body, tall middle
-	addFlare(WHITE, Vector2.new(1, 1),       0.15, 3.2, 0,  0,    1, 1.5, 0)  -- hot core
-	addFlare(CYAN,  Vector2.new(1, 1),       0.7,  4.8, 0,  0.12, 1, 9,  0)   -- thick stretched band
-	addFlare(WHITE, Vector2.new(1, 1),       0.3,  3.4, 0,  0.08, 1, 22, 0)   -- thin long streak through the middle
-	addFlare(CYAN,  Vector2.new(1, 1),       0.8,  3.0, 0,  0.2,  1, 32, 0)   -- extra-long anamorphic streak
-	addFlare(CYAN,  Vector2.new(-0.6, -0.6), 0.5,  1.2, 0,  0.45, 1, 4,  0)   -- ghosts along the lens axis
-	addFlare(WHITE, Vector2.new(-0.3, -0.3), 0.3,  0.8, 0,  0.5,  1, 3,  0)
-	addFlare(BLUE,  Vector2.new(-1.1, -1.1), 0.8,  1.7, 0,  0.55, 1, 2,  0)
-	addFlare(CYAN,  Vector2.new(0.5, 0.5),   0.6,  0.9, 0,  0.5,  1, 3,  0)
-	addFlare(WHITE, Vector2.new(-1.6, -1.6), 0.5,  0.7, 0,  0.6,  1, 2,  0)
-
-	local function lerp(a, b, t) return a + (b - a) * t end
-
-	local function updateFlare(strength)
-		if not flareSourceFn or strength <= 0.01 then return end
-		local source = flareSourceFn()
-		if not source then return end
-		local vs = camera.ViewportSize
-		local sp = camera:WorldToViewportPoint(source)
-		if sp.Z <= 0 then return end
-		local toSrc = source - camera.CFrame.Position
-		if toSrc.Magnitude < 0.01 then return end
-		local va = math.acos(math.clamp(camera.CFrame.LookVector:Dot(toSrc.Unit), -1, 1))
-		local vf = math.rad(camera.FieldOfView)
-		local ar = vs.X / vs.Y
-		local df = 2 * math.atan(math.tan(vf * 0.5) * math.sqrt(1 + ar * ar))
-		local aa = 1 - math.clamp(va / (df * 0.5), 0, 1)
-		local alpha = aa * strength
-		if alpha <= 0.001 then return end
-		local center = Vector2.new(vs.X, vs.Y) * 0.5
-		local off = Vector2.new(sp.X, sp.Y) - center
-		local ft = 1 - aa
-		for _, d in ipairs(flareEm) do
-			local es = center + Vector2.new(off.X * d.pos.X, off.Y * d.pos.Y)
-			local ray = camera:ViewportPointToRay(es.X, es.Y)
-			d.att.WorldPosition = ray.Origin + ray.Direction.Unit * FLARE_DEPTH
-			d.e.Size = NumberSequence.new(lerp(d.s0, d.s1, ft))
-			d.e.Squash = NumberSequence.new(-lerp(d.q0, d.q1, ft))
-			d.e.Transparency = NumberSequence.new(math.clamp(1 - ((1 - lerp(d.t0, d.t1, ft)) * alpha), 0, 1))
-			d.e:Emit(1)
-		end
-	end
-
-	local controller = { finished = false, orig = orig }
-	attack4LightingController = controller
-
-	local conn
-	local startTime = os.clock()
-	local lastGl = 0
-	local curGl = 0
-	local flareBind = "Attack4Flare"
-	local releaseStart, releaseFrom
-
-	local function sstep(x) x = math.clamp(x, 0, 1) return x * x * (3 - 2 * x) end
-
-	local function cleanup()
-		if controller.finished then return end
-		controller.finished = true
-		if conn then conn:Disconnect() end
-		pcall(runService.UnbindFromRenderStep, runService, flareBind)
-		Lighting.ExposureCompensation = orig.exp
-		Lighting.Ambient = orig.amb
-		Lighting.OutdoorAmbient = orig.oamb
-		for _, inst in ipairs({cc, bloom, dof, sun, flareRig}) do inst:Destroy() end
-	end
-
-	local function apply(gl)
-		local g = gl * ATTACK4_GRADE_STRENGTH
-		Lighting.ExposureCompensation = orig.exp - 0.8 * g
-		Lighting.Ambient = orig.amb:Lerp(DARK_BLUE, math.clamp(0.75 * g, 0, 1))
-		Lighting.OutdoorAmbient = orig.oamb:Lerp(DARK_BLUE, math.clamp(0.75 * g, 0, 1))
-		cc.TintColor = WHITE:Lerp(TINT, math.clamp(g, 0, 1))
-		cc.Contrast = 0.22 * g
-		cc.Saturation = 0.18 * g
-		cc.Brightness = -0.04 * g
-		bloom.Intensity = 0.45 * g
-		bloom.Size = 24 + 16 * gl
-		bloom.Threshold = 1 - 0.07 * gl
-		sun.Intensity = 0.05 * g
-		dof.FarIntensity = 0.45 * g
-	end
-
-	conn = runService.RenderStepped:Connect(function()
-		if controller.finished then return end
-		local now = os.clock()
-		local gl
-		if releaseStart then
-			local a = math.clamp((now - releaseStart) / ATTACK4_GRADE_RELEASE_SECONDS, 0, 1)
-			gl = releaseFrom * (1 - sstep(a))
-			if a >= 1 then cleanup() return end
-		else
-			gl = sstep((now - startTime) / ATTACK4_GRADE_RAMP_SECONDS)
-			lastGl = gl
-		end
-		apply(gl)
-		curGl = gl
-
-		-- keep the character sharp, blur the background (same idea as Attack 5's DOF)
-		if focusPart and focusPart.Parent then
-			local dist = (camera.CFrame.Position - focusPart.Position).Magnitude
-			dof.FocusDistance = dist
-			dof.InFocusRadius = math.clamp(dist * 0.45, 2.5, 18)
-		end
-	end)
-
-	-- The flare runs in the very last render step so it reads the final camera (zoom FOV + shake) and the arm's final
-	-- pose for this frame; updating earlier made it lag a frame behind the charge.
-	pcall(runService.UnbindFromRenderStep, runService, flareBind)
-	runService:BindToRenderStep(flareBind, Enum.RenderPriority.Last.Value, function()
-		if controller.finished then return end
-		updateFlare(ATTACK4_FLARE_STRENGTH * curGl) -- fades with the grade on release
-	end)
-
-	function controller.release()
-		if controller.finished or releaseStart then return end
-		releaseStart = os.clock()
-		releaseFrom = lastGl
-	end
-
-	function controller.abort()
-		cleanup()
-	end
-
-	task.delay(4, controller.release) -- failsafe: never leave the screen dark if release() is somehow never reached
-	return controller
-end
-
-attack4CameraController = nil
-
-function StartAttack4Camera()
-	local runService = game:GetService("RunService")
-	local camera = workspace.CurrentCamera
-	local bindName = "Attack4Camera"
-
-	local originalFov = camera.FieldOfView
-	if attack4CameraController and not attack4CameraController.finished then
-		originalFov = attack4CameraController.originalFov
-		attack4CameraController.finished = true
-	end
-	pcall(runService.UnbindFromRenderStep, runService, bindName)
-
-	local controller = { originalFov = originalFov, finished = false }
-	attack4CameraController = controller
-
-	local phase = "zoom"
-	local phaseStartTime = os.clock()
-	local phaseStartFov = originalFov
-	local lastFov = originalFov
-	local fovReleased = false
-	local shakeStartTime = nil
-	local shakePhase = 0
-
-	local function lerp(startValue, endValue, alpha)
-		return startValue + (endValue - startValue) * alpha
-	end
-	local function easeOut(alpha)
-		return 1 - (1 - alpha) * (1 - alpha)
-	end
-	local function easeInOut(alpha)
-		return -(math.cos(math.pi * alpha) - 1) / 2
-	end
-
-	local function finish()
-		controller.finished = true
-		pcall(runService.UnbindFromRenderStep, runService, bindName)
-	end
-
-	runService:BindToRenderStep(bindName, Enum.RenderPriority.Camera.Value + 2, function(deltaTime)
-		if controller.finished then
-			finish()
-			return
-		end
-
-		local now = os.clock()
-		local phaseElapsed = now - phaseStartTime
-
-		if not fovReleased then
-			local targetFov
-			if phase == "zoom" then
-				local alpha = math.clamp(phaseElapsed / ATTACK4_ZOOM_SECONDS, 0, 1)
-				targetFov = lerp(phaseStartFov, ATTACK4_ZOOM_FOV, easeInOut(alpha))
-			elseif phase == "burst" then
-				if phaseElapsed < ATTACK4_BURST_RISE_SECONDS then
-					local alpha = phaseElapsed / ATTACK4_BURST_RISE_SECONDS
-					targetFov = lerp(phaseStartFov, ATTACK4_BURST_FOV, easeOut(alpha))
-				else
-					local alpha = math.clamp((phaseElapsed - ATTACK4_BURST_RISE_SECONDS) / ATTACK4_SETTLE_SECONDS, 0, 1)
-					targetFov = lerp(ATTACK4_BURST_FOV, ATTACK4_SETTLE_FOV, easeOut(alpha))
-				end
-			else
-				local alpha = math.clamp(phaseElapsed / ATTACK4_RESTORE_SECONDS, 0, 1)
-				targetFov = lerp(phaseStartFov, originalFov, easeInOut(alpha))
-				if alpha >= 1 then
-					fovReleased = true
-					targetFov = originalFov
-				end
-			end
-			lastFov = targetFov
-			camera.FieldOfView = targetFov
-		end
-
-		local shakeActive = false
-		if shakeStartTime then
-			local shakeElapsed = now - shakeStartTime
-			local amplitude = 0
-			if shakeElapsed < ATTACK4_SHAKE_HOLD_SECONDS then
-				amplitude = 1
-			elseif shakeElapsed < ATTACK4_SHAKE_HOLD_SECONDS + ATTACK4_SHAKE_FADE_SECONDS then
-				amplitude = 1 - (shakeElapsed - ATTACK4_SHAKE_HOLD_SECONDS) / ATTACK4_SHAKE_FADE_SECONDS
-			end
-			if amplitude > 0 then
-				shakeActive = true
-				if camera.CameraType ~= Enum.CameraType.Scriptable then
-					shakePhase += deltaTime * ATTACK4_SHAKE_SPEED
-					local function noise(seed)
-						return (math.noise(shakePhase, seed, 0.5) * 0.7 + math.noise(shakePhase * 2.3, seed + 9.1, 1.7) * 0.3) * 2
-					end
-					camera.CFrame = camera.CFrame
-						* CFrame.new(noise(1.3) * ATTACK4_SHAKE_POSITION * amplitude, noise(5.7) * ATTACK4_SHAKE_POSITION * amplitude, 0)
-						* CFrame.Angles(
-							noise(9.1) * ATTACK4_SHAKE_ROTATION * amplitude,
-							noise(13.3) * ATTACK4_SHAKE_ROTATION * amplitude,
-							noise(17.9) * ATTACK4_SHAKE_ROTATION * 0.6 * amplitude
-						)
-				end
-			end
-		end
-
-		if fovReleased and not shakeActive then
-			finish()
-		end
-	end)
-
-	function controller.burst()
-		if controller.finished or phase ~= "zoom" then return end
-		phase = "burst"
-		phaseStartTime = os.clock()
-		phaseStartFov = lastFov
-		shakeStartTime = os.clock()
-	end
-
-	function controller.restore()
-		if controller.finished or phase == "restore" then return end
-		phase = "restore"
-		phaseStartTime = os.clock()
-		phaseStartFov = lastFov
-	end
-
-	return controller
-end
-
--- ================= ATTACK 4 KAMEHAMEHA VFX =================
--- Extra visuals layered ON TOP of the Attack 4 beam model (the model itself is untouched, so it keeps its look).
---   charge : glowing orb that grows in the palm + energy streaks that spiral into it
---   beam   : the model is locked to the character (follows aim), white-hot core + glow shell that shoot out in ~0.07s,
---            pulse rings racing down the beam, crackling lightning, muzzle flash + shockwaves, sparks, and an impact
---            that lands where the beam REALLY ends (raycast: walls, ground, players). Near the ground you also get
---            a shockwave, dust and small shards in the real color/material of the surface.
--- All of it is wrapped in pcall at the call site, so a bug here can never break the attack itself.
-ATTACK4_FX_QUALITY      = 1                       -- 0.4 - 1 (lower = fewer streaks/bolts/shards, better for mobile)
-ATTACK4_FX_BEAM_LENGTH  = nil                     -- studs; nil = measured from the beam model
-ATTACK4_FX_BEAM_RADIUS  = nil                     -- studs; nil = measured from the beam model
-ATTACK4_FX_AXIS_NUDGE   = Vector3.new(0, 0, 0)    -- (right, up, forward) nudge of the overlay if it sits slightly off the model
-ATTACK4_FX_BEAM_FOLLOWS = true                    -- true = beam model follows the character's aim while it lives
-ATTACK4_FX_GROUND       = true                    -- dust / shards / shockwave when the ground is close
-ATTACK4_FX_BLOOM        = true                    -- short bloom pulse while the beam is out
-ATTACK4_FX_CORE_COLOR   = Color3.fromRGB(238, 248, 255)
-ATTACK4_FX_MID_COLOR    = Color3.fromRGB(103, 194, 255) -- same blue as the charge particles
-ATTACK4_FX_EDGE_COLOR   = Color3.fromRGB(41, 128, 255)
-
--- Spot in the palm where the charge sits (same place as Charge()).
-function A4FX_Hand()
-	if RightArm and RightArm.Parent then
-		return (RightArm.CFrame * CFrame.new(0, -1.35, 0)).Position
-	end
-	return HumanoidRootPart.Position + HumanoidRootPart.CFrame.LookVector * 2
-end
-
-function A4FX_Part(name, shape, size, color, transparency, parent)
-	local part = Instance.new("Part")
-	part.Name = name
-	part.Shape = shape
-	part.Size = size
-	part.Color = color
-	part.Material = Enum.Material.Neon
-	part.Transparency = transparency
-	part.Anchored = true
-	part.CanCollide = false
-	part.CanQuery = false
-	part.CanTouch = false
-	part.CastShadow = false
-	part.Massless = true
-	part.Parent = parent
-	return part
-end
-
-function A4FX_Anchor(name, parent)
-	local part = Instance.new("Part")
-	part.Name = name
-	part.Size = Vector3.new(0.1, 0.1, 0.1)
-	part.Transparency = 1
-	part.Anchored = true
-	part.CanCollide = false
-	part.CanQuery = false
-	part.CanTouch = false
-	part.CastShadow = false
-	part.Massless = true
-	part.Parent = parent
-	return part
-end
-
--- CFrame at `position` whose -Z (Front) looks along `direction`. Safe for straight up / down.
-function A4FX_LookFrame(position, direction)
-	local dir = direction.Magnitude > 0.0001 and direction.Unit or Vector3.new(0, 0, -1)
-	local upVector = math.abs(dir.Y) > 0.98 and Vector3.xAxis or Vector3.yAxis
-	return CFrame.lookAt(position, position + dir, upVector)
-end
-
--- Same, but the LOCAL X axis points along `direction` (cylinders are long on X).
-function A4FX_Frame(position, direction)
-	return A4FX_LookFrame(position, direction) * CFrame.Angles(0, math.pi / 2, 0)
-end
-
--- Raycast that skips invisible, non-colliding parts (zones, triggers, invisible walls).
-function A4FX_Cast(origin, direction, ignore)
-	local list = table.clone(ignore)
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Exclude
-	params.IgnoreWater = true
-	for _ = 1, 5 do
-		params.FilterDescendantsInstances = list
-		local result = workspace:Raycast(origin, direction, params)
-		if not result then
-			return nil
-		end
-		local hit = result.Instance
-		if hit.Transparency >= 0.95 and not hit.CanCollide then
-			table.insert(list, hit)
-		else
-			return result
-		end
-	end
-	return nil
-end
-
-function A4FX_IgnoreList(extra)
-	local list = { LocalPlayer.Character or Character }
-	local thrown = workspace:FindFirstChild("Thrown")
-	if thrown then
-		table.insert(list, thrown)
-	end
-	for _, wall in ipairs(game:GetService("CollectionService"):GetTagged("InvisibleWalls")) do
-		table.insert(list, wall)
-	end
-	for _, instance in ipairs(extra or {}) do
-		table.insert(list, instance)
-	end
-	return list
-end
-
--- Real color + material of whatever the ray hit (terrain included).
-function A4FX_SurfaceColor(result)
-	local instance = result.Instance
-	if instance:IsA("Terrain") then
-		local ok, color = pcall(function()
-			return workspace.Terrain:GetMaterialColor(result.Material)
-		end)
-		return (ok and color) or Color3.fromRGB(120, 110, 100), result.Material
-	end
-	return instance.Color, result.Material
-end
-
--- Flat ring that expands and fades (shockwave).
-function A4FX_Ring(parent, cframe, startDiameter, endDiameter, thickness, life, color, startTransparency)
-	local ring = A4FX_Part("Ring", Enum.PartType.Cylinder, Vector3.new(thickness, startDiameter, startDiameter), color, startTransparency or 0.15, parent)
-	ring.CFrame = cframe
-	local info = TweenInfo.new(life, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
-	game:GetService("TweenService"):Create(ring, info, {
-		Size = Vector3.new(thickness, endDiameter, endDiameter),
-		Transparency = 1,
-	}):Play()
-	game:GetService("Debris"):AddItem(ring, life + 0.1)
-	return ring
-end
-
--- Short-lived jagged lightning bolt (beam segments between jittered attachments).
-function A4FX_Bolt(parent, startPos, direction, boltLength, jitter, haloColor, coreColor, rng)
-	local segments = 5
-	local anchor = A4FX_Anchor("Bolt", parent)
-	anchor.CFrame = CFrame.new(startPos)
-
-	local sideA = direction:Cross(Vector3.yAxis)
-	if sideA.Magnitude < 0.01 then
-		sideA = Vector3.xAxis
-	end
-	sideA = sideA.Unit
-	local sideB = direction:Cross(sideA).Unit
-
-	local attachments = {}
-	for index = 0, segments do
-		local attachment = Instance.new("Attachment")
-		local wobble = (index == 0 or index == segments) and 0 or jitter
-		attachment.Position = direction * (boltLength * index / segments)
-			+ sideA * rng:NextNumber(-wobble, wobble)
-			+ sideB * rng:NextNumber(-wobble, wobble)
-		attachment.Parent = anchor
-		attachments[index + 1] = attachment
-	end
-
-	for index = 1, segments do
-		for layer = 1, 2 do
-			local beam = Instance.new("Beam")
-			beam.Attachment0 = attachments[index]
-			beam.Attachment1 = attachments[index + 1]
-			beam.FaceCamera = true
-			beam.Segments = 1
-			beam.LightEmission = 1
-			beam.LightInfluence = 0
-			beam.Color = ColorSequence.new(layer == 1 and haloColor or coreColor)
-			local width = layer == 1 and 0.6 or 0.2
-			beam.Width0 = width
-			beam.Width1 = width
-			beam.Transparency = NumberSequence.new(layer == 1 and 0.35 or 0)
-			beam.Parent = anchor
-		end
-	end
-
-	game:GetService("Debris"):AddItem(anchor, 0.09)
-end
-
--- ---------- CHARGE (runs during Charge(0.6)) ----------
--- Orb that grows in the palm + energy streaks spiraling into it. Call release() when the charge ends, abort() to kill it.
-function StartAttack4ChargeFX(handFn, chargeSeconds)
-	local runService = game:GetService("RunService")
-	local tweenService = game:GetService("TweenService")
-	local debris = game:GetService("Debris")
-	local quality = math.clamp(ATTACK4_FX_QUALITY or 1, 0.4, 1)
-	local CORE, MID = ATTACK4_FX_CORE_COLOR, ATTACK4_FX_MID_COLOR
-	local rng = Random.new()
-	local controller = { finished = false }
-
-	local folder = Instance.new("Folder")
-	folder.Name = "Attack4ChargeFX"
-	folder.Parent = workspace
-	debris:AddItem(folder, 2.5) -- failsafe
-
-	local duration = chargeSeconds or 0.6
-	local startTime = os.clock()
-
-	local orbShell = A4FX_Part("OrbShell", Enum.PartType.Ball, Vector3.one * 0.6, MID, 0.5, folder)
-	local orbCore = A4FX_Part("OrbCore", Enum.PartType.Ball, Vector3.one * 0.4, CORE, 0, folder)
-	local light = Instance.new("PointLight")
-	light.Color = MID
-	light.Range = 6
-	light.Brightness = 1
-	light.Shadows = false
-	light.Parent = orbCore
-
-	local streaks = {}
-	local streakCount = math.floor(22 * quality)
-	local nextStreak = 1
-	local connection
-
-	local function stopLoop()
-		if controller.finished then
-			return
-		end
-		controller.finished = true
-		if connection then
-			connection:Disconnect()
-		end
-	end
-
-	local function step()
-		if controller.finished then
-			return
-		end
-		local elapsed = os.clock() - startTime
-		local hand = handFn()
-		local progress = math.clamp(elapsed / duration, 0, 1)
-
-		-- orb: slow start, fast finish, with a tremble that gets stronger as it charges
-		local size = 0.4 + 3.4 * progress ^ 1.8
-		local tremble = 0.08 * progress
-		local jitter = Vector3.new(rng:NextNumber(-tremble, tremble), rng:NextNumber(-tremble, tremble), rng:NextNumber(-tremble, tremble))
-		local pulse = 1 + 0.07 * math.sin(elapsed * 70)
-		orbShell.Size = Vector3.one * (size * 1.6 * pulse)
-		orbShell.Position = hand + jitter
-		orbCore.Size = Vector3.one * (size * pulse)
-		orbCore.Position = hand + jitter
-		light.Range = 6 + 16 * progress
-		light.Brightness = 1 + 3 * progress
-
-		-- streaks: spawned over the first ~0.36s, each flies in along an accelerating spiral
-		while nextStreak <= streakCount and elapsed >= (nextStreak - 1) / streakCount * duration * 0.6 do
-			nextStreak += 1
-			local direction = Vector3.new(rng:NextNumber(-1, 1), rng:NextNumber(-0.5, 1), rng:NextNumber(-1, 1))
-			if direction.Magnitude < 0.25 then
-				direction = Vector3.yAxis
-			end
-
-			local part = A4FX_Part("Streak", Enum.PartType.Block, Vector3.new(0.2, 0.2, 0.2), CORE, 1, folder)
-			local attachment0 = Instance.new("Attachment")
-			attachment0.Position = Vector3.new(0, 0.3, 0)
-			attachment0.Parent = part
-			local attachment1 = Instance.new("Attachment")
-			attachment1.Position = Vector3.new(0, -0.3, 0)
-			attachment1.Parent = part
-
-			local trail = Instance.new("Trail")
-			trail.Attachment0 = attachment0
-			trail.Attachment1 = attachment1
-			trail.Lifetime = 0.16
-			trail.LightEmission = 1
-			trail.LightInfluence = 0
-			trail.FaceCamera = true
-			trail.Color = ColorSequence.new(CORE, MID)
-			trail.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) })
-			trail.WidthScale = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(1, 0) })
-			trail.Parent = part
-
-			table.insert(streaks, {
-				part = part,
-				direction = direction.Unit,
-				radius = rng:NextNumber(9, 16),
-				born = elapsed,
-				life = math.max(0.14, math.min(rng:NextNumber(0.2, 0.3), duration - elapsed)),
-			})
-		end
-
-		for index = #streaks, 1, -1 do
-			local streak = streaks[index]
-			local t = (elapsed - streak.born) / streak.life
-			if t >= 1 then
-				streak.part:Destroy()
-				table.remove(streaks, index)
-			else
-				local swirl = CFrame.Angles(0, t * 1.3, 0)
-				streak.part.Position = hand + swirl:VectorToWorldSpace(streak.direction) * streak.radius * (1 - t * t)
-			end
-		end
-	end
-
-	step() -- place everything right away so nothing flashes at the world origin for a frame
-	connection = runService.Heartbeat:Connect(step)
-
-	function controller.release()
-		if controller.finished then
-			return
-		end
-		stopLoop()
-		for _, streak in ipairs(streaks) do
-			streak.part:Destroy()
-		end
-		table.clear(streaks)
-		-- the orb pops as the beam leaves
-		local info = TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-		tweenService:Create(orbShell, info, { Size = orbShell.Size * 1.8, Transparency = 1 }):Play()
-		tweenService:Create(orbCore, info, { Size = orbCore.Size * 0.4, Transparency = 1 }):Play()
-		tweenService:Create(light, info, { Brightness = 0 }):Play()
-		debris:AddItem(folder, 0.3)
-	end
-
-	function controller.abort()
-		stopLoop()
-		folder:Destroy()
-	end
-
-	task.delay(1.5, controller.abort) -- failsafe
-	return controller
-end
-
--- ---------- BEAM (spawned together with the beam model) ----------
--- Returns a controller: fade(seconds) when the beam starts to fade, abort() to remove everything instantly.
-function PlayAttack4BeamFX(model)
-	local runService = game:GetService("RunService")
-	local tweenService = game:GetService("TweenService")
-	local debris = game:GetService("Debris")
-	local lighting = game:GetService("Lighting")
-	local quality = math.clamp(ATTACK4_FX_QUALITY or 1, 0.4, 1)
-	local CORE, MID, EDGE = ATTACK4_FX_CORE_COLOR, ATTACK4_FX_MID_COLOR, ATTACK4_FX_EDGE_COLOR
-	local rng = Random.new()
-	local controller = { finished = false }
-
-	local root = HumanoidRootPart
-	local rootCF = root.CFrame
-	local aim0 = rootCF.LookVector
-	local right0, up0 = rootCF.RightVector, rootCF.UpVector
-	local hand0 = A4FX_Hand()
-
-	-- 1) Measure the beam model along our aim so the overlay matches its real size and sits on its real axis.
-	local maxForward = 0
-	local lateralValues, verticalValues, radiusValues = {}, {}, {}
-	for _, descendant in ipairs(model:GetDescendants()) do
-		if descendant:IsA("BasePart") and descendant.Transparency < 0.95 then
-			local cf, size = descendant.CFrame, descendant.Size
-			local function halfAlong(axis)
-				return 0.5 * (math.abs(axis:Dot(cf.RightVector)) * size.X
-					+ math.abs(axis:Dot(cf.UpVector)) * size.Y
-					+ math.abs(axis:Dot(cf.LookVector)) * size.Z)
-			end
-			local relative = cf.Position - hand0
-			maxForward = math.max(maxForward, relative:Dot(aim0) + halfAlong(aim0))
-			table.insert(lateralValues, relative:Dot(right0))
-			table.insert(verticalValues, relative:Dot(up0))
-			table.insert(radiusValues, math.max(halfAlong(right0), halfAlong(up0)))
-		end
-	end
-	local function median(values)
-		if #values == 0 then
-			return nil
-		end
-		table.sort(values)
-		return values[math.ceil(#values / 2)]
-	end
-
-	local beamLength = ATTACK4_FX_BEAM_LENGTH or ((maxForward >= 25) and math.min(maxForward, 220) or 90)
-	local measuredRadius = median(radiusValues)
-	local beamRadius = ATTACK4_FX_BEAM_RADIUS or ((measuredRadius and measuredRadius >= 1) and math.clamp(measuredRadius, 1.5, 10) or 4)
-
-	local axisLateral = median(lateralValues) or 0
-	local axisVertical = median(verticalValues) or 0
-	if math.abs(axisLateral) > 4 then axisLateral = 0 end
-	if math.abs(axisVertical) > 4 then axisVertical = 0 end
-	local nudge = ATTACK4_FX_AXIS_NUDGE or Vector3.zero
-	local muzzleWorld0 = hand0 + right0 * axisLateral + up0 * axisVertical + rootCF:VectorToWorldSpace(nudge)
-	local muzzleLocal = rootCF:PointToObjectSpace(muzzleWorld0) -- locked to the character, same as the model
-
-	-- 2) Keep the beam model glued to the character so it always points where we point.
-	local follow = {}
-	if ATTACK4_FX_BEAM_FOLLOWS ~= false then
-		for _, descendant in ipairs(model:GetDescendants()) do
-			if descendant:IsA("BasePart") then
-				follow[descendant] = rootCF:ToObjectSpace(descendant.CFrame)
-			end
-		end
-	end
-
-	local folder = Instance.new("Folder")
-	folder.Name = "Attack4BeamFX"
-	folder.Parent = workspace
-	local debrisFolder = Instance.new("Folder") -- rings / dust / shards: outlive the beam a little
-	debrisFolder.Name = "Attack4BeamDebris"
-	debrisFolder.Parent = workspace
-	debris:AddItem(folder, 4)
-	debris:AddItem(debrisFolder, 4)
-
-	local ignore = A4FX_IgnoreList({ model, folder, debrisFolder })
-
-	-- 3) Build the pieces.
-	local coreDiameter = beamRadius * 0.9
-	local shellDiameter = beamRadius * 1.5
-	local ringThickness = math.max(0.35, beamRadius * 0.12)
-	local beamCore = A4FX_Part("BeamCore", Enum.PartType.Cylinder, Vector3.new(1, coreDiameter, coreDiameter), CORE, 0.2, folder)
-	local beamShell = A4FX_Part("BeamShell", Enum.PartType.Cylinder, Vector3.new(1, shellDiameter, shellDiameter), MID, 0.6, folder)
-
-	local muzzleCore = A4FX_Part("MuzzleCore", Enum.PartType.Ball, Vector3.one * beamRadius, CORE, 0.05, folder)
-	local muzzleShell = A4FX_Part("MuzzleShell", Enum.PartType.Ball, Vector3.one * beamRadius * 2, MID, 0.55, folder)
-	local muzzleLight = Instance.new("PointLight")
-	muzzleLight.Color = MID
-	muzzleLight.Range = 14 + beamRadius * 4
-	muzzleLight.Brightness = 5
-	muzzleLight.Shadows = false
-	muzzleLight.Parent = muzzleCore
-
-	local muzzleAnchor = A4FX_Anchor("MuzzleEmitter", folder)
-	local muzzleAttachment = Instance.new("Attachment")
-	muzzleAttachment.Parent = muzzleAnchor
-
-	local sparks = Instance.new("ParticleEmitter")
-	sparks.Texture = "rbxassetid://1084976679"
-	sparks.Color = ColorSequence.new(CORE, MID)
-	sparks.LightEmission = 1
-	sparks.LightInfluence = 0
-	sparks.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.9), NumberSequenceKeypoint.new(1, 0.1) })
-	sparks.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(0.7, 0.2), NumberSequenceKeypoint.new(1, 1) })
-	sparks.Lifetime = NumberRange.new(0.25, 0.5)
-	sparks.Speed = NumberRange.new(80, 170)
-	sparks.SpreadAngle = Vector2.new(12, 12)
-	sparks.EmissionDirection = Enum.NormalId.Front
-	sparks.Rate = 170 * quality
-	sparks.LockedToPart = false
-	sparks.Parent = muzzleAttachment
-
-	local flash = Instance.new("ParticleEmitter") -- one big soft flash at the moment the beam leaves
-	flash.Texture = "rbxassetid://1084999891"
-	flash.Color = ColorSequence.new(CORE, MID)
-	flash.LightEmission = 1
-	flash.LightInfluence = 0
-	flash.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, beamRadius * 3), NumberSequenceKeypoint.new(1, beamRadius * 11) })
-	flash.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.1), NumberSequenceKeypoint.new(1, 1) })
-	flash.Lifetime = NumberRange.new(0.28, 0.28)
-	flash.Speed = NumberRange.new(0, 0)
-	flash.Rate = 0
-	flash.LockedToPart = true
-	flash.Parent = muzzleAttachment
-
-	-- impact (follows wherever the beam ends)
-	local impactAnchor = A4FX_Anchor("ImpactEmitter", folder)
-	local impactAttachment = Instance.new("Attachment")
-	impactAttachment.Parent = impactAnchor
-
-	local impactSparks = Instance.new("ParticleEmitter")
-	impactSparks.Texture = "rbxassetid://1084976679"
-	impactSparks.Color = ColorSequence.new(CORE, MID)
-	impactSparks.LightEmission = 1
-	impactSparks.LightInfluence = 0
-	impactSparks.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.7), NumberSequenceKeypoint.new(1, 0.1) })
-	impactSparks.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) })
-	impactSparks.Lifetime = NumberRange.new(0.3, 0.6)
-	impactSparks.Speed = NumberRange.new(35, 85)
-	impactSparks.SpreadAngle = Vector2.new(50, 50)
-	impactSparks.EmissionDirection = Enum.NormalId.Front
-	impactSparks.Acceleration = Vector3.new(0, -55, 0)
-	impactSparks.Rate = 110 * quality
-	impactSparks.Enabled = false
-	impactSparks.Parent = impactAttachment
-
-	local impactDust = Instance.new("ParticleEmitter")
-	impactDust.Texture = "rbxassetid://272050333"
-	impactDust.LightEmission = 0
-	impactDust.LightInfluence = 1
-	impactDust.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 3), NumberSequenceKeypoint.new(1, 9) })
-	impactDust.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.55), NumberSequenceKeypoint.new(1, 1) })
-	impactDust.Lifetime = NumberRange.new(0.6, 1)
-	impactDust.Speed = NumberRange.new(8, 22)
-	impactDust.SpreadAngle = Vector2.new(70, 70)
-	impactDust.EmissionDirection = Enum.NormalId.Front
-	impactDust.Acceleration = Vector3.new(0, 6, 0)
-	impactDust.Rate = 40 * quality
-	impactDust.Enabled = false
-	impactDust.Parent = impactAttachment
-
-	local impactFlash = A4FX_Part("ImpactFlash", Enum.PartType.Ball, Vector3.one * beamRadius, CORE, 1, folder)
-	local impactGlow = A4FX_Part("ImpactGlow", Enum.PartType.Ball, Vector3.one * beamRadius * 2, MID, 1, folder)
-	local impactLight = Instance.new("PointLight")
-	impactLight.Color = MID
-	impactLight.Range = 22
-	impactLight.Brightness = 0
-	impactLight.Shadows = false
-	impactLight.Parent = impactFlash
-
-	-- 4) Helpers that throw dust / shards (real surface color + material, kept small).
-	local function dustPuff(position, color, count, speed)
-		local anchor = A4FX_Anchor("DustPuff", debrisFolder)
-		anchor.CFrame = CFrame.new(position)
-		local attachment = Instance.new("Attachment")
-		attachment.Parent = anchor
-		local emitter = Instance.new("ParticleEmitter")
-		emitter.Texture = "rbxassetid://272050333"
-		emitter.Color = ColorSequence.new(color:Lerp(Color3.fromRGB(170, 170, 170), 0.45))
-		emitter.LightEmission = 0
-		emitter.LightInfluence = 1
-		emitter.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 3), NumberSequenceKeypoint.new(1, 10) })
-		emitter.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.45), NumberSequenceKeypoint.new(1, 1) })
-		emitter.Lifetime = NumberRange.new(0.6, 1.1)
-		emitter.Speed = NumberRange.new(speed * 0.4, speed)
-		emitter.SpreadAngle = Vector2.new(75, 75)
-		emitter.EmissionDirection = Enum.NormalId.Top
-		emitter.Drag = 4
-		emitter.Rate = 0
-		emitter.Parent = attachment
-		emitter:Emit(count)
-		debris:AddItem(anchor, 1.6)
-	end
-
-	local function throwShards(origin, normal, color, material, count, speedMin, speedMax)
-		for _ = 1, count do
-			local size = rng:NextNumber(0.25, 0.7)
-			local shard = Instance.new("Part")
-			shard.Name = "Shard"
-			shard.Size = Vector3.new(size * rng:NextNumber(0.7, 1.3), size, size * rng:NextNumber(0.7, 1.3))
-			shard.Color = color
-			shard.Material = material
-			shard.Anchored = false
-			shard.CanCollide = false
-			shard.CanQuery = false
-			shard.CanTouch = false
-			shard.CastShadow = false
-			shard.CFrame = CFrame.new(origin + normal * 0.3 + Vector3.new(rng:NextNumber(-1.5, 1.5), 0, rng:NextNumber(-1.5, 1.5)))
-				* CFrame.Angles(rng:NextNumber(0, 6), rng:NextNumber(0, 6), 0)
-			shard.Parent = debrisFolder
-
-			local push = normal * rng:NextNumber(0.9, 1.5) + Vector3.new(rng:NextNumber(-1, 1), rng:NextNumber(0.2, 1), rng:NextNumber(-1, 1))
-			if push.Magnitude < 0.1 then
-				push = Vector3.yAxis
-			end
-			shard.AssemblyLinearVelocity = push.Unit * rng:NextNumber(speedMin, speedMax)
-			shard.AssemblyAngularVelocity = Vector3.new(rng:NextNumber(-20, 20), rng:NextNumber(-20, 20), rng:NextNumber(-20, 20))
-
-			tweenService:Create(shard, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.In, 0, false, 0.6), {
-				Size = Vector3.new(0.05, 0.05, 0.05),
-			}):Play()
-			debris:AddItem(shard, 1.3)
-		end
-	end
-
-	-- 5) Launch burst: flash, two shockwaves, and a ground shockwave + dust + shards if the ground is close.
-	flash:Emit(1)
-	A4FX_Ring(debrisFolder, A4FX_Frame(muzzleWorld0 + aim0 * 1.5, aim0), beamRadius * 1.5, beamRadius * 13, ringThickness, 0.4, CORE, 0.1)
-	task.delay(0.06, function()
-		A4FX_Ring(debrisFolder, A4FX_Frame(muzzleWorld0 + aim0 * 2.5, aim0), beamRadius * 1.5, beamRadius * 18, ringThickness, 0.5, MID, 0.25)
-	end)
-
-	if ATTACK4_FX_GROUND ~= false then
-		local groundHit = A4FX_Cast(root.Position, Vector3.new(0, -18, 0), ignore)
-		if groundHit then
-			local color, material = A4FX_SurfaceColor(groundHit)
-			local ringFrame = A4FX_Frame(groundHit.Position + groundHit.Normal * 0.15, groundHit.Normal)
-			A4FX_Ring(debrisFolder, ringFrame, 3, 56, 0.4, 0.45, MID, 0.2)
-			task.delay(0.07, function()
-				A4FX_Ring(debrisFolder, ringFrame, 3, 36, 0.3, 0.35, CORE, 0.2)
-			end)
-			dustPuff(groundHit.Position, color, math.floor(24 * quality), 45)
-			throwShards(groundHit.Position, groundHit.Normal, color, material, math.floor(14 * quality), 22, 52)
-		end
-	end
-
-	-- 6) Bloom pulse.
-	local bloom
-	if ATTACK4_FX_BLOOM ~= false then
-		bloom = Instance.new("BloomEffect")
-		bloom.Name = "Attack4BeamBloom"
-		bloom.Intensity = 0
-		bloom.Size = 24
-		bloom.Threshold = 0.95
-		bloom.Parent = lighting
-		tweenService:Create(bloom, TweenInfo.new(0.06, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Intensity = 0.9 }):Play()
-	end
-
-	-- 7) Per-frame update.
-	local startTime = os.clock()
-	local launchTime = 0.07
-	local fadeStart, fadeDuration
-	local rings = {}
-	local ringIndex = 0
-	local nextRing, nextBolt, nextTrail, nextImpactRing = 0, 0, 0, 0
-	local hadHit = false
-	local lastHitInstance, hitColor, hitMaterial
-	local hitIsCharacter = false
-	local connection
-
-	local function cleanup()
-		if controller.finished then
-			return
-		end
-		controller.finished = true
-		if connection then
-			connection:Disconnect()
-		end
-		if bloom then
-			bloom:Destroy()
-		end
-		folder:Destroy() -- debrisFolder is left to the Debris service so shards / rings can finish
-	end
-
-	local function step()
-		if controller.finished then
-			return
-		end
-		if not root.Parent or not model.Parent then
-			cleanup()
-			return
-		end
-
-		local now = os.clock()
-		local elapsed = now - startTime
-		local fadeAlpha = 0
-		if fadeStart then
-			fadeAlpha = math.clamp((now - fadeStart) / fadeDuration, 0, 1)
-			if fadeAlpha >= 1 then
-				cleanup()
-				return
-			end
-		end
-		local keep = 1 - fadeAlpha
-
-		local currentCF = root.CFrame
-		local aim = currentCF.LookVector
-		local muzzle = currentCF * muzzleLocal
-
-		for part, relative in pairs(follow) do
-			if part.Parent then
-				part.CFrame = currentCF * relative
-			end
-		end
-
-		-- where the beam REALLY ends
-		local hit = A4FX_Cast(muzzle, aim * beamLength, ignore)
-		local length = hit and math.max((hit.Position - muzzle).Magnitude, 1) or beamLength
-
-		local launch = math.clamp(elapsed / launchTime, 0, 1)
-		local launchEase = 1 - (1 - launch) * (1 - launch)
-		local visibleLength = math.max(length * launchEase, 0.5)
-		local flicker = 1 + math.noise(elapsed * 38, 3.1, 0.5) * 0.35
-
-		-- core + shell (shoot out fast, then shimmer)
-		beamCore.Size = Vector3.new(visibleLength, coreDiameter * flicker, coreDiameter * flicker)
-		beamCore.CFrame = A4FX_Frame(muzzle + aim * (visibleLength / 2), aim)
-		beamCore.Transparency = 0.2 + 0.8 * fadeAlpha
-		beamShell.Size = Vector3.new(visibleLength, shellDiameter * (2 - flicker), shellDiameter * (2 - flicker))
-		beamShell.CFrame = beamCore.CFrame
-		beamShell.Transparency = 0.6 + 0.4 * fadeAlpha
-
-		-- muzzle orb: starts big and settles
-		local pop = 1 + 1.2 * math.max(0, 1 - elapsed / 0.15)
-		local orbSize = beamRadius * 1.6 * pop * flicker
-		muzzleCore.Size = Vector3.one * orbSize
-		muzzleCore.Position = muzzle
-		muzzleCore.Transparency = 0.05 + 0.95 * fadeAlpha
-		muzzleShell.Size = Vector3.one * (orbSize * 1.7)
-		muzzleShell.Position = muzzle
-		muzzleShell.Transparency = 0.55 + 0.45 * fadeAlpha
-		muzzleLight.Brightness = 5 * keep
-		muzzleAnchor.CFrame = A4FX_LookFrame(muzzle, aim)
-
-		-- pulse rings racing down the beam
-		if not fadeStart and elapsed >= nextRing then
-			nextRing = elapsed + 0.07
-			if #rings < 10 then
-				ringIndex += 1
-				table.insert(rings, {
-					part = A4FX_Part("PulseRing", Enum.PartType.Cylinder, Vector3.new(ringThickness, beamRadius * 2.3, beamRadius * 2.3), (ringIndex % 2 == 0) and CORE or MID, 0.2, folder),
-					born = elapsed,
-				})
-			end
-		end
-		for index = #rings, 1, -1 do
-			local ring = rings[index]
-			local age = (elapsed - ring.born) / 0.26
-			local distance = length * age
-			if age >= 1 or distance >= length then
-				ring.part:Destroy()
-				table.remove(rings, index)
-			else
-				local diameter = beamRadius * 2.3 * (0.85 + 0.45 * age)
-				ring.part.Size = Vector3.new(ringThickness, diameter, diameter)
-				ring.part.CFrame = A4FX_Frame(muzzle + aim * distance, aim)
-				ring.part.Transparency = math.clamp(0.2 + 0.8 * age * age + fadeAlpha, 0, 1)
-			end
-		end
-
-		-- lightning crackling around the beam
-		if not fadeStart and elapsed >= nextBolt then
-			nextBolt = elapsed + 0.05
-			local aimRight = aim:Cross(Vector3.yAxis)
-			if aimRight.Magnitude < 0.01 then
-				aimRight = Vector3.xAxis
-			end
-			aimRight = aimRight.Unit
-			local aimUp = aimRight:Cross(aim).Unit
-			for _ = 1, math.max(1, math.floor(2 * quality + 0.5)) do
-				local angle = rng:NextNumber(0, math.pi * 2)
-				local radial = aimRight * math.cos(angle) + aimUp * math.sin(angle)
-				local startAt = muzzle + aim * (rng:NextNumber(0.03, 0.92) * length) + radial * (beamRadius * rng:NextNumber(0.75, 1.25))
-				local direction = (aim * rng:NextNumber(0.6, 1) + radial * rng:NextNumber(-0.1, 0.9)).Unit
-				A4FX_Bolt(folder, startAt, direction, rng:NextNumber(6, 15), beamRadius * 0.35, MID, CORE, rng)
-			end
-		end
-
-		-- impact exactly where the beam ends
-		if hit then
-			local normal = hit.Normal
-			impactAnchor.CFrame = A4FX_LookFrame(hit.Position, normal)
-
-			if hit.Instance ~= lastHitInstance then
-				lastHitInstance = hit.Instance
-				hitColor, hitMaterial = A4FX_SurfaceColor(hit)
-				local owner = hit.Instance:FindFirstAncestorOfClass("Model")
-				hitIsCharacter = owner ~= nil and owner:FindFirstChildOfClass("Humanoid") ~= nil
-				impactDust.Color = ColorSequence.new(hitColor:Lerp(Color3.fromRGB(170, 170, 170), 0.45))
-			end
-
-			impactSparks.Enabled = not fadeStart
-			impactDust.Enabled = (not fadeStart) and not hitIsCharacter
-
-			local impactSize = beamRadius * 2.2 * flicker
-			impactFlash.Size = Vector3.one * impactSize
-			impactFlash.Position = hit.Position + normal * (impactSize * 0.2)
-			impactFlash.Transparency = 0.2 + 0.8 * fadeAlpha
-			impactGlow.Size = Vector3.one * (impactSize * 1.8)
-			impactGlow.Position = impactFlash.Position
-			impactGlow.Transparency = 0.6 + 0.4 * fadeAlpha
-			impactLight.Brightness = 4 * keep
-
-			if not hadHit then
-				hadHit = true
-				A4FX_Ring(debrisFolder, A4FX_Frame(hit.Position + normal * 0.2, normal), beamRadius * 1.5, beamRadius * 14, ringThickness, 0.45, CORE, 0.1)
-				impactSparks:Emit(math.floor(40 * quality))
-				if not hitIsCharacter then
-					dustPuff(hit.Position, hitColor, math.floor(20 * quality), 40)
-					throwShards(hit.Position, normal, hitColor, hitMaterial, math.floor(12 * quality), 25, 55)
-				end
-			end
-			if not fadeStart and elapsed >= nextImpactRing then
-				nextImpactRing = elapsed + 0.14
-				A4FX_Ring(debrisFolder, A4FX_Frame(hit.Position + normal * 0.2, normal), beamRadius, beamRadius * 6, ringThickness * 0.8, 0.3, MID, 0.35)
-			end
-		else
-			impactSparks.Enabled = false
-			impactDust.Enabled = false
-			impactFlash.Transparency = 1
-			impactGlow.Transparency = 1
-			impactLight.Brightness = 0
-		end
-
-		-- dust + shards kicked up along the beam's path when it runs close to the ground
-		if ATTACK4_FX_GROUND ~= false and not fadeStart and elapsed >= nextTrail then
-			nextTrail = elapsed + 0.07
-			local low = math.min(5, length)
-			local high = math.max(low, math.min(length, 70))
-			local probe = muzzle + aim * rng:NextNumber(low, high)
-			local ground = A4FX_Cast(probe + Vector3.new(0, 4, 0), Vector3.new(0, -34, 0), ignore)
-			if ground and (probe.Y - ground.Position.Y) < 24 then
-				local owner = ground.Instance:FindFirstAncestorOfClass("Model")
-				if not (owner and owner:FindFirstChildOfClass("Humanoid")) then
-					local color, material = A4FX_SurfaceColor(ground)
-					dustPuff(ground.Position, color, math.floor(5 * quality + 0.5), 26)
-					throwShards(ground.Position, ground.Normal, color, material, math.floor(3 * quality + 0.5), 18, 40)
-				end
-			end
-		end
-	end
-
-	step() -- place everything right away so nothing flashes at the world origin for a frame
-	connection = runService.Heartbeat:Connect(step)
-
-	function controller.fade(duration)
-		if controller.finished or fadeStart then
-			return
-		end
-		fadeStart = os.clock()
-		fadeDuration = math.max(duration or 0.3, 0.05)
-		sparks.Enabled = false
-		if bloom then
-			tweenService:Create(bloom, TweenInfo.new(fadeDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Intensity = 0 }):Play()
-		end
-	end
-
-	function controller.abort()
-		cleanup()
-	end
-
-	task.delay(3, cleanup) -- failsafe
-	return controller
 end
 
 -- ================= PLANET EXPLOSION V3 (embedded) =================
@@ -2619,15 +1434,9 @@ do
 		end
 	end
 
-	function PlayAttack4Anim()
-		if _attack4KFS then
-			-- Instance path: Animator6D → findKFS → AnimPlayer.new, no loading at all
-			Animator6D(_attack4KFS, 1, false)
-		else
-			warn("[Animator6D] Attack4 KFS not built — cannot play")
-		end
-	end
+	ATTACK4_KFS = _attack4KFS -- shared; PlayAttack4Anim (per player, in BuildActorLibrary) plays it on the right character
 end
+
 
 _gc_partPool          = {}
 _gc_sweepTick         = tick()
@@ -3765,8 +2574,1251 @@ function GroundCrater(params)
 		return;
 	end;
 end
+
+-- =====================================================================================================
+--  PER-PLAYER ATTACK LIBRARY
+--  Everything below is built once per player (see "PER-PLAYER INSTANCES" further down). Inside it:
+--    LocalPlayer / Character / Humanoid / HumanoidRootPart / Animator / RightArm  = the player the attack belongs to
+--    ACTOR_IS_LOCAL = true  -> that player is YOU: full effects, camera, lighting, flashes, finisher cutscene
+--    ACTOR_IS_LOCAL = false -> somebody else: only the world effects (character animation, ki, beams, sounds, hitboxes).
+--                              Nothing touches your camera / lighting / screen, and nothing moves, pushes or teleports their character
+--                              (their own client does that for them).
+-- =====================================================================================================
+local function BuildActorLibrary()
+function PlaySound(id, volume, minDist, maxDist)
+	sound = Instance.new("Sound")
+	sound.SoundId = id
+	sound.Volume = volume
+	sound.RollOffMinDistance = minDist
+	sound.RollOffMaxDistance = maxDist
+	sound.Parent = HumanoidRootPart
+	sound:Play()
+	game:GetService("Debris"):AddItem(sound, 10)
+	return sound
+end
+
+-- Sound loader. Your own sounds are played like before; another player's sounds come from THEIR character (positional) and clean themselves up.
+local function GetGitSound(url, name, volume, keep)
+	local sound = GetGitSoundBase(url, name, volume)
+	if not ACTOR_IS_LOCAL then
+		sound.Parent = HumanoidRootPart
+		sound.RollOffMinDistance = 10
+		sound.RollOffMaxDistance = 150
+		if not keep then game:GetService("Debris"):AddItem(sound, 30) end
+	end
+	return sound
+end
+
+-- Attack 4 animation (the keyframes are built once, up in the shared section)
+function PlayAttack4Anim()
+	if ATTACK4_KFS then
+		Animator6D(ATTACK4_KFS, 1, false, Character) -- Character is passed so the module animates THIS player
+	else
+		warn("[Animator6D] Attack4 KFS not built - cannot play")
+	end
+end
+
+function StartAttack4Hitbox(duration)
+	local state = { triggered = false }
+	local char = LocalPlayer.Character or Character
+	local root = (char and char:FindFirstChild("HumanoidRootPart")) or HumanoidRootPart
+
+	local hitbox = Instance.new("Part")
+	hitbox.Name = "Attack4Hitbox"
+	hitbox.Size = ATTACK4_HITBOX_SIZE
+	hitbox.Anchored = true
+	hitbox.CanCollide, hitbox.CanQuery, hitbox.CanTouch, hitbox.CastShadow = false, false, false, false
+	hitbox.Transparency = ATTACK4_HITBOX_DEBUG and 0.7 or 1
+	hitbox.Color = Color3.new(1, 0, 0)
+	hitbox.Material = Enum.Material.SmoothPlastic
+	hitbox.CFrame = root.CFrame * CFrame.new(0, 0, -ATTACK4_HITBOX_OFFSET)
+	hitbox.Parent = workspace
+
+	local params = OverlapParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { char, hitbox }
+
+	local startTime = os.clock()
+	local conn
+	local function stop()
+		if conn then conn:Disconnect(); conn = nil end
+		if hitbox then hitbox:Destroy(); hitbox = nil end
+	end
+	state.stop = stop
+
+	conn = game:GetService("RunService").Heartbeat:Connect(function()
+		if not hitbox then return end
+		if os.clock() - startTime >= duration then stop() return end
+		hitbox.CFrame = root.CFrame * CFrame.new(0, 0, -ATTACK4_HITBOX_OFFSET) -- rides along with us during the charge
+		for _, part in ipairs(workspace:GetPartBoundsInBox(hitbox.CFrame, hitbox.Size, params)) do
+			local model = part:FindFirstAncestorOfClass("Model")
+			local hum = model and model:FindFirstChildOfClass("Humanoid")
+			local plr = model and Players:GetPlayerFromCharacter(model)
+			local live = workspace:FindFirstChild("Live")
+			local dummy = live and live:FindFirstChild("Weakest Dummy")
+			local isTarget
+			if ACTOR_IS_LOCAL then
+				isTarget = (plr ~= nil and plr ~= LocalPlayer) or (dummy ~= nil and model == dummy)
+			else
+				-- somebody else's Attack 4: their hitbox only matters if it caught US (that is what triggers the finisher on our screen)
+				isTarget = (plr ~= nil and plr == REAL_LOCAL_PLAYER)
+			end
+			if hum and isTarget and hum.Health > 0 and hum.Health <= ATTACK4_FINISHER_HEALTH then
+				state.triggered = true
+				stop() -- destroy the hitbox; the explosion waits for the beam fade
+				return
+			end
+		end
+	end)
+	return state
+end
+
+ATTACK4_ZOOM_FOV             = 55
+ATTACK4_BURST_FOV            = 120
+ATTACK4_SETTLE_FOV           = 80
+ATTACK4_ZOOM_SECONDS         = 0.6
+ATTACK4_BURST_RISE_SECONDS   = 0.08
+ATTACK4_SETTLE_SECONDS       = 0.3
+ATTACK4_RESTORE_SECONDS      = 0.25
+ATTACK4_SHAKE_HOLD_SECONDS   = 0.6
+ATTACK4_SHAKE_FADE_SECONDS   = 0.4
+ATTACK4_SHAKE_POSITION       = 0.7
+ATTACK4_SHAKE_ROTATION       = 0.035
+ATTACK4_SHAKE_SPEED          = 24
+
+-- ================= ATTACK 4 CHARGE LIGHTING =================
+-- Same dark-blue grade Attack 5's cinematic uses (dimmed exposure + blue ambient, tint, contrast, bloom, depth of field),
+-- squeezed into Attack 4's 0.6s charge, plus Attack 5's lens flare sitting on the charge. Both build while the charge
+-- plays and fade back out once the beam spawns.
+ATTACK4_GRADE_RAMP_SECONDS    = 0.6  -- time to reach full strength (matches the charge)
+ATTACK4_GRADE_RELEASE_SECONDS = 0.4  -- time to fade back to normal after the beam spawns
+ATTACK4_GRADE_STRENGTH        = 1    -- multiplier on the whole grade (1 = same strength as Attack 5)
+ATTACK4_FLARE_STRENGTH        = 0.65 -- lens flare brightness (Attack 5 peaks at 0.65; 0 turns the flare off)
+
+attack4LightingController = nil
+
+function StartAttack4Lighting(focusPart, flareSourceFn)
+	if not ACTOR_IS_LOCAL then
+		-- someone else's attack: no grade / flare on OUR screen
+		return { finished = true, orig = {}, release = function() end, abort = function() end }
+	end
+	local Lighting = game:GetService("Lighting")
+	local runService = game:GetService("RunService")
+	local camera = workspace.CurrentCamera
+
+	-- Attack spammed while a grade is still active: end the old one instantly but reuse ITS originals,
+	-- so we never "restore" to an already-darkened Lighting.
+	local orig
+	if attack4LightingController and not attack4LightingController.finished then
+		orig = attack4LightingController.orig
+		attack4LightingController.abort()
+	end
+	orig = orig or { exp = Lighting.ExposureCompensation, amb = Lighting.Ambient, oamb = Lighting.OutdoorAmbient }
+
+	local WHITE     = Color3.new(1, 1, 1)
+	local DARK_BLUE = Color3.fromRGB(25, 40, 95)
+	local TINT      = Color3.fromRGB(165, 205, 255)
+
+	local cc = Instance.new("ColorCorrectionEffect") cc.Name = "Attack4CC" cc.Parent = Lighting
+	local bloom = Instance.new("BloomEffect") bloom.Name = "Attack4Bloom" bloom.Intensity = 0 bloom.Size = 24 bloom.Threshold = 1 bloom.Parent = Lighting
+	local dof = Instance.new("DepthOfFieldEffect") dof.Name = "Attack4DOF" dof.FarIntensity = 0 dof.NearIntensity = 0 dof.FocusDistance = 20 dof.InFocusRadius = 12 dof.Parent = Lighting
+	local sun = Instance.new("SunRaysEffect") sun.Name = "Attack4Sun" sun.Intensity = 0 sun.Spread = 0.7 sun.Parent = Lighting
+
+	-- Lens flare (same emitter stack as Attack 5): sparkle emitters on a hidden rig, placed along the lens axis each frame.
+	local CYAN = Color3.fromRGB(120, 235, 255)
+	local BLUE = Color3.fromRGB(40, 170, 255)
+	local SPARK = "rbxasset://textures/particles/sparkles_main.dds"
+	local FLARE_DEPTH = 4
+	local FLARE_SCALE = FLARE_DEPTH / 13
+
+	local flareRig = Instance.new("Part")
+	flareRig.Name = "Attack4FlareRig"
+	flareRig.Size = Vector3.new(0.05, 0.05, 0.05)
+	flareRig.Anchored = true
+	flareRig.CanCollide = false
+	flareRig.CanQuery = false
+	flareRig.CanTouch = false
+	flareRig.CastShadow = false
+	flareRig.Massless = true
+	flareRig.Material = Enum.Material.Neon
+	flareRig.Transparency = 1
+	flareRig.Parent = workspace
+
+	local flareEm = {}
+	local function addFlare(col, pos, blend, s0, s1, t0, t1, q0, q1)
+		local att = Instance.new("Attachment")
+		att.Parent = flareRig
+		local e = Instance.new("ParticleEmitter")
+		e.Texture = SPARK
+		e.Rate = 0
+		e.Enabled = false
+		e.LockedToPart = true -- follows the attachment every frame instead of sitting where it was emitted
+		e.Speed = NumberRange.new(0)
+		e.RotSpeed = NumberRange.new(0)
+		e.Lifetime = NumberRange.new(0.05)
+		e.LightEmission = 1
+		e.LightInfluence = 0
+		e.ZOffset = -2.5
+		e.Orientation = Enum.ParticleOrientation.FacingCamera
+		e.Color = ColorSequence.new(col:Lerp(CYAN, blend))
+		e.Parent = att
+		flareEm[#flareEm + 1] = {e = e, att = att, pos = pos, s0 = s0 * FLARE_SCALE, s1 = s1 * FLARE_SCALE, t0 = t0, t1 = t1, q0 = q0, q1 = q1}
+	end
+	--          color  pos                  blend  size     transp     squash
+	addFlare(WHITE, Vector2.new(1, 1),       0.4,  6.5, 0,  0.25, 1, 5,  0)   -- wide soft body, tall middle
+	addFlare(WHITE, Vector2.new(1, 1),       0.15, 3.2, 0,  0,    1, 1.5, 0)  -- hot core
+	addFlare(CYAN,  Vector2.new(1, 1),       0.7,  4.8, 0,  0.12, 1, 9,  0)   -- thick stretched band
+	addFlare(WHITE, Vector2.new(1, 1),       0.3,  3.4, 0,  0.08, 1, 22, 0)   -- thin long streak through the middle
+	addFlare(CYAN,  Vector2.new(1, 1),       0.8,  3.0, 0,  0.2,  1, 32, 0)   -- extra-long anamorphic streak
+	addFlare(CYAN,  Vector2.new(-0.6, -0.6), 0.5,  1.2, 0,  0.45, 1, 4,  0)   -- ghosts along the lens axis
+	addFlare(WHITE, Vector2.new(-0.3, -0.3), 0.3,  0.8, 0,  0.5,  1, 3,  0)
+	addFlare(BLUE,  Vector2.new(-1.1, -1.1), 0.8,  1.7, 0,  0.55, 1, 2,  0)
+	addFlare(CYAN,  Vector2.new(0.5, 0.5),   0.6,  0.9, 0,  0.5,  1, 3,  0)
+	addFlare(WHITE, Vector2.new(-1.6, -1.6), 0.5,  0.7, 0,  0.6,  1, 2,  0)
+
+	local function lerp(a, b, t) return a + (b - a) * t end
+
+	local function updateFlare(strength)
+		if not flareSourceFn or strength <= 0.01 then return end
+		local source = flareSourceFn()
+		if not source then return end
+		local vs = camera.ViewportSize
+		local sp = camera:WorldToViewportPoint(source)
+		if sp.Z <= 0 then return end
+		local toSrc = source - camera.CFrame.Position
+		if toSrc.Magnitude < 0.01 then return end
+		local va = math.acos(math.clamp(camera.CFrame.LookVector:Dot(toSrc.Unit), -1, 1))
+		local vf = math.rad(camera.FieldOfView)
+		local ar = vs.X / vs.Y
+		local df = 2 * math.atan(math.tan(vf * 0.5) * math.sqrt(1 + ar * ar))
+		local aa = 1 - math.clamp(va / (df * 0.5), 0, 1)
+		local alpha = aa * strength
+		if alpha <= 0.001 then return end
+		local center = Vector2.new(vs.X, vs.Y) * 0.5
+		local off = Vector2.new(sp.X, sp.Y) - center
+		local ft = 1 - aa
+		for _, d in ipairs(flareEm) do
+			local es = center + Vector2.new(off.X * d.pos.X, off.Y * d.pos.Y)
+			local ray = camera:ViewportPointToRay(es.X, es.Y)
+			d.att.WorldPosition = ray.Origin + ray.Direction.Unit * FLARE_DEPTH
+			d.e.Size = NumberSequence.new(lerp(d.s0, d.s1, ft))
+			d.e.Squash = NumberSequence.new(-lerp(d.q0, d.q1, ft))
+			d.e.Transparency = NumberSequence.new(math.clamp(1 - ((1 - lerp(d.t0, d.t1, ft)) * alpha), 0, 1))
+			d.e:Emit(1)
+		end
+	end
+
+	local controller = { finished = false, orig = orig }
+	attack4LightingController = controller
+
+	local conn
+	local startTime = os.clock()
+	local lastGl = 0
+	local curGl = 0
+	local flareBind = "Attack4Flare"
+	local releaseStart, releaseFrom
+
+	local function sstep(x) x = math.clamp(x, 0, 1) return x * x * (3 - 2 * x) end
+
+	local function cleanup()
+		if controller.finished then return end
+		controller.finished = true
+		if conn then conn:Disconnect() end
+		pcall(runService.UnbindFromRenderStep, runService, flareBind)
+		Lighting.ExposureCompensation = orig.exp
+		Lighting.Ambient = orig.amb
+		Lighting.OutdoorAmbient = orig.oamb
+		for _, inst in ipairs({cc, bloom, dof, sun, flareRig}) do inst:Destroy() end
+	end
+
+	local function apply(gl)
+		local g = gl * ATTACK4_GRADE_STRENGTH
+		Lighting.ExposureCompensation = orig.exp - 0.8 * g
+		Lighting.Ambient = orig.amb:Lerp(DARK_BLUE, math.clamp(0.75 * g, 0, 1))
+		Lighting.OutdoorAmbient = orig.oamb:Lerp(DARK_BLUE, math.clamp(0.75 * g, 0, 1))
+		cc.TintColor = WHITE:Lerp(TINT, math.clamp(g, 0, 1))
+		cc.Contrast = 0.22 * g
+		cc.Saturation = 0.18 * g
+		cc.Brightness = -0.04 * g
+		bloom.Intensity = 0.45 * g
+		bloom.Size = 24 + 16 * gl
+		bloom.Threshold = 1 - 0.07 * gl
+		sun.Intensity = 0.05 * g
+		dof.FarIntensity = 0.45 * g
+	end
+
+	conn = runService.RenderStepped:Connect(function()
+		if controller.finished then return end
+		local now = os.clock()
+		local gl
+		if releaseStart then
+			local a = math.clamp((now - releaseStart) / ATTACK4_GRADE_RELEASE_SECONDS, 0, 1)
+			gl = releaseFrom * (1 - sstep(a))
+			if a >= 1 then cleanup() return end
+		else
+			gl = sstep((now - startTime) / ATTACK4_GRADE_RAMP_SECONDS)
+			lastGl = gl
+		end
+		apply(gl)
+		curGl = gl
+
+		-- keep the character sharp, blur the background (same idea as Attack 5's DOF)
+		if focusPart and focusPart.Parent then
+			local dist = (camera.CFrame.Position - focusPart.Position).Magnitude
+			dof.FocusDistance = dist
+			dof.InFocusRadius = math.clamp(dist * 0.45, 2.5, 18)
+		end
+	end)
+
+	-- The flare runs in the very last render step so it reads the final camera (zoom FOV + shake) and the arm's final
+	-- pose for this frame; updating earlier made it lag a frame behind the charge.
+	pcall(runService.UnbindFromRenderStep, runService, flareBind)
+	runService:BindToRenderStep(flareBind, Enum.RenderPriority.Last.Value, function()
+		if controller.finished then return end
+		updateFlare(ATTACK4_FLARE_STRENGTH * curGl) -- fades with the grade on release
+	end)
+
+	function controller.release()
+		if controller.finished or releaseStart then return end
+		releaseStart = os.clock()
+		releaseFrom = lastGl
+	end
+
+	function controller.abort()
+		cleanup()
+	end
+
+	task.delay(4, controller.release) -- failsafe: never leave the screen dark if release() is somehow never reached
+	return controller
+end
+
+attack4CameraController = nil
+
+function StartAttack4Camera()
+	if not ACTOR_IS_LOCAL then
+		-- someone else's attack: never touch OUR camera
+		return { finished = true, burst = function() end, restore = function() end }
+	end
+	local runService = game:GetService("RunService")
+	local camera = workspace.CurrentCamera
+	local bindName = "Attack4Camera"
+
+	local originalFov = camera.FieldOfView
+	if attack4CameraController and not attack4CameraController.finished then
+		originalFov = attack4CameraController.originalFov
+		attack4CameraController.finished = true
+	end
+	pcall(runService.UnbindFromRenderStep, runService, bindName)
+
+	local controller = { originalFov = originalFov, finished = false }
+	attack4CameraController = controller
+
+	local phase = "zoom"
+	local phaseStartTime = os.clock()
+	local phaseStartFov = originalFov
+	local lastFov = originalFov
+	local fovReleased = false
+	local shakeStartTime = nil
+	local shakePhase = 0
+
+	local function lerp(startValue, endValue, alpha)
+		return startValue + (endValue - startValue) * alpha
+	end
+	local function easeOut(alpha)
+		return 1 - (1 - alpha) * (1 - alpha)
+	end
+	local function easeInOut(alpha)
+		return -(math.cos(math.pi * alpha) - 1) / 2
+	end
+
+	local function finish()
+		controller.finished = true
+		pcall(runService.UnbindFromRenderStep, runService, bindName)
+	end
+
+	runService:BindToRenderStep(bindName, Enum.RenderPriority.Camera.Value + 2, function(deltaTime)
+		if controller.finished then
+			finish()
+			return
+		end
+
+		local now = os.clock()
+		local phaseElapsed = now - phaseStartTime
+
+		if not fovReleased then
+			local targetFov
+			if phase == "zoom" then
+				local alpha = math.clamp(phaseElapsed / ATTACK4_ZOOM_SECONDS, 0, 1)
+				targetFov = lerp(phaseStartFov, ATTACK4_ZOOM_FOV, easeInOut(alpha))
+			elseif phase == "burst" then
+				if phaseElapsed < ATTACK4_BURST_RISE_SECONDS then
+					local alpha = phaseElapsed / ATTACK4_BURST_RISE_SECONDS
+					targetFov = lerp(phaseStartFov, ATTACK4_BURST_FOV, easeOut(alpha))
+				else
+					local alpha = math.clamp((phaseElapsed - ATTACK4_BURST_RISE_SECONDS) / ATTACK4_SETTLE_SECONDS, 0, 1)
+					targetFov = lerp(ATTACK4_BURST_FOV, ATTACK4_SETTLE_FOV, easeOut(alpha))
+				end
+			else
+				local alpha = math.clamp(phaseElapsed / ATTACK4_RESTORE_SECONDS, 0, 1)
+				targetFov = lerp(phaseStartFov, originalFov, easeInOut(alpha))
+				if alpha >= 1 then
+					fovReleased = true
+					targetFov = originalFov
+				end
+			end
+			lastFov = targetFov
+			camera.FieldOfView = targetFov
+		end
+
+		local shakeActive = false
+		if shakeStartTime then
+			local shakeElapsed = now - shakeStartTime
+			local amplitude = 0
+			if shakeElapsed < ATTACK4_SHAKE_HOLD_SECONDS then
+				amplitude = 1
+			elseif shakeElapsed < ATTACK4_SHAKE_HOLD_SECONDS + ATTACK4_SHAKE_FADE_SECONDS then
+				amplitude = 1 - (shakeElapsed - ATTACK4_SHAKE_HOLD_SECONDS) / ATTACK4_SHAKE_FADE_SECONDS
+			end
+			if amplitude > 0 then
+				shakeActive = true
+				if camera.CameraType ~= Enum.CameraType.Scriptable then
+					shakePhase += deltaTime * ATTACK4_SHAKE_SPEED
+					local function noise(seed)
+						return (math.noise(shakePhase, seed, 0.5) * 0.7 + math.noise(shakePhase * 2.3, seed + 9.1, 1.7) * 0.3) * 2
+					end
+					camera.CFrame = camera.CFrame
+						* CFrame.new(noise(1.3) * ATTACK4_SHAKE_POSITION * amplitude, noise(5.7) * ATTACK4_SHAKE_POSITION * amplitude, 0)
+						* CFrame.Angles(
+							noise(9.1) * ATTACK4_SHAKE_ROTATION * amplitude,
+							noise(13.3) * ATTACK4_SHAKE_ROTATION * amplitude,
+							noise(17.9) * ATTACK4_SHAKE_ROTATION * 0.6 * amplitude
+						)
+				end
+			end
+		end
+
+		if fovReleased and not shakeActive then
+			finish()
+		end
+	end)
+
+	function controller.burst()
+		if controller.finished or phase ~= "zoom" then return end
+		phase = "burst"
+		phaseStartTime = os.clock()
+		phaseStartFov = lastFov
+		shakeStartTime = os.clock()
+	end
+
+	function controller.restore()
+		if controller.finished or phase == "restore" then return end
+		phase = "restore"
+		phaseStartTime = os.clock()
+		phaseStartFov = lastFov
+	end
+
+	return controller
+end
+
+-- ================= ATTACK 4 KAMEHAMEHA VFX =================
+-- Extra visuals layered ON TOP of the Attack 4 beam model (the model itself is untouched, so it keeps its look).
+--   charge : glowing orb that grows in the palm + energy streaks that spiral into it
+--   beam   : the model is locked to the character (follows aim), white-hot core + glow shell that shoot out in ~0.07s,
+--            pulse rings racing down the beam, crackling lightning, muzzle flash + shockwaves, sparks, and an impact
+--            that lands where the beam REALLY ends (raycast: walls, ground, players). Near the ground you also get
+--            a shockwave, dust and small shards in the real color/material of the surface.
+-- All of it is wrapped in pcall at the call site, so a bug here can never break the attack itself.
+ATTACK4_FX_QUALITY      = 1                       -- 0.4 - 1 (lower = fewer streaks/bolts/shards, better for mobile)
+ATTACK4_FX_BEAM_LENGTH  = nil                     -- studs; nil = measured from the beam model
+ATTACK4_FX_BEAM_RADIUS  = nil                     -- studs; nil = measured from the beam model
+ATTACK4_FX_AXIS_NUDGE   = Vector3.new(0, 0, 0)    -- (right, up, forward) nudge of the overlay if it sits slightly off the model
+ATTACK4_FX_BEAM_FOLLOWS = true                    -- true = beam model follows the character's aim while it lives
+ATTACK4_FX_GROUND       = true                    -- dust / shards / shockwave when the ground is close
+ATTACK4_FX_BLOOM        = true                    -- short bloom pulse while the beam is out
+ATTACK4_FX_CORE_COLOR   = Color3.fromRGB(238, 248, 255)
+ATTACK4_FX_MID_COLOR    = Color3.fromRGB(103, 194, 255) -- same blue as the charge particles
+ATTACK4_FX_EDGE_COLOR   = Color3.fromRGB(41, 128, 255)
+
+-- Spot in the palm where the charge sits (same place as Charge()).
+function A4FX_Hand()
+	if RightArm and RightArm.Parent then
+		return (RightArm.CFrame * CFrame.new(0, -1.35, 0)).Position
+	end
+	return HumanoidRootPart.Position + HumanoidRootPart.CFrame.LookVector * 2
+end
+
+function A4FX_Part(name, shape, size, color, transparency, parent)
+	local part = Instance.new("Part")
+	part.Name = name
+	part.Shape = shape
+	part.Size = size
+	part.Color = color
+	part.Material = Enum.Material.Neon
+	part.Transparency = transparency
+	part.Anchored = true
+	part.CanCollide = false
+	part.CanQuery = false
+	part.CanTouch = false
+	part.CastShadow = false
+	part.Massless = true
+	part.Parent = parent
+	return part
+end
+
+function A4FX_Anchor(name, parent)
+	local part = Instance.new("Part")
+	part.Name = name
+	part.Size = Vector3.new(0.1, 0.1, 0.1)
+	part.Transparency = 1
+	part.Anchored = true
+	part.CanCollide = false
+	part.CanQuery = false
+	part.CanTouch = false
+	part.CastShadow = false
+	part.Massless = true
+	part.Parent = parent
+	return part
+end
+
+-- CFrame at `position` whose -Z (Front) looks along `direction`. Safe for straight up / down.
+function A4FX_LookFrame(position, direction)
+	local dir = direction.Magnitude > 0.0001 and direction.Unit or Vector3.new(0, 0, -1)
+	local upVector = math.abs(dir.Y) > 0.98 and Vector3.xAxis or Vector3.yAxis
+	return CFrame.lookAt(position, position + dir, upVector)
+end
+
+-- Same, but the LOCAL X axis points along `direction` (cylinders are long on X).
+function A4FX_Frame(position, direction)
+	return A4FX_LookFrame(position, direction) * CFrame.Angles(0, math.pi / 2, 0)
+end
+
+-- Raycast that skips invisible, non-colliding parts (zones, triggers, invisible walls).
+function A4FX_Cast(origin, direction, ignore)
+	local list = table.clone(ignore)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.IgnoreWater = true
+	for _ = 1, 5 do
+		params.FilterDescendantsInstances = list
+		local result = workspace:Raycast(origin, direction, params)
+		if not result then
+			return nil
+		end
+		local hit = result.Instance
+		if hit.Transparency >= 0.95 and not hit.CanCollide then
+			table.insert(list, hit)
+		else
+			return result
+		end
+	end
+	return nil
+end
+
+function A4FX_IgnoreList(extra)
+	local list = { LocalPlayer.Character or Character }
+	local thrown = workspace:FindFirstChild("Thrown")
+	if thrown then
+		table.insert(list, thrown)
+	end
+	for _, wall in ipairs(game:GetService("CollectionService"):GetTagged("InvisibleWalls")) do
+		table.insert(list, wall)
+	end
+	for _, instance in ipairs(extra or {}) do
+		table.insert(list, instance)
+	end
+	return list
+end
+
+-- Real color + material of whatever the ray hit (terrain included).
+function A4FX_SurfaceColor(result)
+	local instance = result.Instance
+	if instance:IsA("Terrain") then
+		local ok, color = pcall(function()
+			return workspace.Terrain:GetMaterialColor(result.Material)
+		end)
+		return (ok and color) or Color3.fromRGB(120, 110, 100), result.Material
+	end
+	return instance.Color, result.Material
+end
+
+-- Flat ring that expands and fades (shockwave).
+function A4FX_Ring(parent, cframe, startDiameter, endDiameter, thickness, life, color, startTransparency)
+	local ring = A4FX_Part("Ring", Enum.PartType.Cylinder, Vector3.new(thickness, startDiameter, startDiameter), color, startTransparency or 0.15, parent)
+	ring.CFrame = cframe
+	local info = TweenInfo.new(life, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+	game:GetService("TweenService"):Create(ring, info, {
+		Size = Vector3.new(thickness, endDiameter, endDiameter),
+		Transparency = 1,
+	}):Play()
+	game:GetService("Debris"):AddItem(ring, life + 0.1)
+	return ring
+end
+
+-- Short-lived jagged lightning bolt (beam segments between jittered attachments).
+function A4FX_Bolt(parent, startPos, direction, boltLength, jitter, haloColor, coreColor, rng)
+	local segments = 5
+	local anchor = A4FX_Anchor("Bolt", parent)
+	anchor.CFrame = CFrame.new(startPos)
+
+	local sideA = direction:Cross(Vector3.yAxis)
+	if sideA.Magnitude < 0.01 then
+		sideA = Vector3.xAxis
+	end
+	sideA = sideA.Unit
+	local sideB = direction:Cross(sideA).Unit
+
+	local attachments = {}
+	for index = 0, segments do
+		local attachment = Instance.new("Attachment")
+		local wobble = (index == 0 or index == segments) and 0 or jitter
+		attachment.Position = direction * (boltLength * index / segments)
+			+ sideA * rng:NextNumber(-wobble, wobble)
+			+ sideB * rng:NextNumber(-wobble, wobble)
+		attachment.Parent = anchor
+		attachments[index + 1] = attachment
+	end
+
+	for index = 1, segments do
+		for layer = 1, 2 do
+			local beam = Instance.new("Beam")
+			beam.Attachment0 = attachments[index]
+			beam.Attachment1 = attachments[index + 1]
+			beam.FaceCamera = true
+			beam.Segments = 1
+			beam.LightEmission = 1
+			beam.LightInfluence = 0
+			beam.Color = ColorSequence.new(layer == 1 and haloColor or coreColor)
+			local width = layer == 1 and 0.6 or 0.2
+			beam.Width0 = width
+			beam.Width1 = width
+			beam.Transparency = NumberSequence.new(layer == 1 and 0.35 or 0)
+			beam.Parent = anchor
+		end
+	end
+
+	game:GetService("Debris"):AddItem(anchor, 0.09)
+end
+
+-- ---------- CHARGE (runs during Charge(0.6)) ----------
+-- Orb that grows in the palm + energy streaks spiraling into it. Call release() when the charge ends, abort() to kill it.
+function StartAttack4ChargeFX(handFn, chargeSeconds)
+	local runService = game:GetService("RunService")
+	local tweenService = game:GetService("TweenService")
+	local debris = game:GetService("Debris")
+	local quality = math.clamp(ATTACK4_FX_QUALITY or 1, 0.4, 1)
+	local CORE, MID = ATTACK4_FX_CORE_COLOR, ATTACK4_FX_MID_COLOR
+	local rng = Random.new()
+	local controller = { finished = false }
+
+	local folder = Instance.new("Folder")
+	folder.Name = "Attack4ChargeFX"
+	folder.Parent = workspace
+	debris:AddItem(folder, 2.5) -- failsafe
+
+	local duration = chargeSeconds or 0.6
+	local startTime = os.clock()
+
+	local orbShell = A4FX_Part("OrbShell", Enum.PartType.Ball, Vector3.one * 0.6, MID, 0.5, folder)
+	local orbCore = A4FX_Part("OrbCore", Enum.PartType.Ball, Vector3.one * 0.4, CORE, 0, folder)
+	local light = Instance.new("PointLight")
+	light.Color = MID
+	light.Range = 6
+	light.Brightness = 1
+	light.Shadows = false
+	light.Parent = orbCore
+
+	local streaks = {}
+	local streakCount = math.floor(22 * quality)
+	local nextStreak = 1
+	local connection
+
+	local function stopLoop()
+		if controller.finished then
+			return
+		end
+		controller.finished = true
+		if connection then
+			connection:Disconnect()
+		end
+	end
+
+	local function step()
+		if controller.finished then
+			return
+		end
+		local elapsed = os.clock() - startTime
+		local hand = handFn()
+		local progress = math.clamp(elapsed / duration, 0, 1)
+
+		-- orb: slow start, fast finish, with a tremble that gets stronger as it charges
+		local size = 0.4 + 3.4 * progress ^ 1.8
+		local tremble = 0.08 * progress
+		local jitter = Vector3.new(rng:NextNumber(-tremble, tremble), rng:NextNumber(-tremble, tremble), rng:NextNumber(-tremble, tremble))
+		local pulse = 1 + 0.07 * math.sin(elapsed * 70)
+		orbShell.Size = Vector3.one * (size * 1.6 * pulse)
+		orbShell.Position = hand + jitter
+		orbCore.Size = Vector3.one * (size * pulse)
+		orbCore.Position = hand + jitter
+		light.Range = 6 + 16 * progress
+		light.Brightness = 1 + 3 * progress
+
+		-- streaks: spawned over the first ~0.36s, each flies in along an accelerating spiral
+		while nextStreak <= streakCount and elapsed >= (nextStreak - 1) / streakCount * duration * 0.6 do
+			nextStreak += 1
+			local direction = Vector3.new(rng:NextNumber(-1, 1), rng:NextNumber(-0.5, 1), rng:NextNumber(-1, 1))
+			if direction.Magnitude < 0.25 then
+				direction = Vector3.yAxis
+			end
+
+			local part = A4FX_Part("Streak", Enum.PartType.Block, Vector3.new(0.2, 0.2, 0.2), CORE, 1, folder)
+			local attachment0 = Instance.new("Attachment")
+			attachment0.Position = Vector3.new(0, 0.3, 0)
+			attachment0.Parent = part
+			local attachment1 = Instance.new("Attachment")
+			attachment1.Position = Vector3.new(0, -0.3, 0)
+			attachment1.Parent = part
+
+			local trail = Instance.new("Trail")
+			trail.Attachment0 = attachment0
+			trail.Attachment1 = attachment1
+			trail.Lifetime = 0.16
+			trail.LightEmission = 1
+			trail.LightInfluence = 0
+			trail.FaceCamera = true
+			trail.Color = ColorSequence.new(CORE, MID)
+			trail.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) })
+			trail.WidthScale = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(1, 0) })
+			trail.Parent = part
+
+			table.insert(streaks, {
+				part = part,
+				direction = direction.Unit,
+				radius = rng:NextNumber(9, 16),
+				born = elapsed,
+				life = math.max(0.14, math.min(rng:NextNumber(0.2, 0.3), duration - elapsed)),
+			})
+		end
+
+		for index = #streaks, 1, -1 do
+			local streak = streaks[index]
+			local t = (elapsed - streak.born) / streak.life
+			if t >= 1 then
+				streak.part:Destroy()
+				table.remove(streaks, index)
+			else
+				local swirl = CFrame.Angles(0, t * 1.3, 0)
+				streak.part.Position = hand + swirl:VectorToWorldSpace(streak.direction) * streak.radius * (1 - t * t)
+			end
+		end
+	end
+
+	step() -- place everything right away so nothing flashes at the world origin for a frame
+	connection = runService.Heartbeat:Connect(step)
+
+	function controller.release()
+		if controller.finished then
+			return
+		end
+		stopLoop()
+		for _, streak in ipairs(streaks) do
+			streak.part:Destroy()
+		end
+		table.clear(streaks)
+		-- the orb pops as the beam leaves
+		local info = TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+		tweenService:Create(orbShell, info, { Size = orbShell.Size * 1.8, Transparency = 1 }):Play()
+		tweenService:Create(orbCore, info, { Size = orbCore.Size * 0.4, Transparency = 1 }):Play()
+		tweenService:Create(light, info, { Brightness = 0 }):Play()
+		debris:AddItem(folder, 0.3)
+	end
+
+	function controller.abort()
+		stopLoop()
+		folder:Destroy()
+	end
+
+	task.delay(1.5, controller.abort) -- failsafe
+	return controller
+end
+
+-- ---------- BEAM (spawned together with the beam model) ----------
+-- Returns a controller: fade(seconds) when the beam starts to fade, abort() to remove everything instantly.
+function PlayAttack4BeamFX(model)
+	local runService = game:GetService("RunService")
+	local tweenService = game:GetService("TweenService")
+	local debris = game:GetService("Debris")
+	local lighting = game:GetService("Lighting")
+	local quality = math.clamp(ATTACK4_FX_QUALITY or 1, 0.4, 1)
+	local CORE, MID, EDGE = ATTACK4_FX_CORE_COLOR, ATTACK4_FX_MID_COLOR, ATTACK4_FX_EDGE_COLOR
+	local rng = Random.new()
+	local controller = { finished = false }
+
+	local root = HumanoidRootPart
+	local rootCF = root.CFrame
+	local aim0 = rootCF.LookVector
+	local right0, up0 = rootCF.RightVector, rootCF.UpVector
+	local hand0 = A4FX_Hand()
+
+	-- 1) Measure the beam model along our aim so the overlay matches its real size and sits on its real axis.
+	local maxForward = 0
+	local lateralValues, verticalValues, radiusValues = {}, {}, {}
+	for _, descendant in ipairs(model:GetDescendants()) do
+		if descendant:IsA("BasePart") and descendant.Transparency < 0.95 then
+			local cf, size = descendant.CFrame, descendant.Size
+			local function halfAlong(axis)
+				return 0.5 * (math.abs(axis:Dot(cf.RightVector)) * size.X
+					+ math.abs(axis:Dot(cf.UpVector)) * size.Y
+					+ math.abs(axis:Dot(cf.LookVector)) * size.Z)
+			end
+			local relative = cf.Position - hand0
+			maxForward = math.max(maxForward, relative:Dot(aim0) + halfAlong(aim0))
+			table.insert(lateralValues, relative:Dot(right0))
+			table.insert(verticalValues, relative:Dot(up0))
+			table.insert(radiusValues, math.max(halfAlong(right0), halfAlong(up0)))
+		end
+	end
+	local function median(values)
+		if #values == 0 then
+			return nil
+		end
+		table.sort(values)
+		return values[math.ceil(#values / 2)]
+	end
+
+	local beamLength = ATTACK4_FX_BEAM_LENGTH or ((maxForward >= 25) and math.min(maxForward, 220) or 90)
+	local measuredRadius = median(radiusValues)
+	local beamRadius = ATTACK4_FX_BEAM_RADIUS or ((measuredRadius and measuredRadius >= 1) and math.clamp(measuredRadius, 1.5, 10) or 4)
+
+	local axisLateral = median(lateralValues) or 0
+	local axisVertical = median(verticalValues) or 0
+	if math.abs(axisLateral) > 4 then axisLateral = 0 end
+	if math.abs(axisVertical) > 4 then axisVertical = 0 end
+	local nudge = ATTACK4_FX_AXIS_NUDGE or Vector3.zero
+	local muzzleWorld0 = hand0 + right0 * axisLateral + up0 * axisVertical + rootCF:VectorToWorldSpace(nudge)
+	local muzzleLocal = rootCF:PointToObjectSpace(muzzleWorld0) -- locked to the character, same as the model
+
+	-- 2) Keep the beam model glued to the character so it always points where we point.
+	local follow = {}
+	if ATTACK4_FX_BEAM_FOLLOWS ~= false then
+		for _, descendant in ipairs(model:GetDescendants()) do
+			if descendant:IsA("BasePart") then
+				follow[descendant] = rootCF:ToObjectSpace(descendant.CFrame)
+			end
+		end
+	end
+
+	local folder = Instance.new("Folder")
+	folder.Name = "Attack4BeamFX"
+	folder.Parent = workspace
+	local debrisFolder = Instance.new("Folder") -- rings / dust / shards: outlive the beam a little
+	debrisFolder.Name = "Attack4BeamDebris"
+	debrisFolder.Parent = workspace
+	debris:AddItem(folder, 4)
+	debris:AddItem(debrisFolder, 4)
+
+	local ignore = A4FX_IgnoreList({ model, folder, debrisFolder })
+
+	-- 3) Build the pieces.
+	local coreDiameter = beamRadius * 0.9
+	local shellDiameter = beamRadius * 1.5
+	local ringThickness = math.max(0.35, beamRadius * 0.12)
+	local beamCore = A4FX_Part("BeamCore", Enum.PartType.Cylinder, Vector3.new(1, coreDiameter, coreDiameter), CORE, 0.2, folder)
+	local beamShell = A4FX_Part("BeamShell", Enum.PartType.Cylinder, Vector3.new(1, shellDiameter, shellDiameter), MID, 0.6, folder)
+
+	local muzzleCore = A4FX_Part("MuzzleCore", Enum.PartType.Ball, Vector3.one * beamRadius, CORE, 0.05, folder)
+	local muzzleShell = A4FX_Part("MuzzleShell", Enum.PartType.Ball, Vector3.one * beamRadius * 2, MID, 0.55, folder)
+	local muzzleLight = Instance.new("PointLight")
+	muzzleLight.Color = MID
+	muzzleLight.Range = 14 + beamRadius * 4
+	muzzleLight.Brightness = 5
+	muzzleLight.Shadows = false
+	muzzleLight.Parent = muzzleCore
+
+	local muzzleAnchor = A4FX_Anchor("MuzzleEmitter", folder)
+	local muzzleAttachment = Instance.new("Attachment")
+	muzzleAttachment.Parent = muzzleAnchor
+
+	local sparks = Instance.new("ParticleEmitter")
+	sparks.Texture = "rbxassetid://1084976679"
+	sparks.Color = ColorSequence.new(CORE, MID)
+	sparks.LightEmission = 1
+	sparks.LightInfluence = 0
+	sparks.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.9), NumberSequenceKeypoint.new(1, 0.1) })
+	sparks.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(0.7, 0.2), NumberSequenceKeypoint.new(1, 1) })
+	sparks.Lifetime = NumberRange.new(0.25, 0.5)
+	sparks.Speed = NumberRange.new(80, 170)
+	sparks.SpreadAngle = Vector2.new(12, 12)
+	sparks.EmissionDirection = Enum.NormalId.Front
+	sparks.Rate = 170 * quality
+	sparks.LockedToPart = false
+	sparks.Parent = muzzleAttachment
+
+	local flash = Instance.new("ParticleEmitter") -- one big soft flash at the moment the beam leaves
+	flash.Texture = "rbxassetid://1084999891"
+	flash.Color = ColorSequence.new(CORE, MID)
+	flash.LightEmission = 1
+	flash.LightInfluence = 0
+	flash.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, beamRadius * 3), NumberSequenceKeypoint.new(1, beamRadius * 11) })
+	flash.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.1), NumberSequenceKeypoint.new(1, 1) })
+	flash.Lifetime = NumberRange.new(0.28, 0.28)
+	flash.Speed = NumberRange.new(0, 0)
+	flash.Rate = 0
+	flash.LockedToPart = true
+	flash.Parent = muzzleAttachment
+
+	-- impact (follows wherever the beam ends)
+	local impactAnchor = A4FX_Anchor("ImpactEmitter", folder)
+	local impactAttachment = Instance.new("Attachment")
+	impactAttachment.Parent = impactAnchor
+
+	local impactSparks = Instance.new("ParticleEmitter")
+	impactSparks.Texture = "rbxassetid://1084976679"
+	impactSparks.Color = ColorSequence.new(CORE, MID)
+	impactSparks.LightEmission = 1
+	impactSparks.LightInfluence = 0
+	impactSparks.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.7), NumberSequenceKeypoint.new(1, 0.1) })
+	impactSparks.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) })
+	impactSparks.Lifetime = NumberRange.new(0.3, 0.6)
+	impactSparks.Speed = NumberRange.new(35, 85)
+	impactSparks.SpreadAngle = Vector2.new(50, 50)
+	impactSparks.EmissionDirection = Enum.NormalId.Front
+	impactSparks.Acceleration = Vector3.new(0, -55, 0)
+	impactSparks.Rate = 110 * quality
+	impactSparks.Enabled = false
+	impactSparks.Parent = impactAttachment
+
+	local impactDust = Instance.new("ParticleEmitter")
+	impactDust.Texture = "rbxassetid://272050333"
+	impactDust.LightEmission = 0
+	impactDust.LightInfluence = 1
+	impactDust.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 3), NumberSequenceKeypoint.new(1, 9) })
+	impactDust.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.55), NumberSequenceKeypoint.new(1, 1) })
+	impactDust.Lifetime = NumberRange.new(0.6, 1)
+	impactDust.Speed = NumberRange.new(8, 22)
+	impactDust.SpreadAngle = Vector2.new(70, 70)
+	impactDust.EmissionDirection = Enum.NormalId.Front
+	impactDust.Acceleration = Vector3.new(0, 6, 0)
+	impactDust.Rate = 40 * quality
+	impactDust.Enabled = false
+	impactDust.Parent = impactAttachment
+
+	local impactFlash = A4FX_Part("ImpactFlash", Enum.PartType.Ball, Vector3.one * beamRadius, CORE, 1, folder)
+	local impactGlow = A4FX_Part("ImpactGlow", Enum.PartType.Ball, Vector3.one * beamRadius * 2, MID, 1, folder)
+	local impactLight = Instance.new("PointLight")
+	impactLight.Color = MID
+	impactLight.Range = 22
+	impactLight.Brightness = 0
+	impactLight.Shadows = false
+	impactLight.Parent = impactFlash
+
+	-- 4) Helpers that throw dust / shards (real surface color + material, kept small).
+	local function dustPuff(position, color, count, speed)
+		local anchor = A4FX_Anchor("DustPuff", debrisFolder)
+		anchor.CFrame = CFrame.new(position)
+		local attachment = Instance.new("Attachment")
+		attachment.Parent = anchor
+		local emitter = Instance.new("ParticleEmitter")
+		emitter.Texture = "rbxassetid://272050333"
+		emitter.Color = ColorSequence.new(color:Lerp(Color3.fromRGB(170, 170, 170), 0.45))
+		emitter.LightEmission = 0
+		emitter.LightInfluence = 1
+		emitter.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 3), NumberSequenceKeypoint.new(1, 10) })
+		emitter.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.45), NumberSequenceKeypoint.new(1, 1) })
+		emitter.Lifetime = NumberRange.new(0.6, 1.1)
+		emitter.Speed = NumberRange.new(speed * 0.4, speed)
+		emitter.SpreadAngle = Vector2.new(75, 75)
+		emitter.EmissionDirection = Enum.NormalId.Top
+		emitter.Drag = 4
+		emitter.Rate = 0
+		emitter.Parent = attachment
+		emitter:Emit(count)
+		debris:AddItem(anchor, 1.6)
+	end
+
+	local function throwShards(origin, normal, color, material, count, speedMin, speedMax)
+		for _ = 1, count do
+			local size = rng:NextNumber(0.25, 0.7)
+			local shard = Instance.new("Part")
+			shard.Name = "Shard"
+			shard.Size = Vector3.new(size * rng:NextNumber(0.7, 1.3), size, size * rng:NextNumber(0.7, 1.3))
+			shard.Color = color
+			shard.Material = material
+			shard.Anchored = false
+			shard.CanCollide = false
+			shard.CanQuery = false
+			shard.CanTouch = false
+			shard.CastShadow = false
+			shard.CFrame = CFrame.new(origin + normal * 0.3 + Vector3.new(rng:NextNumber(-1.5, 1.5), 0, rng:NextNumber(-1.5, 1.5)))
+				* CFrame.Angles(rng:NextNumber(0, 6), rng:NextNumber(0, 6), 0)
+			shard.Parent = debrisFolder
+
+			local push = normal * rng:NextNumber(0.9, 1.5) + Vector3.new(rng:NextNumber(-1, 1), rng:NextNumber(0.2, 1), rng:NextNumber(-1, 1))
+			if push.Magnitude < 0.1 then
+				push = Vector3.yAxis
+			end
+			shard.AssemblyLinearVelocity = push.Unit * rng:NextNumber(speedMin, speedMax)
+			shard.AssemblyAngularVelocity = Vector3.new(rng:NextNumber(-20, 20), rng:NextNumber(-20, 20), rng:NextNumber(-20, 20))
+
+			tweenService:Create(shard, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.In, 0, false, 0.6), {
+				Size = Vector3.new(0.05, 0.05, 0.05),
+			}):Play()
+			debris:AddItem(shard, 1.3)
+		end
+	end
+
+	-- 5) Launch burst: flash, two shockwaves, and a ground shockwave + dust + shards if the ground is close.
+	flash:Emit(1)
+	A4FX_Ring(debrisFolder, A4FX_Frame(muzzleWorld0 + aim0 * 1.5, aim0), beamRadius * 1.5, beamRadius * 13, ringThickness, 0.4, CORE, 0.1)
+	task.delay(0.06, function()
+		A4FX_Ring(debrisFolder, A4FX_Frame(muzzleWorld0 + aim0 * 2.5, aim0), beamRadius * 1.5, beamRadius * 18, ringThickness, 0.5, MID, 0.25)
+	end)
+
+	if ATTACK4_FX_GROUND ~= false then
+		local groundHit = A4FX_Cast(root.Position, Vector3.new(0, -18, 0), ignore)
+		if groundHit then
+			local color, material = A4FX_SurfaceColor(groundHit)
+			local ringFrame = A4FX_Frame(groundHit.Position + groundHit.Normal * 0.15, groundHit.Normal)
+			A4FX_Ring(debrisFolder, ringFrame, 3, 56, 0.4, 0.45, MID, 0.2)
+			task.delay(0.07, function()
+				A4FX_Ring(debrisFolder, ringFrame, 3, 36, 0.3, 0.35, CORE, 0.2)
+			end)
+			dustPuff(groundHit.Position, color, math.floor(24 * quality), 45)
+			throwShards(groundHit.Position, groundHit.Normal, color, material, math.floor(14 * quality), 22, 52)
+		end
+	end
+
+	-- 6) Bloom pulse.
+	local bloom
+	if ATTACK4_FX_BLOOM ~= false and ACTOR_IS_LOCAL then
+		bloom = Instance.new("BloomEffect")
+		bloom.Name = "Attack4BeamBloom"
+		bloom.Intensity = 0
+		bloom.Size = 24
+		bloom.Threshold = 0.95
+		bloom.Parent = lighting
+		tweenService:Create(bloom, TweenInfo.new(0.06, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Intensity = 0.9 }):Play()
+	end
+
+	-- 7) Per-frame update.
+	local startTime = os.clock()
+	local launchTime = 0.07
+	local fadeStart, fadeDuration
+	local rings = {}
+	local ringIndex = 0
+	local nextRing, nextBolt, nextTrail, nextImpactRing = 0, 0, 0, 0
+	local hadHit = false
+	local lastHitInstance, hitColor, hitMaterial
+	local hitIsCharacter = false
+	local connection
+
+	local function cleanup()
+		if controller.finished then
+			return
+		end
+		controller.finished = true
+		if connection then
+			connection:Disconnect()
+		end
+		if bloom then
+			bloom:Destroy()
+		end
+		folder:Destroy() -- debrisFolder is left to the Debris service so shards / rings can finish
+	end
+
+	local function step()
+		if controller.finished then
+			return
+		end
+		if not root.Parent or not model.Parent then
+			cleanup()
+			return
+		end
+
+		local now = os.clock()
+		local elapsed = now - startTime
+		local fadeAlpha = 0
+		if fadeStart then
+			fadeAlpha = math.clamp((now - fadeStart) / fadeDuration, 0, 1)
+			if fadeAlpha >= 1 then
+				cleanup()
+				return
+			end
+		end
+		local keep = 1 - fadeAlpha
+
+		local currentCF = root.CFrame
+		local aim = currentCF.LookVector
+		local muzzle = currentCF * muzzleLocal
+
+		for part, relative in pairs(follow) do
+			if part.Parent then
+				part.CFrame = currentCF * relative
+			end
+		end
+
+		-- where the beam REALLY ends
+		local hit = A4FX_Cast(muzzle, aim * beamLength, ignore)
+		local length = hit and math.max((hit.Position - muzzle).Magnitude, 1) or beamLength
+
+		local launch = math.clamp(elapsed / launchTime, 0, 1)
+		local launchEase = 1 - (1 - launch) * (1 - launch)
+		local visibleLength = math.max(length * launchEase, 0.5)
+		local flicker = 1 + math.noise(elapsed * 38, 3.1, 0.5) * 0.35
+
+		-- core + shell (shoot out fast, then shimmer)
+		beamCore.Size = Vector3.new(visibleLength, coreDiameter * flicker, coreDiameter * flicker)
+		beamCore.CFrame = A4FX_Frame(muzzle + aim * (visibleLength / 2), aim)
+		beamCore.Transparency = 0.2 + 0.8 * fadeAlpha
+		beamShell.Size = Vector3.new(visibleLength, shellDiameter * (2 - flicker), shellDiameter * (2 - flicker))
+		beamShell.CFrame = beamCore.CFrame
+		beamShell.Transparency = 0.6 + 0.4 * fadeAlpha
+
+		-- muzzle orb: starts big and settles
+		local pop = 1 + 1.2 * math.max(0, 1 - elapsed / 0.15)
+		local orbSize = beamRadius * 1.6 * pop * flicker
+		muzzleCore.Size = Vector3.one * orbSize
+		muzzleCore.Position = muzzle
+		muzzleCore.Transparency = 0.05 + 0.95 * fadeAlpha
+		muzzleShell.Size = Vector3.one * (orbSize * 1.7)
+		muzzleShell.Position = muzzle
+		muzzleShell.Transparency = 0.55 + 0.45 * fadeAlpha
+		muzzleLight.Brightness = 5 * keep
+		muzzleAnchor.CFrame = A4FX_LookFrame(muzzle, aim)
+
+		-- pulse rings racing down the beam
+		if not fadeStart and elapsed >= nextRing then
+			nextRing = elapsed + 0.07
+			if #rings < 10 then
+				ringIndex += 1
+				table.insert(rings, {
+					part = A4FX_Part("PulseRing", Enum.PartType.Cylinder, Vector3.new(ringThickness, beamRadius * 2.3, beamRadius * 2.3), (ringIndex % 2 == 0) and CORE or MID, 0.2, folder),
+					born = elapsed,
+				})
+			end
+		end
+		for index = #rings, 1, -1 do
+			local ring = rings[index]
+			local age = (elapsed - ring.born) / 0.26
+			local distance = length * age
+			if age >= 1 or distance >= length then
+				ring.part:Destroy()
+				table.remove(rings, index)
+			else
+				local diameter = beamRadius * 2.3 * (0.85 + 0.45 * age)
+				ring.part.Size = Vector3.new(ringThickness, diameter, diameter)
+				ring.part.CFrame = A4FX_Frame(muzzle + aim * distance, aim)
+				ring.part.Transparency = math.clamp(0.2 + 0.8 * age * age + fadeAlpha, 0, 1)
+			end
+		end
+
+		-- lightning crackling around the beam
+		if not fadeStart and elapsed >= nextBolt then
+			nextBolt = elapsed + 0.05
+			local aimRight = aim:Cross(Vector3.yAxis)
+			if aimRight.Magnitude < 0.01 then
+				aimRight = Vector3.xAxis
+			end
+			aimRight = aimRight.Unit
+			local aimUp = aimRight:Cross(aim).Unit
+			for _ = 1, math.max(1, math.floor(2 * quality + 0.5)) do
+				local angle = rng:NextNumber(0, math.pi * 2)
+				local radial = aimRight * math.cos(angle) + aimUp * math.sin(angle)
+				local startAt = muzzle + aim * (rng:NextNumber(0.03, 0.92) * length) + radial * (beamRadius * rng:NextNumber(0.75, 1.25))
+				local direction = (aim * rng:NextNumber(0.6, 1) + radial * rng:NextNumber(-0.1, 0.9)).Unit
+				A4FX_Bolt(folder, startAt, direction, rng:NextNumber(6, 15), beamRadius * 0.35, MID, CORE, rng)
+			end
+		end
+
+		-- impact exactly where the beam ends
+		if hit then
+			local normal = hit.Normal
+			impactAnchor.CFrame = A4FX_LookFrame(hit.Position, normal)
+
+			if hit.Instance ~= lastHitInstance then
+				lastHitInstance = hit.Instance
+				hitColor, hitMaterial = A4FX_SurfaceColor(hit)
+				local owner = hit.Instance:FindFirstAncestorOfClass("Model")
+				hitIsCharacter = owner ~= nil and owner:FindFirstChildOfClass("Humanoid") ~= nil
+				impactDust.Color = ColorSequence.new(hitColor:Lerp(Color3.fromRGB(170, 170, 170), 0.45))
+			end
+
+			impactSparks.Enabled = not fadeStart
+			impactDust.Enabled = (not fadeStart) and not hitIsCharacter
+
+			local impactSize = beamRadius * 2.2 * flicker
+			impactFlash.Size = Vector3.one * impactSize
+			impactFlash.Position = hit.Position + normal * (impactSize * 0.2)
+			impactFlash.Transparency = 0.2 + 0.8 * fadeAlpha
+			impactGlow.Size = Vector3.one * (impactSize * 1.8)
+			impactGlow.Position = impactFlash.Position
+			impactGlow.Transparency = 0.6 + 0.4 * fadeAlpha
+			impactLight.Brightness = 4 * keep
+
+			if not hadHit then
+				hadHit = true
+				A4FX_Ring(debrisFolder, A4FX_Frame(hit.Position + normal * 0.2, normal), beamRadius * 1.5, beamRadius * 14, ringThickness, 0.45, CORE, 0.1)
+				impactSparks:Emit(math.floor(40 * quality))
+				if not hitIsCharacter then
+					dustPuff(hit.Position, hitColor, math.floor(20 * quality), 40)
+					throwShards(hit.Position, normal, hitColor, hitMaterial, math.floor(12 * quality), 25, 55)
+				end
+			end
+			if not fadeStart and elapsed >= nextImpactRing then
+				nextImpactRing = elapsed + 0.14
+				A4FX_Ring(debrisFolder, A4FX_Frame(hit.Position + normal * 0.2, normal), beamRadius, beamRadius * 6, ringThickness * 0.8, 0.3, MID, 0.35)
+			end
+		else
+			impactSparks.Enabled = false
+			impactDust.Enabled = false
+			impactFlash.Transparency = 1
+			impactGlow.Transparency = 1
+			impactLight.Brightness = 0
+		end
+
+		-- dust + shards kicked up along the beam's path when it runs close to the ground
+		if ATTACK4_FX_GROUND ~= false and not fadeStart and elapsed >= nextTrail then
+			nextTrail = elapsed + 0.07
+			local low = math.min(5, length)
+			local high = math.max(low, math.min(length, 70))
+			local probe = muzzle + aim * rng:NextNumber(low, high)
+			local ground = A4FX_Cast(probe + Vector3.new(0, 4, 0), Vector3.new(0, -34, 0), ignore)
+			if ground and (probe.Y - ground.Position.Y) < 24 then
+				local owner = ground.Instance:FindFirstAncestorOfClass("Model")
+				if not (owner and owner:FindFirstChildOfClass("Humanoid")) then
+					local color, material = A4FX_SurfaceColor(ground)
+					dustPuff(ground.Position, color, math.floor(5 * quality + 0.5), 26)
+					throwShards(ground.Position, ground.Normal, color, material, math.floor(3 * quality + 0.5), 18, 40)
+				end
+			end
+		end
+	end
+
+	step() -- place everything right away so nothing flashes at the world origin for a frame
+	connection = runService.Heartbeat:Connect(step)
+
+	function controller.fade(duration)
+		if controller.finished or fadeStart then
+			return
+		end
+		fadeStart = os.clock()
+		fadeDuration = math.max(duration or 0.3, 0.05)
+		sparks.Enabled = false
+		if bloom then
+			tweenService:Create(bloom, TweenInfo.new(fadeDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Intensity = 0 }):Play()
+		end
+	end
+
+	function controller.abort()
+		cleanup()
+	end
+
+	task.delay(3, cleanup) -- failsafe
+	return controller
+end
+
+
 function EmitCrescentAura()
-	Character = game.Players.LocalPlayer.Character
+	Character = LocalPlayer.Character or Character
 	AURA_COLOR = Color3.new(1, 0.964706, 0.313726)
 	v3193 = {}
 	for _, v3214 in pairs(game.ReplicatedStorage.Emotes.AuraReal:GetChildren()) do
@@ -5626,6 +5678,9 @@ ATTACK1_EMBER_LIFE_SECONDS    = 0.5
 attack1CameraController = nil
 
 function Attack1_StartCamera()
+	if not ACTOR_IS_LOCAL then
+		return { finished = true, appliedKick = 0, abort = function() end, burst = function() end }
+	end
 	local runService = game:GetService("RunService")
 	local camera = workspace.CurrentCamera
 	local bindName = "Attack1Camera"
@@ -7013,7 +7068,7 @@ sound:Play()
 		flashFrame.BorderSizePixel = 0
 		flashFrame.ZIndex = 10
 		flashFrame.Parent = flashGui
-		flashGui.Parent = LocalPlayer.PlayerGui
+		flashGui.Parent = ACTOR_IS_LOCAL and LocalPlayer.PlayerGui or nil
 		game:GetService("Debris"):AddItem(flashGui, 0.1)
 		PlaySound("rbxassetid://13297025560", 1, 10, 150)
 		PlaySound("rbxassetid://13293923011", 1, 10, 150)
@@ -7036,7 +7091,7 @@ sound:Play()
 			pcall(function()
 				ReplicatedStorage = game:GetService("ReplicatedStorage")
 				Replication = ReplicatedStorage.Replication
-				for _, conn in ipairs(getconnections(Replication.OnClientEvent)) do
+				for _, conn in ipairs((ACTOR_IS_LOCAL and getconnections(Replication.OnClientEvent) or {})) do
 					fn = conn.Function
 					if fn then
 						task.spawn(fn, {
@@ -7082,7 +7137,7 @@ local p = game:GetService("Players")
 local r = game:GetService("ReplicatedStorage")
 local d = game:GetService("Debris")
 
-local lp = p.LocalPlayer
+local lp = LocalPlayer
 local c = lp.Character or lp.CharacterAdded:Wait()
 local h = c:WaitForChild("Humanoid")
 local a = h:FindFirstChildOfClass("Animator") or Instance.new("Animator")
@@ -7152,7 +7207,8 @@ task.wait(0.01)
 vis(true)
 task.wait(0.01)
 vis(false)
-				if HumanoidRootPart and HumanoidRootPart.Parent then
+				-- only OUR OWN character is moved; other players' clients move themselves
+				if ACTOR_IS_LOCAL and HumanoidRootPart and HumanoidRootPart.Parent then
 					HumanoidRootPart.CFrame = otherHRP.CFrame * CFrame.new(0, 0, 3)
 				end
 			end)
@@ -7176,17 +7232,18 @@ task.spawn(function()
 	local ok, result = pcall(GetGitSound,
 		"https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/Divine%20Kamehameha%20.mp3",
 		"DivineKamehameha",
-		2
+		2,
+		true -- keep: do not auto-destroy (other players' copies are parented to their character)
 	)
 	if ok then UltimateKameSfx = result else warn("[Attack5 SFX] failed to load:", result) end
 end)
 
 -- ================= ATTACK 5: ULTIMATE KAMEHAMEHA =================
 -- Cinematic charge (5.9s). Triggered by TRIGGER_ANIM_IDS.ATTACK5. Runs on its own RenderStepped loop and
--- sets _G.UKameBusy while playing (the trigger below waits on that flag). Fire the beam inside OnBeam.
+-- sets UKameBusy while playing (the trigger below waits on that flag). Fire the beam inside OnBeam.
 function PlayUltimateKamehameha()
 	-- ULTIMATE KAMEHAMEHA | cinematic charge | 5.9s | client
-	if _G.UKameBusy then return end
+	if UKameBusy then return end
 
 	local Players = game:GetService("Players")
 	local RunService = game:GetService("RunService")
@@ -7194,15 +7251,15 @@ function PlayUltimateKamehameha()
 	local TweenService = game:GetService("TweenService")
 	local Debris = game:GetService("Debris")
 
-	local plr = Players.LocalPlayer
-	local cam = workspace.CurrentCamera
+	local plr = LocalPlayer
+	local cam = ACTOR_IS_LOCAL and workspace.CurrentCamera or MakeReadOnlyCamera() -- other players never move OUR camera
 	local char = plr.Character
 	local hrp = char and char:FindFirstChild("HumanoidRootPart")
 	if not hrp then return end
 	local head = char:FindFirstChild("Head")
 	local lh = char:FindFirstChild("Left Arm")
 	local rh = char:FindFirstChild("Right Arm")
-	_G.UKameBusy = true
+	UKameBusy = true
 
 	---------------------------------------------------------------- CONFIG
 	local TOTAL = 5.9
@@ -7241,7 +7298,7 @@ function PlayUltimateKamehameha()
 
 		-- beam camera shake: full strength for BEAM_SHAKE_HOLD, then fades out over BEAM_SHAKE_FADE.
 		-- Runs right after the default camera script each frame, so it rides on top of the player's normal camera.
-		do
+		if ACTOR_IS_LOCAL then
 			local shakeName = "UKameBeamShake"
 			pcall(RunService.UnbindFromRenderStep, RunService, shakeName)
 			local shakeT, shakePhase = 0, 0
@@ -7405,10 +7462,11 @@ function PlayUltimateKamehameha()
 
 	---------------------------------------------------------------- lighting fx
 	local orig = {exp = Lighting.ExposureCompensation, amb = Lighting.Ambient, oamb = Lighting.OutdoorAmbient}
-	local cc = Instance.new("ColorCorrectionEffect") cc.Name = "UKameCC" cc.Parent = Lighting
-	local bloom = Instance.new("BloomEffect") bloom.Name = "UKameBloom" bloom.Intensity = 0 bloom.Size = 24 bloom.Threshold = 1 bloom.Parent = Lighting
-	local dof = Instance.new("DepthOfFieldEffect") dof.Name = "UKameDOF" dof.FarIntensity = 0 dof.NearIntensity = 0 dof.FocusDistance = 20 dof.InFocusRadius = 12 dof.Parent = Lighting
-	local sun = Instance.new("SunRaysEffect") sun.Name = "UKameSun" sun.Intensity = 0 sun.Spread = 0.7 sun.Parent = Lighting
+	local LightingRoot = ACTOR_IS_LOCAL and Lighting or nil -- other players' grade effects are built but never put on OUR Lighting
+	local cc = Instance.new("ColorCorrectionEffect") cc.Name = "UKameCC" cc.Parent = LightingRoot
+	local bloom = Instance.new("BloomEffect") bloom.Name = "UKameBloom" bloom.Intensity = 0 bloom.Size = 24 bloom.Threshold = 1 bloom.Parent = LightingRoot
+	local dof = Instance.new("DepthOfFieldEffect") dof.Name = "UKameDOF" dof.FarIntensity = 0 dof.NearIntensity = 0 dof.FocusDistance = 20 dof.InFocusRadius = 12 dof.Parent = LightingRoot
+	local sun = Instance.new("SunRaysEffect") sun.Name = "UKameSun" sun.Intensity = 0 sun.Spread = 0.7 sun.Parent = LightingRoot
 
 	---------------------------------------------------------------- UI
 	local gui = Instance.new("ScreenGui")
@@ -7418,7 +7476,7 @@ function PlayUltimateKamehameha()
 	gui.ResetOnSpawn = false
 	gui.DisplayOrder = 999
 	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-	if not pcall(function() gui.Parent = gethui() end) or not gui.Parent then
+	if ACTOR_IS_LOCAL and (not pcall(function() gui.Parent = gethui() end) or not gui.Parent) then
 		gui.Parent = plr:WaitForChild("PlayerGui")
 	end
 
@@ -8055,6 +8113,7 @@ function PlayUltimateKamehameha()
 				end
 			end
 		end
+		if ACTOR_IS_LOCAL then -- screen-only wrap-up (flash, bars, camera, lighting): skipped for other players
 		flashF.BackgroundColor3 = WHITE
 		flashF.BackgroundTransparency = abort and 1 or 0.78
 		if RELEASE_CAMERA or abort then
@@ -8070,12 +8129,13 @@ function PlayUltimateKamehameha()
 		TweenService:Create(dof, TweenInfo.new(0.8), {FarIntensity = 0}):Play()
 		TweenService:Create(sun, TweenInfo.new(0.8), {Intensity = 0}):Play()
 		for _, i in ipairs({cc, bloom, dof, sun}) do Debris:AddItem(i, 1) end
+end
 		headBurst:Destroy()
 		fx:Destroy()
 		for _, f in ipairs(lines) do f.BackgroundTransparency = 1 end
 		setVig(0)
 		Debris:AddItem(gui, 0.8)
-		_G.UKameBusy = false
+		UKameBusy = false
 	end
 
 	---------------------------------------------------------------- camera shake
@@ -8139,9 +8199,11 @@ function PlayUltimateKamehameha()
 		-- grade
 		local gl = sstep(seg(T, 0, 1.3))
 		local g1 = sstep(seg(T, 0.15, 1.0))
-		Lighting.ExposureCompensation = orig.exp - 0.8 * gl
-		Lighting.Ambient = orig.amb:Lerp(Color3.fromRGB(25, 40, 95), 0.75 * gl)
-		Lighting.OutdoorAmbient = orig.oamb:Lerp(Color3.fromRGB(25, 40, 95), 0.75 * gl)
+		if ACTOR_IS_LOCAL then
+			Lighting.ExposureCompensation = orig.exp - 0.8 * gl
+			Lighting.Ambient = orig.amb:Lerp(Color3.fromRGB(25, 40, 95), 0.75 * gl)
+			Lighting.OutdoorAmbient = orig.oamb:Lerp(Color3.fromRGB(25, 40, 95), 0.75 * gl)
+		end
 		cc.TintColor = WHITE:Lerp(Color3.fromRGB(165, 205, 255), gl)
 		cc.Contrast = 0.22 * gl
 		cc.Saturation = 0.18 * gl
@@ -8218,7 +8280,7 @@ function PlayUltimateKamehameha()
 		local lineAmt = sstep(seg(T, 4.2, 4.5)) * (0.12 + 0.1 * sstep(seg(T, 4.75, 5.9)))
 		updateLines(dt, lineAmt)
 		local fi = math.clamp((d - 0.6) / 1.8, 0, 1) * (T >= 3.45 and 0.65 or 0.5) * (1 - 0.3 * sstep(seg(T, 5.5, 5.9))) -- eases off slightly into the final flash
-		updateFlare(fi)
+		if ACTOR_IS_LOCAL then updateFlare(fi) end
 		if T > 5.55 then
 			flashF.BackgroundColor3 = WHITE
 			flashF.BackgroundTransparency = 1 - 0.22 * sstep(seg(T, 5.6, 5.9)) ^ 2
@@ -8244,8 +8306,9 @@ attack3Running = false
 attack4Running = false
 attack5Running = false
 
-RunService.Heartbeat:Connect(function()
-	for _, track in ipairs(Animator:GetPlayingAnimationTracks()) do
+-- Looks at a list of animation tracks of THIS player and replaces the attack animations with the custom ones.
+function ScanTracks(tracks)
+	for _, track in ipairs(tracks) do
 		
 		if not sequenceRunning and string.find(track.Animation.AnimationId, TRIGGER_ANIM_IDS.ATTACK1) then
 			sequenceRunning = true
@@ -8260,7 +8323,7 @@ RunService.Heartbeat:Connect(function()
 		end
 
 		-- If a finisher animation plays while attack2 is active, cancel everything immediately.
-		if attack2Running and not attack2Cancelled then
+		if ACTOR_IS_LOCAL and attack2Running and not attack2Cancelled then
 			local animId = track.Animation.AnimationId:match("%d+") or ""
 			if ATTACK2_CANCEL_IDS[animId] and track ~= attack2Track then
 				attack2Cancelled = true
@@ -8793,7 +8856,7 @@ wait(0.2)
 
         if not RunService:IsClient() then return end
 
-        player = Players.LocalPlayer
+        player = LocalPlayer
         character = player.Character or player.CharacterAdded:Wait()
         humanoidRootPart = character:WaitForChild("HumanoidRootPart")
 
@@ -9643,7 +9706,7 @@ wait(0.2)
 
         if not RunService:IsClient() then return end
 
-        player = Players.LocalPlayer
+        player = LocalPlayer
         character = player.Character or player.CharacterAdded:Wait()
         humanoidRootPart = character:WaitForChild("HumanoidRootPart")
 
@@ -9747,7 +9810,7 @@ wait(0.2)
 
         if not RunService:IsClient() then return end
 
-        player = Players.LocalPlayer
+        player = LocalPlayer
         character = player.Character or player.CharacterAdded:Wait()
         humanoidRootPart = character:WaitForChild("HumanoidRootPart")
 
@@ -10058,7 +10121,7 @@ end)
 				flashFrame.BorderSizePixel = 0
 				flashFrame.ZIndex = 10
 				flashFrame.Parent = flashGui
-				flashGui.Parent = LocalPlayer.PlayerGui
+				flashGui.Parent = ACTOR_IS_LOCAL and LocalPlayer.PlayerGui or nil
 				game:GetService("Debris"):AddItem(flashGui, 0.1)
 
 				
@@ -10066,7 +10129,7 @@ end)
 					pcall(function()
 						ReplicatedStorage = game:GetService("ReplicatedStorage")
 						Replication = ReplicatedStorage.Replication
-						for _, conn in ipairs(getconnections(Replication.OnClientEvent)) do
+						for _, conn in ipairs((ACTOR_IS_LOCAL and getconnections(Replication.OnClientEvent) or {})) do
 							fn = conn.Function
 							if fn then
 								task.spawn(fn, {
@@ -10254,7 +10317,7 @@ end)
 							overlayFrame.BackgroundTransparency = 1
 							overlayFrame.BorderSizePixel = 0
 							overlayFrame.Parent = overlayGui
-							overlayGui.Parent = (gethui and gethui()) or LocalPlayer:WaitForChild("PlayerGui")
+							overlayGui.Parent = (gethui and gethui()) or REAL_LOCAL_PLAYER:WaitForChild("PlayerGui")
 						end
 						local elapsed = 0
 						local fadeConn
@@ -10335,14 +10398,194 @@ end)
 				if not ok then warn("[Attack5] Error:", err) end
 				-- the cinematic runs on its own loop; stay locked until it clears its busy flag (15s safety cap)
 				local started = tick()
-				while _G.UKameBusy and tick() - started < 15 do task.wait(0.1) end
+				while UKameBusy and tick() - started < 15 do task.wait(0.1) end
 				attack5Running = false
 			end)
 
 			break
 		end
 	end
+end
+
+TriggerConn = RunService.Heartbeat:Connect(function()
+	ScanTracks(Animator:GetPlayingAnimationTracks())
 end)
+if not ACTOR_IS_LOCAL then
+	-- other players' attack animations can be stopped by their own client right away, so also react the moment a track starts
+	AnimPlayedConn = Animator.AnimationPlayed:Connect(function(track)
+		ScanTracks({ track })
+	end)
+end
+
+end -- BuildActorLibrary
+
+
+-- =====================================================================================================
+--  PER-PLAYER INSTANCES
+--  An "instance" = one copy of BuildActorLibrary() running in its own private environment (so its globals, flags and functions are its own),
+--  bound to one player's character. You always get one (full effects). Every player that gets teleported into the event gets one too.
+-- =====================================================================================================
+local ActorInstances = {}   -- [Player] = { env = table, char = Model }
+local InstanceToken  = {}   -- [Player] = number (lets a newer build cancel an older one that is still waiting for the character)
+
+-- A camera that can be READ (so effects can face the camera) but never written to. Other players' cinematics run on this instead of your real camera.
+function MakeReadOnlyCamera()
+	local real = workspace.CurrentCamera
+	return setmetatable({}, {
+		__index = function(_, key)
+			local value = real[key]
+			if type(value) == "function" then
+				return function(_, ...) return value(real, ...) end
+			end
+			return value
+		end,
+		__newindex = function() end,
+	})
+end
+
+local function destroyActorInstance(plr)
+	local inst = ActorInstances[plr]
+	if not inst then return end
+	ActorInstances[plr] = nil
+	for _, name in ipairs({ "TriggerConn", "AnimPlayedConn" }) do
+		local conn = rawget(inst.env, name)
+		if conn then pcall(function() conn:Disconnect() end) end
+	end
+end
+
+local function createActorInstance(plr, char, isLocal)
+	InstanceToken[plr] = (InstanceToken[plr] or 0) + 1
+	local token = InstanceToken[plr]
+	destroyActorInstance(plr)
+
+	local hum  = char:WaitForChild("Humanoid", 10)
+	local root = char:WaitForChild("HumanoidRootPart", 10)
+	local arm  = char:WaitForChild("Right Arm", 10)
+	if not (hum and root and arm) then return end
+	local animator = hum:FindFirstChildOfClass("Animator") or hum:WaitForChild("Animator", 5)
+	if not animator then
+		animator = Instance.new("Animator")
+		animator.Parent = hum
+	end
+	if InstanceToken[plr] ~= token or plr.Character ~= char then return end -- respawned / left while we were waiting
+
+	local env = setmetatable({}, { __index = REAL_ENV })
+	env.ACTOR_IS_LOCAL    = isLocal
+	env.LocalPlayer       = plr
+	env.Character         = char
+	env.Humanoid          = hum
+	env.HumanoidRootPart  = root
+	env.Animator          = animator
+	env.RightArm          = arm
+
+	setfenv(BuildActorLibrary, env)
+	local ok, err = pcall(BuildActorLibrary)
+	if not ok then
+		warn("[Attacks] could not build the attack library for " .. plr.Name .. ": " .. tostring(err))
+		return
+	end
+	ActorInstances[plr] = { env = env, char = char }
+end
+
+-- You: built right away (exactly like before), and rebuilt whenever you respawn
+createActorInstance(LocalPlayer, Character, true)
+LocalPlayer.CharacterAdded:Connect(function(char)
+	task.spawn(createActorInstance, LocalPlayer, char, true)
+end)
+
+-- =====================================================================================================
+--  EVENT PARTICIPANTS
+--  When the event begins (the chat line, see lockFlight below) every player in the server gets teleported to one of the event's spots
+--  (8 spots, anyone beyond that lands EXTRA_SPOT_DISTANCE studs away from one of them). Here we look at everybody who was in the server at
+--  that moment and register each player we actually find standing on a spot (or on an "extra" spot) -- those players get their attack
+--  animations replaced by this script, on your screen, whenever they trigger them.
+-- =====================================================================================================
+EVENT_SPOTS = {
+	Vector3.new(76031.9296875, 458.7995300292969, 24937.943359375),
+	Vector3.new(76236.359375, 458.7989807128906, 24803.498046875),
+	Vector3.new(76241.71875, 458.7989501953125, 24691.03125),
+	Vector3.new(76173.796875, 458.798583984375, 24608.583984375),
+	Vector3.new(76075.6640625, 458.7984924316406, 24589.060546875),
+	Vector3.new(76074.1015625, 459.3154296875, 24682.763671875),
+	Vector3.new(75999.0234375, 460.29620361328125, 24747.98046875),
+	Vector3.new(76041.296875, 459.3631591796875, 24846.517578125),
+}
+EVENT_EXTRA_SPOT_DISTANCE = 20  -- same value the event uses for players beyond the 8 spots
+EVENT_SPOT_TOLERANCE      = 8   -- studs of slack around a spot / extra spot
+EVENT_SPOT_HEIGHT_SLACK   = 20  -- studs of vertical slack
+EVENT_SPOT_CHECK_SECONDS  = 20  -- how long after the event starts we keep waiting for players to show up on their spot
+
+local RemoteParticipants = {}   -- [Player] = CharacterAdded connection
+
+local function isOnEventSpot(root)
+	local pos = root.Position
+	for _, spot in ipairs(EVENT_SPOTS) do
+		local flat = Vector2.new(pos.X - spot.X, pos.Z - spot.Z).Magnitude
+		if flat <= EVENT_EXTRA_SPOT_DISTANCE + EVENT_SPOT_TOLERANCE and math.abs(pos.Y - spot.Y) <= EVENT_SPOT_HEIGHT_SLACK then
+			return true
+		end
+	end
+	return false
+end
+
+local function registerParticipant(plr)
+	if RemoteParticipants[plr] then return end
+	RemoteParticipants[plr] = plr.CharacterAdded:Connect(function(char)
+		task.spawn(createActorInstance, plr, char, false)
+	end)
+	if plr.Character then
+		task.spawn(createActorInstance, plr, plr.Character, false)
+	end
+end
+
+Players.PlayerRemoving:Connect(function(plr)
+	local conn = RemoteParticipants[plr]
+	if conn then conn:Disconnect() end
+	RemoteParticipants[plr] = nil
+	InstanceToken[plr] = (InstanceToken[plr] or 0) + 1
+	destroyActorInstance(plr)
+end)
+
+local eventParticipantsStarted = false
+function EventParticipants_Start()
+	if eventParticipantsStarted then return end
+	eventParticipantsStarted = true
+
+	local pending = {}
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= REAL_LOCAL_PLAYER then pending[plr] = true end
+	end
+
+	task.spawn(function()
+		local deadline = os.clock() + EVENT_SPOT_CHECK_SECONDS
+		while next(pending) and os.clock() < deadline do
+			for plr in pairs(pending) do
+				if plr.Parent == nil then
+					pending[plr] = nil
+				else
+					local char = plr.Character
+					local root = char and char:FindFirstChild("HumanoidRootPart")
+					if root and isOnEventSpot(root) then
+						pending[plr] = nil
+						registerParticipant(plr)
+					end
+				end
+			end
+			task.wait(0.25)
+		end
+	end)
+end
+
+-- handy for the console: _G.EventAttackParticipants.List() prints who is registered
+_G.EventAttackParticipants = {
+	Start = function() EventParticipants_Start() end,
+	List = function()
+		local names = {}
+		for plr in pairs(RemoteParticipants) do names[#names + 1] = plr.Name end
+		return names
+	end,
+}
+
 
 -- =====================================================================================================
 --  FLYING SYSTEM v2  --  momentum / weight update (inspired by Marvel's Spider-Man 2 traversal)
@@ -11090,6 +11333,11 @@ local function lockFlight()
 	if flightLocked then return end
 	flightLocked = true
 	if flying then stopFlying() end -- drop out of the air if we were mid-flight
+	-- the event just began: find everybody who got teleported to their spot and give them the replaced attacks too
+	if EventParticipants_Start then
+		local okStart, errStart = pcall(EventParticipants_Start)
+		if not okStart then warn("[Attacks] event participants:", errStart) end
+	end
 end
 
 local function checkFlightLockMessage(userId, message)
