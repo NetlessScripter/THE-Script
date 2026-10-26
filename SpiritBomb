@@ -7,8 +7,12 @@ local Debris = game:GetService("Debris")
 local Lighting = game:GetService("Lighting")
 local HttpService = game:GetService("HttpService")
 
-local LocalPlayer = Players.LocalPlayer
-local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+-- The REAL local player. Inside the per-actor library (see BuildActorLibrary) the names
+-- LocalPlayer / Character / Humanoid / HumanoidRootPart / Animator / ACTOR_IS_LOCAL are
+-- provided by an env table, exactly like 23 does it, so they are intentionally NOT locals here.
+local REAL_ENV          = (getfenv and getfenv(1)) or (getgenv and getgenv())
+local REAL_LOCAL_PLAYER = Players.LocalPlayer
+local InitialCharacter  = REAL_LOCAL_PLAYER.Character or REAL_LOCAL_PLAYER.CharacterAdded:Wait()
 
 local Replication = ReplicatedStorage:WaitForChild("Replication")
 local Resources = ReplicatedStorage:WaitForChild("Resources")
@@ -20,8 +24,19 @@ local function FireReplicationEvent(data)
     firesignal(Replication.OnClientEvent, data)
 end
 
+local EXPLOSION_DURATION = 3.4 -- seconds after impact until the last debris/shell fades
+
+-- Sequence flag: a detected Spirit Bomb animation can only start the sequence once per
+-- SEQUENCE_FLAG_SECONDS (the animation can be detected by several paths / several tracks at once).
+-- false = one flag per character (each participant gets their own bomb, but never 8 copies of it)
+-- true  = ONE flag shared by everybody (the first one to trigger wins for 2 seconds)
+local SEQUENCE_FLAG_SECONDS = 2
+local SEQUENCE_FLAG_SHARED  = false
+local sharedSequenceFlag    = false
+
 local ORB_ASSET_ID = "rbxassetid://99926232093491"
 
+-- Create the SpiritVFX folder (reuse it if the script gets re-executed)
 local SpiritVFX = ReplicatedStorage:FindFirstChild("SpiritVFX")
 if not SpiritVFX then
     SpiritVFX = Instance.new("Folder")
@@ -29,6 +44,7 @@ if not SpiritVFX then
     SpiritVFX.Parent = ReplicatedStorage
 end
 
+-- Load the orb once, up front
 if not SpiritVFX:FindFirstChild("SpiritBombOrb") then
     local ok, result = pcall(game.GetObjects, game, ORB_ASSET_ID)
     if ok and result and result[1] then
@@ -63,42 +79,1190 @@ local spiritBombSound = GetGitSound(
     "theactualspiritbomb"
 )
 
-local function LoadAnimator6D()
-    if getgenv().Animator6DLoadedPro then
-        return
-    end
-    loadstring(game:HttpGet(
-        "https://raw.githubusercontent.com/NetlessScripter/Universal-KJ-Port/refs/heads/main/Animation%20Module"
-    ))()
+-- ============================================================
+--  ANIMATION MODULE + KEYFRAME CACHES (loaded once, reused by every character)
+--  Animator6D takes the target character as its 4th argument, so the exact same
+--  call plays the animation on MY character and on every participant (this is how
+--  23's PlayAttack4Anim works: Animator6D(KFS, 1, false, Character)).
+-- ============================================================
+local ANIM_MODULE_URL = "https://raw.githubusercontent.com/NetlessScripter/Universal-KJ-Port/refs/heads/main/Animation%20Module"
+local THROW_ANIM = {
+    Url  = "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/anim6d_kfcache_18385523261.json",
+    File = "anim6d_kfcache_18385523261.json",
+}
+local POST_LAUNCH_ANIM = {
+    Url  = "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/anim6d_kfcache_18878778259.json",
+    File = "anim6d_kfcache_18878778259.json",
+}
+local animJsonBodies = {}
+local animModuleLoaded = false
+
+local function EnsureAnimModule()
+    if animModuleLoaded and getgenv().Animator6D then return end
+    loadstring(game:HttpGet(ANIM_MODULE_URL))()
+    animModuleLoaded = true
 end
 
-local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
-    local Humanoid = Character:WaitForChild("Humanoid")
-    local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
+-- raw JSON is downloaded/read once; a fresh table is decoded for every play
+local function GetAnimData(info)
+    local body = animJsonBodies[info.File]
+    if not body then
+        if isfile and isfile(info.File) then
+            local ok, raw = pcall(readfile, info.File)
+            if ok and raw and #raw > 100 then
+                body = raw
+            end
+        end
+        if not body then
+            local ok, fetched = pcall(game.HttpGet, game, info.Url)
+            if ok and fetched and #fetched > 100 then
+                body = fetched
+                if writefile then
+                    writefile(info.File, fetched)
+                end
+            else
+                error("[Animator6D] Failed to fetch JSON — cannot continue")
+            end
+        end
+        animJsonBodies[info.File] = body
+    end
+    return HttpService:JSONDecode(body)
+end
 
-    local EXPLOSION_DURATION = 3.4
+-- the second animation (played when the character launches up)
+local function PlayPostLaunchAnim(char, isLocal)
+    local animatorData = GetAnimData(POST_LAUNCH_ANIM)
+    EnsureAnimModule()
+    if isLocal then
+        Animator6D(animatorData)
+    else
+        Animator6D(animatorData, nil, nil, char)
+    end
+end
+
+-- (local player only: it touches my own screen)
+local function PlayImpactScreenFlash()
+    local fxUI = FiveSeasonsFX.FXUi
+
+    local whiteFlash = FiveSeasonsFX.FSWhite:Clone()
+    whiteFlash.Parent = Lighting
+
+    local blackFlash = FiveSeasonsFX.FSBlack:Clone()
+    blackFlash.Parent = Lighting
+
+    fxUI.Vignette.Visible = false
+
+    for _, guiChild in pairs(REAL_LOCAL_PLAYER.PlayerGui:GetChildren()) do
+        if guiChild.Name == "FXUi" and guiChild ~= fxUI then
+            guiChild:Destroy()
+        end
+    end
+
+    whiteFlash.Enabled = true
+    task.wait(0.035)
+    whiteFlash.Enabled = false
+
+    blackFlash.Enabled = true
+    task.wait(0.035)
+    blackFlash.Enabled = false
+
+    whiteFlash:Destroy()
+    blackFlash:Destroy()
+end
+
+-- ============================================================
+--  SPIRIT BOMB EXPLOSION (big blue sphere blast)
+-- ============================================================
+local EXPLOSION_COLORS = {
+    White = Color3.fromRGB(235, 248, 255),
+    Ice = Color3.fromRGB(150, 225, 255),
+    Cyan = Color3.fromRGB(60, 175, 255),
+    Blue = Color3.fromRGB(30, 100, 255),
+    Deep = Color3.fromRGB(10, 35, 190),
+}
+
+local function NewEffectPart(parent, className, size, cf, color, material, transparency)
+    local part = Instance.new(className)
+    part.Anchored = true
+    part.CanCollide = false
+    part.CanQuery = false
+    part.CanTouch = false
+    part.CastShadow = false
+    part.Size = size
+    part.CFrame = cf
+    part.Color = color
+    part.Material = material
+    part.Transparency = transparency
+    part.Parent = parent
+    return part
+end
+
+local function PlayTween(instance, duration, style, direction, goal, delayTime)
+    local function run()
+        if instance.Parent then
+            TweenService:Create(instance, TweenInfo.new(duration, style, direction), goal):Play()
+        end
+    end
+
+    if delayTime and delayTime > 0 then
+        task.delay(delayTime, run)
+    else
+        run()
+    end
+end
+
+-- Thin glowing ring (hollow) built from a SurfaceGui stroke, tilted like the reference
+local function CreateShockRing(folder, center, tilt, diameter, startDelay, color)
+    task.delay(startDelay, function()
+        local ring = NewEffectPart(
+            folder, "Part", Vector3.new(10, 0.2, 10), CFrame.new(center) * tilt,
+            color, Enum.Material.SmoothPlastic, 1
+        )
+
+        local growTime = 1.4
+        PlayTween(ring, growTime, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out,
+            {Size = Vector3.new(diameter, 0.2, diameter)})
+
+        for _, face in ipairs({Enum.NormalId.Top, Enum.NormalId.Bottom}) do
+            local gui = Instance.new("SurfaceGui")
+            gui.Face = face
+            gui.SizingMode = Enum.SurfaceGuiSizingMode.FixedSize
+            gui.CanvasSize = Vector2.new(1024, 1024)
+            gui.LightInfluence = 0
+            gui.Brightness = 3
+            gui.Parent = ring
+
+            local frame = Instance.new("Frame")
+            frame.AnchorPoint = Vector2.new(0.5, 0.5)
+            frame.Position = UDim2.fromScale(0.5, 0.5)
+            frame.Size = UDim2.fromScale(0.94, 0.94)
+            frame.BackgroundTransparency = 1
+            frame.Parent = gui
+
+            local corner = Instance.new("UICorner")
+            corner.CornerRadius = UDim.new(0.5, 0)
+            corner.Parent = frame
+
+            local stroke = Instance.new("UIStroke")
+            stroke.Color = color
+            stroke.Thickness = 26
+            stroke.Parent = frame
+
+            PlayTween(stroke, 1.0, Enum.EasingStyle.Quad, Enum.EasingDirection.In,
+                {Transparency = 1}, growTime - 0.6)
+        end
+    end)
+end
+
+-- Radial light streaks (the speed lines flanking the blast in the reference)
+local function SpawnLightSpokes(folder, center, rng)
+    for i = 1, 56 do
+        local dir = Vector3.new(rng:NextNumber(-1, 1), rng:NextNumber(-1, 1), rng:NextNumber(-1, 1))
+        if dir.Magnitude > 0.1 then
+            dir = dir.Unit
+
+            local length = rng:NextNumber(140, 320)
+            local startPos = center + dir * rng:NextNumber(40, 90)
+            local endPos = center + dir * rng:NextNumber(380, 760)
+            local travel = rng:NextNumber(0.6, 1.1)
+            local color = (i % 2 == 0) and EXPLOSION_COLORS.White or EXPLOSION_COLORS.Cyan
+
+            local spoke = NewEffectPart(
+                folder, "Part", Vector3.new(0.7, 0.7, length),
+                CFrame.lookAt(startPos, startPos + dir),
+                color, Enum.Material.Neon, 0
+            )
+
+            PlayTween(spoke, travel, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out,
+                {CFrame = CFrame.lookAt(endPos, endPos + dir)})
+            PlayTween(spoke, travel * 0.8, Enum.EasingStyle.Quad, Enum.EasingDirection.In,
+                {Transparency = 1, Size = Vector3.new(0.1, 0.1, length)}, travel * 0.2)
+        end
+    end
+end
+
+-- Dark rock chunks flying out with glowing blue trails
+local function SpawnDebris(folder, center, rng)
+    local rockClasses = {"Part", "WedgePart", "CornerWedgePart"}
+
+    for _ = 1, 48 do
+        local dir = Vector3.new(rng:NextNumber(-1, 1), rng:NextNumber(-0.5, 1), rng:NextNumber(-1, 1))
+        if dir.Magnitude < 0.1 then
+            dir = Vector3.yAxis
+        end
+        dir = dir.Unit
+
+        local size = rng:NextNumber(7, 26)
+        local startCF = CFrame.new(center + dir * rng:NextNumber(40, 110))
+            * CFrame.Angles(rng:NextNumber(0, 6.28), rng:NextNumber(0, 6.28), rng:NextNumber(0, 6.28))
+
+        local rock = NewEffectPart(
+            folder, rockClasses[rng:NextInteger(1, #rockClasses)],
+            Vector3.new(size, size * rng:NextNumber(0.5, 1), size * rng:NextNumber(0.6, 1.2)),
+            startCF, Color3.fromRGB(22, 26, 40), Enum.Material.Slate, 0
+        )
+
+        local a0 = Instance.new("Attachment")
+        a0.Position = Vector3.new(0, size * 0.15, 0)
+        a0.Parent = rock
+        local a1 = Instance.new("Attachment")
+        a1.Position = Vector3.new(0, -size * 0.15, 0)
+        a1.Parent = rock
+
+        local trail = Instance.new("Trail")
+        trail.Attachment0 = a0
+        trail.Attachment1 = a1
+        trail.Color = ColorSequence.new(EXPLOSION_COLORS.Ice, EXPLOSION_COLORS.Deep)
+        trail.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0.2),
+            NumberSequenceKeypoint.new(1, 1),
+        })
+        trail.WidthScale = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 1),
+            NumberSequenceKeypoint.new(1, 0),
+        })
+        trail.Lifetime = 0.7
+        trail.LightEmission = 1
+        trail.FaceCamera = true
+        trail.Parent = rock
+
+        local travelTime = rng:NextNumber(2.2, 3.4)
+        local endPos = center + dir * rng:NextNumber(450, 1100) + Vector3.new(0, -rng:NextNumber(0, 60), 0)
+        local endCF = CFrame.new(endPos)
+            * CFrame.Angles(rng:NextNumber(-3, 3), rng:NextNumber(-3, 3), rng:NextNumber(-3, 3))
+
+        PlayTween(rock, travelTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, {CFrame = endCF})
+        PlayTween(rock, 0.8, Enum.EasingStyle.Linear, Enum.EasingDirection.In,
+            {Transparency = 1}, travelTime - 0.8)
+    end
+end
+
+-- Boiling blue plasma that fills the sphere volume
+local function AttachPlasma(shell)
+    local plasma = Instance.new("ParticleEmitter")
+    plasma.Texture = "rbxasset://textures/particles/smoke_main.dds"
+    plasma.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, EXPLOSION_COLORS.White),
+        ColorSequenceKeypoint.new(0.4, EXPLOSION_COLORS.Cyan),
+        ColorSequenceKeypoint.new(1, EXPLOSION_COLORS.Deep),
+    })
+    plasma.LightEmission = 1
+    plasma.LightInfluence = 0
+    plasma.Size = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 40),
+        NumberSequenceKeypoint.new(1, 100),
+    })
+    plasma.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0.5),
+        NumberSequenceKeypoint.new(0.6, 0.7),
+        NumberSequenceKeypoint.new(1, 1),
+    })
+    plasma.Lifetime = NumberRange.new(0.7, 1.4)
+    plasma.Speed = NumberRange.new(0, 6)
+    plasma.Rotation = NumberRange.new(0, 360)
+    plasma.RotSpeed = NumberRange.new(-40, 40)
+    plasma.Rate = 0
+
+    pcall(function()
+        plasma.Shape = Enum.ParticleEmitterShape.Sphere
+        plasma.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+        plasma.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
+    end)
+
+    plasma.Parent = shell
+    plasma.Rate = 120
+    task.delay(1.4, function()
+        plasma.Rate = 0
+    end)
+end
+
+-- Fast glowing sparks burst out of the core
+local function AttachSparks(core)
+    local sparks = Instance.new("ParticleEmitter")
+    sparks.Color = ColorSequence.new(EXPLOSION_COLORS.White, EXPLOSION_COLORS.Cyan)
+    sparks.LightEmission = 1
+    sparks.LightInfluence = 0
+    sparks.Size = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 4),
+        NumberSequenceKeypoint.new(1, 0),
+    })
+    sparks.Lifetime = NumberRange.new(0.8, 1.8)
+    sparks.Speed = NumberRange.new(250, 700)
+    sparks.Drag = 1.5
+    sparks.SpreadAngle = Vector2.new(180, 180)
+    sparks.Orientation = Enum.ParticleOrientation.VelocityParallel
+    sparks.Rate = 0
+    sparks.Parent = core
+    sparks:Emit(220)
+end
+
+-- Bloom + blue color grade that fade out
+local function PlayExplosionScreenFX(folder)
+    local bloom = Instance.new("BloomEffect")
+    bloom.Intensity = 3
+    bloom.Size = 56
+    bloom.Threshold = 0.6
+    bloom.Parent = Lighting
+    Debris:AddItem(bloom, 4)
+    PlayTween(bloom, 2.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, {Intensity = 0}, 0.4)
+
+    local grade = Instance.new("ColorCorrectionEffect")
+    grade.TintColor = Color3.fromRGB(150, 200, 255)
+    grade.Brightness = 0.25
+    grade.Contrast = 0.15
+    grade.Saturation = 0.2
+    grade.Parent = Lighting
+    Debris:AddItem(grade, 4)
+    PlayTween(grade, 2.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, {
+        TintColor = Color3.new(1, 1, 1),
+        Brightness = 0,
+        Contrast = 0,
+        Saturation = 0,
+    }, 0.3)
+end
+
+-- ============================================================
+--  SPIRIT BOMB FX STAGE
+--  Ported from the planet explosion startup (23_3): tapered beam rays, spiral comets with
+--  trails, jagged lightning, the 12-layer stacked glow core and the stretched particle lens flare.
+--  Everything is drawn on a plane that faces the camera and follows the orb.
+-- ============================================================
+local NSK, CSK = NumberSequenceKeypoint.new, ColorSequenceKeypoint.new
+local WHITE = Color3.new(1, 1, 1)
+local PI = math.pi
+local rgb = Color3.fromRGB
+local SB_BLUE = { rgb(70, 150, 255), rgb(90, 230, 255), rgb(30, 80, 255), rgb(180, 205, 255) }
+local SB_TILT = -0.2
+
+local SB_FALL_TIME = 0.8        -- how long the orb takes to drop
+local SB_CHARGE_PRE = 0.3       -- the charge-up starts this long before the drop
+local SB_CHARGE_TIME = SB_CHARGE_PRE + SB_FALL_TIME -- total charge, ends exactly at impact
+local SB_ORB_FINAL = 220        -- diameter of the white-hot blast core at full size
+local SB_FLARE = 1              -- lens flare strength (0 = off)
+local SB_FLARE_STRETCH = 1      -- how far the flare is stretched horizontally
+local SB_FLARE_TILT = 10        -- degrees the stretch is tilted
+
+local function kf(t, pts)
+    if t <= pts[1][1] then return pts[1][2] end
+    for i = 2, #pts do
+        local p0, p1 = pts[i - 1], pts[i]
+        if t <= p1[1] then
+            local s = (t - p0[1]) / (p1[1] - p0[1])
+            s = s * s * (3 - 2 * s)
+            local v0, v1 = p0[2], p1[2]
+            if typeof(v0) == "Color3" then return v0:Lerp(v1, s) end
+            return v0 + (v1 - v0) * s
+        end
+    end
+    return pts[#pts][2]
+end
+
+local function outExpo(a)
+    return a >= 1 and 1 or 1 - 2 ^ (-10 * a)
+end
+
+local function evalSeq(v, a)
+    if typeof(v) == "number" then return v end
+    a = math.clamp(a, 0, 1)
+    local k = v.Keypoints
+    for i = 2, #k do
+        if a <= k[i].Time then
+            local p0, p1 = k[i - 1], k[i]
+            return p0.Value + (p1.Value - p0.Value) * (a - p0.Time) / (p1.Time - p0.Time)
+        end
+    end
+    return k[#k].Value
+end
+
+local function SpiritBombScale(orbDiameter)
+    return math.clamp(orbDiameter * 1.8, 130, 600)
+end
+
+local function CreateFXStage(S, orbDiameter)
+    local stage = {
+        S = S,
+        OrbDiameter = orbDiameter,
+        Center = Vector3.zero,
+        Time = 0,
+        Hooks = {},
+        Cleanup = {},
+        CoreDiameter = 0,
+        CoreAlpha = 0,
+        CoreDeep = 0,
+    }
+
+    local rng = Random.new()
+    local function rr(a, b) return rng:NextNumber(a, b) end
+    local function pick(t) return t[rng:NextInteger(1, #t)] end
+    stage.rr, stage.pick = rr, pick
+
+    local root = Instance.new("Folder")
+    root.Name = "SpiritBombFX"
+    root.Parent = Workspace
+
+    local anchor = Instance.new("Part")
+    anchor.Anchored, anchor.CanCollide, anchor.CanQuery, anchor.CanTouch = true, false, false, false
+    anchor.Transparency = 1
+    anchor.Size = Vector3.one
+    anchor.Parent = root
+
+    local plane = CFrame.new() -- camera-facing axes at the orb: X right, Y up, Z toward camera
+    local tasks = {}
+    local function at(t0, dur, fn, done) table.insert(tasks, { t0 = t0, dur = dur, fn = fn, done = done }) end
+
+    -- ---------- building blocks ----------
+    local function newAtt()
+        local a = Instance.new("Attachment")
+        a.Parent = anchor
+        return a
+    end
+
+    local function makeBeam(a0, a1, colorSeq)
+        local b = Instance.new("Beam")
+        b.Attachment0, b.Attachment1 = a0, a1
+        b.FaceCamera = true
+        b.LightEmission = 1
+        b.LightInfluence = 0
+        b.Segments = 1
+        b.Color = colorSeq
+        b.Width0, b.Width1 = 0, 0
+        b.Parent = root
+        return b
+    end
+
+    local function neonPart(shape)
+        local p = Instance.new("Part")
+        p.Shape = shape or Enum.PartType.Block
+        p.Material = Enum.Material.Neon
+        p.Anchored = true
+        p.CanCollide, p.CanQuery, p.CanTouch, p.CastShadow = false, false, false, false
+        p.Parent = root
+        return p
+    end
+
+    local function seqFor(base, tr)
+        local t = base + (1 - base) * tr
+        return NumberSequence.new({ NSK(0, t), NSK(0.55, t + (1 - t) * 0.4), NSK(1, 1) })
+    end
+
+    -- tapered beam streak: white-hot tail -> colored body -> soft tip (halo layer on thick rays)
+    function stage.addRay(s)
+        local dir = Vector3.new(math.cos(s.ang), math.sin(s.ang), s.z or 0).Unit
+        local grow, hold, tm = s.grow or 0.25, s.hold or 0.5, s.tailMove or 0.7
+        local useHalo = s.w > 0.009 * S
+        local a0, a1, halo, body, core
+        at(s.t0, s.life, function(a)
+            if not a0 then
+                a0, a1 = newAtt(), newAtt()
+                if useHalo then halo = makeBeam(a0, a1, ColorSequence.new(s.color)) end
+                body = makeBeam(a0, a1, ColorSequence.new({ CSK(0, WHITE), CSK(0.3, s.color), CSK(1, s.color) }))
+                core = makeBeam(a0, a1, ColorSequence.new(WHITE))
+            end
+            local g = outExpo(math.min(a / grow, 1))
+            local head = s.r0 + s.len * g
+            local tail = s.r0 + s.len * tm * math.clamp((a - grow) / (1 - grow), 0, 1) ^ 1.5
+            a0.WorldPosition = plane * (dir * tail)
+            a1.WorldPosition = plane * (dir * head)
+            local tr = math.max(1 - math.min(a / 0.05, 1), math.clamp((a - hold) / (1 - hold), 0, 1) ^ 1.3)
+            local w = s.w * (1 - 0.5 * a)
+            if halo then
+                halo.Width0, halo.Width1 = w * 5, 0
+                halo.Transparency = seqFor(0.82, tr)
+            end
+            body.Width0, body.Width1 = w * 2, 0
+            body.Transparency = seqFor(0.3, tr)
+            core.Width0, core.Width1 = w * 0.7, 0
+            core.Transparency = seqFor(0, tr)
+        end, function()
+            if a0 then
+                a0:Destroy(); a1:Destroy(); body:Destroy(); core:Destroy()
+                if halo then halo:Destroy() end
+            end
+        end)
+    end
+
+    -- smooth curved streak: a glowing head dragging a Trail along a spiral path
+    function stage.addComet(s)
+        local part, tr
+        local inward = s.mode == "in"
+        at(s.t0, s.life, function(a)
+            if not part then
+                part = neonPart(Enum.PartType.Ball)
+                part.Size = Vector3.one * math.max(s.w * 1.3, 1)
+                part.Color = s.color:Lerp(WHITE, 0.65)
+                local a0, a1 = Instance.new("Attachment"), Instance.new("Attachment")
+                a0.Position, a1.Position = Vector3.new(0, s.w / 2, 0), Vector3.new(0, -s.w / 2, 0)
+                a0.Parent, a1.Parent = part, part
+                tr = Instance.new("Trail")
+                tr.Attachment0, tr.Attachment1 = a0, a1
+                tr.Lifetime = s.trail
+                tr.LightEmission = 1
+                tr.LightInfluence = 0
+                tr.FaceCamera = true
+                tr.Color = ColorSequence.new({ CSK(0, WHITE), CSK(0.18, s.color), CSK(1, s.color2 or s.color) })
+                tr.Transparency = NumberSequence.new({ NSK(0, 0), NSK(0.45, 0.3), NSK(1, 1) })
+                tr.WidthScale = NumberSequence.new({ NSK(0, 1), NSK(1, 0) })
+                tr.Parent = part
+            end
+            local e = inward and a ^ 2.2 or outExpo(a) ^ 0.9
+            local r = s.r0 + (s.r1 - s.r0) * e
+            local th = s.ang + s.swirl * e
+            part.CFrame = plane * CFrame.new(math.cos(th) * r, math.sin(th) * r, (s.z or 0) * r)
+            part.Transparency = math.clamp((a - 0.8) / 0.2, 0, 1)
+        end, function()
+            if part then
+                tr.Enabled = false
+                part.Transparency = 1
+                task.delay(s.trail + 0.4, function() part:Destroy() end)
+            end
+        end)
+    end
+
+    -- jagged flickering lightning
+    function stage.addBolt(s)
+        local N = s.N or 9
+        local dir = Vector3.new(math.cos(s.ang), math.sin(s.ang), 0)
+        local nrm = Vector3.new(-math.sin(s.ang), math.cos(s.ang), 0)
+        local atts, halos, cores
+        local lastTick, jit = -1, {}
+        at(s.t0, s.life, function(a)
+            if not atts then
+                atts, halos, cores = {}, {}, {}
+                for i = 0, N do atts[i] = newAtt() end
+                for i = 1, N do
+                    halos[i] = makeBeam(atts[i - 1], atts[i], ColorSequence.new(s.color))
+                    cores[i] = makeBeam(atts[i - 1], atts[i], ColorSequence.new(WHITE))
+                end
+            end
+            local tick = math.floor(a * s.life * 24)
+            if tick ~= lastTick then
+                lastTick = tick
+                for i = 0, N do jit[i] = rr(-1, 1) end
+            end
+            local g = outExpo(math.min(a / 0.18, 1))
+            for i = 0, N do
+                local u = i / N
+                local off = jit[i] * s.len * (s.jitter or 0.07) * math.sin(PI * u) * g
+                atts[i].WorldPosition = plane * (dir * (s.r0 + s.len * g * u) + nrm * off)
+            end
+            local fade = math.max(1 - math.min(a / 0.04, 1), math.clamp((a - 0.45) / 0.55, 0, 1))
+            if rr(0, 1) < 0.18 then fade = math.min(1, fade + 0.55) end -- flicker
+            local tsq = NumberSequence.new(fade)
+            local hsq = NumberSequence.new(0.5 + 0.5 * fade)
+            for i = 1, N do
+                local wa, wb = s.w * (1 - (i - 1) / N) ^ 0.7, s.w * (1 - i / N) ^ 0.7
+                halos[i].Width0, halos[i].Width1 = wa * 3.2, wb * 3.2
+                cores[i].Width0, cores[i].Width1 = wa, wb
+                halos[i].Transparency = hsq
+                cores[i].Transparency = tsq
+            end
+        end, function()
+            if atts then
+                for i = 1, N do halos[i]:Destroy(); cores[i]:Destroy() end
+                for i = 0, N do atts[i]:Destroy() end
+            end
+        end)
+    end
+
+    -- ---------- core: 12 stacked neon spheres = smooth radial glow ----------
+    local NL = 12
+    local mult = { 1, 1.2, 1.45, 1.75, 2.1, 2.6, 3.2, 4, 5, 6.3, 8, 10 }
+    local ctr = { 0, 0.18, 0.36, 0.5, 0.62, 0.72, 0.8, 0.86, 0.91, 0.945, 0.97, 0.985 }
+    local layers, blueL, deepL = {}, {}, {}
+    for i = 1, NL do
+        local u = (i - 1) / (NL - 1)
+        blueL[i] = WHITE:Lerp(rgb(25, 70, 255), u ^ 0.7)
+        deepL[i] = rgb(190, 225, 255):Lerp(rgb(10, 40, 230), u ^ 0.6)
+        layers[i] = neonPart(Enum.PartType.Ball)
+        layers[i].Size = Vector3.one
+        layers[i].Transparency = 1
+    end
+    -- parts max out at 2048 studs: ease big sizes into the cap instead of hiding the layer
+    local function softCap(x)
+        local knee, cap = 1000, 2040
+        if x <= knee then return x end
+        return knee + (cap - knee) * (1 - math.exp(-(x - knee) / (cap - knee)))
+    end
+
+    -- ---------- lens flare (stretched anamorphic particle flare, ported from the planet explosion) ----------
+    local FLARE_DEPTH = 13
+    local flareRig = Instance.new("Part")
+    flareRig.Anchored, flareRig.CanCollide, flareRig.CanQuery, flareRig.CanTouch = true, false, false, false
+    flareRig.CastShadow = false
+    flareRig.Transparency = 1
+    flareRig.Size = Vector3.one * 0.05
+    flareRig.Parent = root
+    local flareDefs = {
+        { -- MainGlow: wide oval glow
+            pos = Vector2.new(1, 1), mult = 1, blend = 0.5, role = 1, squash = -1,
+            size = NumberSequence.new({ NSK(0, 9), NSK(0.5, 4.5), NSK(1, 0) }),
+            alpha = NumberSequence.new({ NSK(0, 0.1), NSK(0.6, 0.55), NSK(1, 1) }),
+        },
+        { -- CoreFlash: white-hot stretched core
+            pos = Vector2.new(1, 1), mult = 1, blend = 0.15, role = 1, squash = -1.2,
+            size = NumberSequence.new({ NSK(0, 4.5), NSK(1, 0) }),
+            alpha = NumberSequence.new({ NSK(0, 0), NSK(1, 1) }),
+        },
+        { -- Band: soft colored band running through the core
+            pos = Vector2.new(1, 1), mult = 1, blend = 0.8, role = 2, squash = -4,
+            size = NumberSequence.new({ NSK(0, 6), NSK(1, 0) }),
+            alpha = NumberSequence.new({ NSK(0, 0.25), NSK(0.6, 0.65), NSK(1, 1) }),
+        },
+        { -- Ghost: faint stretched ghost drifting off-axis
+            pos = Vector2.new(-0.6, -0.6), mult = 1, blend = 0.75, role = 3, squash = -1.5,
+            size = NumberSequence.new({ NSK(0, 2.2), NSK(1, 0) }),
+            alpha = NumberSequence.new({ NSK(0, 0.65), NSK(1, 1) }),
+        },
+        { -- Anamorphic: long streak across the screen
+            pos = Vector2.new(1, 1), mult = 1, blend = 0.85, role = 2,
+            size = NumberSequence.new({ NSK(0, 3.5), NSK(1, 0) }),
+            alpha = NumberSequence.new({ NSK(0, 0.1), NSK(1, 1) }),
+            squash = NumberSequence.new({ NSK(0, -9), NSK(1, -3) }),
+        },
+        { -- StreakCore: thin white-hot line through the middle
+            pos = Vector2.new(1, 1), mult = 1, blend = 0.15, role = 1,
+            size = NumberSequence.new({ NSK(0, 2.2), NSK(1, 0) }),
+            alpha = NumberSequence.new({ NSK(0, 0), NSK(1, 1) }),
+            squash = NumberSequence.new({ NSK(0, -14), NSK(1, -5) }),
+        },
+    }
+    for _, d in ipairs(flareDefs) do
+        d.att = Instance.new("Attachment")
+        d.att.Parent = flareRig
+        local e = Instance.new("ParticleEmitter")
+        e.Enabled, e.Rate = false, 0
+        e.Speed, e.RotSpeed = NumberRange.new(0), NumberRange.new(0)
+        e.Lifetime = NumberRange.new(0.05)
+        e.Rotation = NumberRange.new(SB_FLARE_TILT)
+        e.LightEmission, e.LightInfluence, e.ZOffset = 1, 0, -5
+        e.Orientation = Enum.ParticleOrientation.FacingCamera
+        e.Parent = d.att
+        d.e = e
+    end
+
+    -- ---------- per-frame driver ----------
+    local conn
+    conn = RunService.RenderStepped:Connect(function(dt)
+        local cam = Workspace.CurrentCamera
+        stage.Time += dt
+        local t = stage.Time
+
+        if stage.Tracker then stage.Center = stage.Tracker() end
+        local center = stage.Center
+        local cf = cam.CFrame
+        plane = CFrame.fromMatrix(center, cf.RightVector, cf.UpVector, -cf.LookVector)
+        anchor.CFrame = CFrame.new(center)
+
+        -- scheduled beams / comets / bolts
+        for i = #tasks, 1, -1 do
+            local k = tasks[i]
+            if t >= k.t0 then
+                local a = (t - k.t0) / k.dur
+                if a >= 1 then
+                    k.fn(1)
+                    if k.done then k.done() end
+                    table.remove(tasks, i)
+                else
+                    k.fn(a)
+                end
+            end
+        end
+
+        for _, hook in ipairs(stage.Hooks) do hook(t, dt) end
+
+        -- glow core
+        local d, al = stage.CoreDiameter, stage.CoreAlpha
+        for i = 1, NL do
+            local l = layers[i]
+            if d > 1 and al > 0.002 then
+                l.Size = Vector3.one * softCap(d * mult[i])
+                l.CFrame = CFrame.new(center)
+                l.Transparency = 1 - (1 - ctr[i]) * al
+                l.Color = blueL[i]:Lerp(deepL[i], stage.CoreDeep)
+            else
+                l.Transparency = 1
+            end
+        end
+
+        -- lens flare, placed by screen-space math every frame
+        local V = cam.ViewportSize
+        local P = cam:WorldToViewportPoint(center)
+        local strength, c1, c2, c3 = 0, SB_BLUE[2], SB_BLUE[1], SB_BLUE[3]
+        if stage.FlareFn then strength, c1, c2, c3 = stage.FlareFn(t) end
+        strength = (P.Z > 0) and strength * SB_FLARE or 0
+        if strength > 0.001 then
+            local cols = { c1, c2, c3 }
+            local toSrc = center - cf.Position
+            local viewAngle = math.acos(math.clamp(cf.LookVector:Dot(toSrc.Unit), -1, 1))
+            local vFov = math.rad(cam.FieldOfView)
+            local ar = V.X / V.Y
+            local dFov = 2 * math.atan(math.tan(vFov / 2) * math.sqrt(1 + ar * ar))
+            local angleAlpha = 1 - math.clamp(viewAngle / (dFov / 2), 0, 1)
+            local str = math.clamp(angleAlpha * strength, 0, 1)
+            if str > 0.001 then
+                local src = Vector2.new(P.X, P.Y)
+                -- drift bias so the ghosts still spread out while the source sits dead center
+                local b = Vector2.new(V.X / 2, V.Y / 2) - src
+                    + Vector2.new(math.cos(t * 0.7) * V.Y * 0.16, math.sin(t * 0.5) * V.Y * 0.1)
+                local fovK = math.tan(vFov / 2) / math.tan(math.rad(60) / 2) -- keeps flare size constant while FOV swings
+                local fade = 1 - angleAlpha
+                for _, fd in ipairs(flareDefs) do
+                    local k = Vector2.one - fd.pos * fd.mult
+                    local pt = src + Vector2.new(b.X * k.X, b.Y * k.Y)
+                    local ray = cam:ViewportPointToRay(pt.X, pt.Y)
+                    fd.att.WorldPosition = ray.Origin + ray.Direction.Unit * FLARE_DEPTH
+                    fd.e.Size = NumberSequence.new(evalSeq(fd.size, fade) * fovK)
+                    fd.e.Squash = NumberSequence.new(evalSeq(fd.squash, fade) * SB_FLARE_STRETCH)
+                    fd.e.Transparency = NumberSequence.new(math.clamp(1 - (1 - evalSeq(fd.alpha, fade)) * str, 0, 1))
+                    fd.e.Color = ColorSequence.new(WHITE:Lerp(cols[fd.role], fd.blend))
+                    fd.e:Emit(1)
+                end
+            end
+        end
+    end)
+
+    function stage.Destroy()
+        if conn then
+            conn:Disconnect()
+            conn = nil
+        end
+        for _, fn in ipairs(stage.Cleanup) do pcall(fn) end
+        root:Destroy()
+    end
+
+    return stage
+end
+
+-- ============================================================
+--  CHARGE-UP: the planet explosion startup, crushed down to ~1 second.
+--  Energy spirals INTO the orb while it drops, the core swells and pulses, the lens flare builds,
+--  the screen tightens/dims right before impact, then the breach takes over.
+-- ============================================================
+local function StartSpiritBombCharge(getOrbPosition, orbDiameter, isLocal)
+    local T1 = SB_CHARGE_TIME
+    local S = SpiritBombScale(orbDiameter)
+    local SU = 2 -- startup size multiplier
+    local stage = CreateFXStage(S, orbDiameter)
+    local rr, pick = stage.rr, stage.pick
+
+    local lastPos = getOrbPosition() or Vector3.zero
+    stage.Center = lastPos
+    stage.Tracker = function()
+        lastPos = getOrbPosition() or lastPos
+        return lastPos
+    end
+
+    -- seed: horizontal lens streak through the orb
+    for _, off in ipairs({ 0, PI }) do
+        stage.addRay{ t0 = 0, life = T1, ang = SB_TILT + off, r0 = 0, len = 0.9 * S, w = 0.007 * S * SU,
+            color = SB_BLUE[2], grow = 0.3, hold = 0.85, tailMove = 0 }
+    end
+    -- short spiky rays around the orb
+    for i = 1, 12 do
+        stage.addRay{ t0 = 0.12 + i * 0.012, life = T1 - 0.15, ang = SB_TILT + PI * i / 6 + rr(-0.1, 0.1), z = rr(-0.2, 0.2),
+            r0 = 0.01 * S, len = rr(0.07, 0.22) * S * SU, w = 0.0035 * S * SU, color = pick(SB_BLUE),
+            grow = 0.3, hold = 0.85, tailMove = 0 }
+    end
+    -- energy spiralling INTO the core (all of them land before impact)
+    for _ = 1, 120 do
+        local life = rr(0.38, 0.6)
+        local t0 = 0.05 + (T1 - 0.05 - life) * rr(0, 1) ^ 0.7
+        stage.addComet{ t0 = t0, life = life, mode = "in", ang = rr(0, 2 * PI), r0 = rr(0.5, 1.4) * S, r1 = 0.015 * S,
+            swirl = rr(2.2, 3.6) * (rr(0, 1) < 0.5 and 1 or -1), z = rr(-0.2, 0.2), w = rr(0.003, 0.008) * S * SU,
+            trail = rr(0.14, 0.26), color = pick(SB_BLUE), color2 = SB_BLUE[3] }
+    end
+    -- charge arcs crackling in the last stretch
+    for i = 1, 7 do
+        stage.addBolt{ t0 = T1 * 0.6 + i * 0.05, life = 0.3, ang = rr(0, 2 * PI), r0 = 0.03 * S,
+            len = rr(0.1, 0.22) * S * SU, w = 0.003 * S * SU, color = SB_BLUE[2], jitter = 0.14, N = 7 }
+    end
+
+    -- glow core: swells, pulses faster and faster, then gets sucked in for the last instant ("inhale")
+    local coreK = { { 0, 0.28 }, { 0.35, 0.5 }, { 0.85, 0.66 }, { T1 - 0.14, 0.78 }, { T1 - 0.02, 0.5 } }
+    local alphaK = { { 0, 0 }, { 0.3, 0.55 }, { 0.9, 0.95 }, { T1, 1 } }
+    local pulseK = { { 0.1, 0 }, { 0.5, 1 }, { T1 - 0.2, 1 }, { T1 - 0.05, 0 } }
+    table.insert(stage.Hooks, function(t)
+        if stage.BreachAt then return end -- the explosion drives the core from here on
+        stage.CoreDiameter = orbDiameter * kf(t, coreK) * (1 + 0.1 * math.sin(t * (18 + 12 * t)) * kf(t, pulseK))
+        stage.CoreAlpha = kf(t, alphaK)
+    end)
+
+    -- lens flare: cyan, builds through the charge, dips on the inhale
+    local flarePre = { { 0, 0 }, { 0.25, 0 }, { 0.7, 0.3 }, { T1 - 0.2, 0.45 }, { T1 - 0.05, 0.12 }, { T1, 0.12 } }
+    stage.FlareFn = function(t)
+        return kf(t, flarePre), SB_BLUE[2], SB_BLUE[1], SB_BLUE[3]
+    end
+
+    -- screen effects (bloom / grade / vignette / rumble) are for MY screen only,
+    -- participants only get the world-space part of the charge
+    if isLocal then
+        -- screen: bloom ramps, brightness dips on the inhale, vignette tightens
+        local bloom = Instance.new("BloomEffect")
+        bloom.Size, bloom.Threshold, bloom.Intensity = 56, 0.8, 0
+        bloom.Parent = Lighting
+        local grade = Instance.new("ColorCorrectionEffect")
+        grade.Parent = Lighting
+
+        local gui = Instance.new("ScreenGui")
+        gui.Name = "SpiritBombVignette"
+        gui.IgnoreGuiInset = true
+        gui.ResetOnSpawn = false
+        gui.DisplayOrder = 1000
+        pcall(function() gui.ScreenInsets = Enum.ScreenInsets.None end)
+        gui.Parent = REAL_LOCAL_PLAYER.PlayerGui
+
+        local vig = Instance.new("CanvasGroup")
+        vig.Size = UDim2.fromScale(1, 1)
+        vig.BackgroundTransparency = 1
+        vig.GroupTransparency = 1
+        vig.Parent = gui
+        local function edge(anchorP, pos, size, rot)
+            local f = Instance.new("Frame")
+            f.AnchorPoint = anchorP
+            f.Position = pos
+            f.Size = size
+            f.BackgroundColor3 = Color3.new(0, 0, 0)
+            f.BorderSizePixel = 0
+            local g = Instance.new("UIGradient")
+            g.Rotation = rot
+            g.Transparency = NumberSequence.new({ NSK(0, 0.35), NSK(1, 1) })
+            g.Parent = f
+            f.Parent = vig
+        end
+        edge(Vector2.new(0, 0), UDim2.fromScale(0, 0), UDim2.fromScale(0.28, 1), 0)
+        edge(Vector2.new(1, 0), UDim2.fromScale(1, 0), UDim2.fromScale(0.28, 1), 180)
+        edge(Vector2.new(0, 0), UDim2.fromScale(0, 0), UDim2.fromScale(1, 0.28), 90)
+        edge(Vector2.new(0, 1), UDim2.fromScale(0, 1), UDim2.fromScale(1, 0.28), 270)
+
+        local bloomK = { { 0, 0 }, { 0.4, 0.35 }, { T1 - 0.12, 1.0 }, { T1, 1.8 } }
+        local brightK = { { 0, 0 }, { T1 - 0.16, 0 }, { T1 - 0.04, -0.12 }, { T1, -0.12 } }
+        local vigK = { { 0, 1 }, { T1 - 0.1, 0.3 }, { T1, 0.25 } } -- fades in across the whole charge
+        table.insert(stage.Hooks, function(t)
+            if stage.BreachAt then
+                vig.GroupTransparency = kf(t - stage.BreachAt, { { 0, 0.25 }, { 0.6, 0.3 }, { 3.4, 1 } }) -- holds, then fades out by the end of the explosion
+            else
+                bloom.Intensity = kf(t, bloomK)
+                grade.Brightness = kf(t, brightK)
+                vig.GroupTransparency = kf(t, vigK)
+            end
+        end)
+
+        function stage.EndCharge() -- the explosion has its own bloom / grade
+            bloom:Destroy()
+            grade:Destroy()
+        end
+        table.insert(stage.Cleanup, function()
+            gui:Destroy()
+            if bloom.Parent then bloom:Destroy() end
+            if grade.Parent then grade:Destroy() end
+        end)
+
+        -- rumble builds with the charge
+        for _, shake in ipairs({ { 0.2, 2 }, { 0.5, 3 }, { 0.85, 4 } }) do
+            task.delay(shake[1], function()
+                if not stage.BreachAt then
+                    FireReplicationEvent({ Intensity = shake[2], Effect = "Camshake" })
+                end
+            end)
+        end
+    end
+
+    return stage
+end
+
+-- ============================================================
+--  EXPLOSION ORB: 12-layer white-hot glow core, forcefield shields, starburst rays,
+--  lightning, outward comets, big anamorphic bars and the blast lens flare.
+-- ============================================================
+local function CreateExplosionOrb(folder, center, stage)
+    local C = EXPLOSION_COLORS
+    local S, orbD = stage.S, stage.OrbDiameter
+    local rr, pick = stage.rr, stage.pick
+    local DF = SB_ORB_FINAL
+    local t0 = stage.Time
+
+    -- hand the stage over from the charge to the blast
+    stage.BreachAt = t0
+    stage.Tracker = nil
+    stage.Center = center
+    if stage.EndCharge then stage.EndCharge() end
+
+    -- glow core: pops out white-hot, settles, then cools to deep blue while it fades
+    local d0 = math.min(orbD * 0.55, DF * 0.9)
+    local dK = { { 0, d0 }, { 0.05, DF * 0.85 }, { 0.28, DF }, { 1.2, DF * 1.1 }, { 2.2, DF * 1.22 }, { 3.4, DF * 1.3 } }
+    local aK = { { 0, 1 }, { 0.7, 1 }, { 1.6, 0.45 }, { 2.7, 0 } }
+    local deepK = { { 0, 0 }, { 1.2, 0.6 }, { 2.7, 1 } }
+    table.insert(stage.Hooks, function(t)
+        local tb = t - t0
+        stage.CoreDiameter = kf(tb, dK) * (1 + 0.025 * math.sin(tb * 22) * math.clamp(1 - tb, 0, 1))
+        stage.CoreAlpha = kf(tb, aK)
+        stage.CoreDeep = kf(tb, deepK)
+    end)
+
+    -- lens flare: icy white-blue on the hit, cooling to deep blue
+    local flarePost = { { 0, 1 }, { 0.5, 0.75 }, { 1.4, 0.55 }, { 2.4, 0.3 }, { 3.3, 0 } }
+    local mainK = { { 0, SB_BLUE[4] }, { 0.5, SB_BLUE[4] }, { 1.6, SB_BLUE[1] }, { 3.2, SB_BLUE[3] } }
+    local accentK = { { 0, SB_BLUE[2] }, { 1.6, SB_BLUE[1] } }
+    local ghostK = { { 0, SB_BLUE[1] }, { 1.6, SB_BLUE[2] } }
+    stage.FlareFn = function(t)
+        local tb = t - t0
+        return kf(tb, flarePost), kf(tb, mainK), kf(tb, accentK), kf(tb, ghostK)
+    end
+
+    -- shield shells (the forcefield skin + a faint pressure wave)
+    local function Shield(color, material, tr, diameter, grow, fadeDelay, fadeTime)
+        local p = NewEffectPart(folder, "Part", Vector3.one * math.max(orbD * 0.6, 2), CFrame.new(center), color, material, tr)
+        p.Shape = Enum.PartType.Ball
+        PlayTween(p, grow, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out, { Size = Vector3.one * diameter })
+        PlayTween(p, fadeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.In, { Transparency = 1 }, fadeDelay)
+    end
+    Shield(C.Ice, Enum.Material.ForceField, 0, DF * 1.5, 0.5, 0.9, 1.4)
+    Shield(C.Cyan, Enum.Material.ForceField, 0.15, DF * 2.3, 0.75, 1.1, 1.7)
+    Shield(C.Ice, Enum.Material.Neon, 0.9, DF * 3.4, 0.6, 0.05, 0.75)
+
+    -- starburst: tapered rays, long ones alternating with short ones
+    local n = 20
+    for i = 1, n do
+        local big = (i % 4 == 0)
+        stage.addRay{
+            t0 = t0 + rr(0, 0.04), life = 1.6, ang = SB_TILT + (i / n) * 2 * PI, z = rr(-0.08, 0.08),
+            r0 = DF * 0.35, len = 1.5 * S * ((i % 2 == 0) and 1 or 0.55) * (big and 1.25 or 1) * rr(0.9, 1.1),
+            w = 0.007 * S * (big and 1.4 or 1), color = pick(SB_BLUE), grow = 0.12, hold = 0.5, tailMove = 0.45,
+        }
+    end
+    -- big anamorphic bars through the blast
+    for _, a in ipairs({ 0.15, PI + 0.15, -0.12, PI - 0.12 }) do
+        stage.addRay{ t0 = t0 + 0.04, life = 1.8, ang = a, r0 = DF * 0.4, len = 1.7 * S, w = 0.02 * S,
+            color = SB_BLUE[2], grow = 0.12, hold = 0.6, tailMove = 0.35 }
+    end
+    -- lightning crawling off the surface
+    for _ = 1, 14 do
+        stage.addBolt{ t0 = t0 + rr(0, 0.5), life = rr(0.35, 0.7), ang = rr(0, 2 * PI), r0 = DF * 0.45,
+            len = rr(0.4, 0.95) * S, w = 0.005 * S, color = SB_BLUE[2], jitter = 0.09 }
+    end
+    -- comets spiralling OUT
+    for _ = 1, 80 do
+        stage.addComet{ t0 = t0 + rr(0, 0.22), life = rr(0.8, 1.5), mode = "out", ang = rr(0, 2 * PI), r0 = DF * 0.4,
+            r1 = rr(0.8, 2.3) * S, swirl = rr(0.7, 1.7) * (rr(0, 1) < 0.5 and 1 or -1), z = rr(-0.25, 0.25),
+            w = rr(0.008, 0.02) * S, trail = rr(0.35, 0.7), color = pick(SB_BLUE), color2 = SB_BLUE[3] }
+    end
+
+    task.delay(3.8, stage.Destroy)
+
+    -- invisible emitter core: plasma + sparks attach here
+    local core = NewEffectPart(folder, "Part", Vector3.one * DF * 1.1, CFrame.new(center), C.White, Enum.Material.Neon, 1)
+    core.Shape = Enum.PartType.Ball
+    return core
+end
+local function StreamPillarTextures(targetPart)
+    local textures = {}
+    for _, decal in pairs(UFW.vfx.Pillar.Preload:GetDescendants()) do
+        if decal:IsA("Decal") and decal.Texture ~= "" and not table.find(textures, decal.Texture) then
+            table.insert(textures, decal.Texture)
+        end
+    end
+
+    for _, texture in pairs(textures) do
+        local newDecal = Instance.new("Decal")
+        newDecal.Parent = targetPart
+        newDecal.Texture = texture
+        Debris:AddItem(newDecal, 3)
+        task.wait(0.0065)
+    end
+end
+local function PlayJumpMeshTrails(character)
+    local jumpMeshes = FiveSeasonsFX.JumpMeshes:Clone()
+    jumpMeshes:SetPrimaryPartCFrame(character.HumanoidRootPart.CFrame)
+    jumpMeshes.Parent = Thrown
+
+    task.delay(0.075, function()
+        for _, emitter in pairs(jumpMeshes.Lines:GetDescendants()) do
+            if emitter:IsA("ParticleEmitter") then
+                local emitCount = tonumber(emitter.Name) or 0
+                emitter:Emit(emitCount)
+            end
+        end
+    end)
+
+    task.spawn(function()
+        local mainClone = jumpMeshes.Main:Clone()
+        local startPart, endPart = mainClone.Start, mainClone.End
+        local clonedMesh = startPart:Clone()
+        clonedMesh.Transparency = 0.95
+        clonedMesh.Name = "ClonedMesh"
+        clonedMesh.Parent = jumpMeshes.CurrentTweens
+
+        TweenService:Create(clonedMesh, TweenInfo.new(0.75, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+            CFrame = endPart.CFrame
+        }):Play()
+        TweenService:Create(clonedMesh, TweenInfo.new(0.75, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+            Size = endPart.Size
+        }):Play()
+
+        task.wait(0.75)
+        clonedMesh:Destroy()
+    end)
+
+    task.spawn(function()
+        local wind3Clone = jumpMeshes.Wind3:Clone()
+        local startPart, endPart = wind3Clone.Start, wind3Clone.End
+        local clonedMesh = startPart:Clone()
+        clonedMesh.Transparency = 0.75
+        clonedMesh.Name = "ClonedMesh"
+        clonedMesh.Parent = jumpMeshes.CurrentTweens
+
+        TweenService:Create(clonedMesh, TweenInfo.new(0.8, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+            CFrame = endPart.CFrame,
+            Size = endPart.Size
+        }):Play()
+        TweenService:Create(clonedMesh, TweenInfo.new(0.8, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+            Transparency = 1
+        }):Play()
+
+        task.wait(0.8)
+        clonedMesh:Destroy()
+    end)
+
+    task.spawn(function()
+        local wind2Clone = jumpMeshes.Wind2:Clone()
+        local startPart, endPart = wind2Clone.Start, wind2Clone.End
+        local clonedMesh = startPart:Clone()
+        clonedMesh.Transparency = 0.8
+        clonedMesh.Name = "ClonedMesh"
+        clonedMesh.Parent = jumpMeshes.CurrentTweens
+
+        TweenService:Create(clonedMesh, TweenInfo.new(0.55, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out), {
+            CFrame = endPart.CFrame
+        }):Play()
+        TweenService:Create(clonedMesh, TweenInfo.new(0.55, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+            Size = endPart.Size,
+            Transparency = 1
+        }):Play()
+
+        task.wait(0.55)
+        clonedMesh:Destroy()
+    end)
+
+    local function PlayWindFX2()
+        task.spawn(function()
+            local windDecalClone = jumpMeshes.WindDecal2:Clone()
+            windDecalClone:ScaleTo(Random.new():NextNumber(0.95, 2.35))
+            local tweenTime = Random.new():NextNumber(1, 2.75)
+            local randomAngle = math.rad(math.random(0, 360))
+
+            windDecalClone:SetPrimaryPartCFrame(windDecalClone.PrimaryPart.CFrame * CFrame.Angles(0, randomAngle, 0))
+            windDecalClone.End.CFrame = windDecalClone.End.CFrame * CFrame.Angles(0, randomAngle, 0)
+
+            local startPart, endPart = windDecalClone.Start, windDecalClone.End
+            local clonedMesh = startPart:Clone()
+            clonedMesh.Decal.Transparency = Random.new():NextNumber(0.8, 0.93)
+            clonedMesh.Name = "ClonedMesh"
+            clonedMesh.Parent = jumpMeshes.CurrentTweens
+
+            TweenService:Create(clonedMesh, TweenInfo.new(tweenTime, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
+                Size = endPart.Size,
+                CFrame = endPart.CFrame
+            }):Play()
+            TweenService:Create(clonedMesh.Mesh, TweenInfo.new(tweenTime, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out), {
+                Scale = endPart.Mesh.Scale
+            }):Play()
+            TweenService:Create(clonedMesh.Decal, TweenInfo.new(tweenTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                Transparency = 1
+            }):Play()
+
+            task.wait(4)
+            clonedMesh:Destroy()
+        end)
+    end
+
+    for _ = 1, 5 do
+        task.spawn(PlayWindFX2)
+        task.wait(0.035)
+    end
+
+    task.wait(5)
+    jumpMeshes:Destroy()
+end
+local function PlayJumpBurstAndHighlight(character)
+    local jumpFXClone = FiveSeasonsFX.JumpFX:Clone()
+    jumpFXClone:SetPrimaryPartCFrame(character.HumanoidRootPart.CFrame)
+    jumpFXClone.Parent = Thrown
+
+    local burnMark = jumpFXClone.JumpFX:FindFirstChild("BurnMark")
+    if burnMark then
+        burnMark:Destroy()
+    end
+
+    for _, emitter in pairs(jumpFXClone.JumpFX:GetDescendants()) do
+        if emitter:IsA("ParticleEmitter") then
+            emitter:Emit(emitter:GetAttribute("EmitCount") or 0)
+        end
+    end
+
+    jumpFXClone.JumpFX.EnabledP.Enabled = true
+
+    local highlight = Instance.new("Highlight")
+    highlight.FillColor = Color3.fromRGB(255, 66, 28)
+    highlight.OutlineColor = Color3.fromRGB(255, 44, 2)
+    highlight.FillTransparency = 0.5
+    highlight.OutlineTransparency = 0.6
+    highlight.DepthMode = Enum.HighlightDepthMode.Occluded
+    highlight.Parent = character
+
+    TweenService:Create(highlight, TweenInfo.new(0.75, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut), {
+        FillTransparency = 1,
+        OutlineTransparency = 1
+    }):Play()
+
+    task.wait(0.5)
+    jumpFXClone.JumpFX.EnabledP.Enabled = false
+    task.wait(4)
+
+    jumpFXClone:Destroy()
+    highlight:Destroy()
+end
+
+-- ============================================================
+--  PER-CHARACTER LIBRARY (one instance for me, one for every participant)
+-- ============================================================
+local function BuildActorLibrary()
+    -- Everything below belongs to ONE character. ACTOR_IS_LOCAL, LocalPlayer, Character,
+    -- Humanoid, HumanoidRootPart, Animator come from the env that createActorInstance sets
+    -- with setfenv (same pattern as 23). It must not yield while it builds.
     local holdInAir = false
     local holdToken = 0
+    local sequenceFlag = false
+    local handledTracks = setmetatable({}, { __mode = "k" })
 
-    -- once-only guard: one Spirit Bomb sequence per actor at a time
-    local SEQUENCE_LOCK_TIME = 12
-    local sequenceRunning = false
+    local function GetSequenceFlag()
+        if SEQUENCE_FLAG_SHARED then return sharedSequenceFlag end
+        return sequenceFlag
+    end
 
+    local function SetSequenceFlag(value)
+        if SEQUENCE_FLAG_SHARED then
+            sharedSequenceFlag = value
+        else
+            sequenceFlag = value
+        end
+    end
+
+    -- Holds the player anchored in the air until the explosion is over (my own character only:
+    -- a participant's character is moved by their own client)
     local function ReleaseFromAir()
         holdInAir = false
-        if isLocal then
+        if ACTOR_IS_LOCAL then
             HumanoidRootPart.Anchored = false
         end
     end
 
     local function HoldInAir()
-        if not isLocal then
-            return
-        end
+        if not ACTOR_IS_LOCAL then return end
         holdToken += 1
         local myToken = holdToken
         holdInAir = true
 
+        -- Failsafe so the player can never get stuck up there if something errors
         task.delay(20, function()
             if holdToken == myToken and holdInAir then
                 ReleaseFromAir()
@@ -106,866 +1270,34 @@ local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
         end)
     end
 
-    local function PlayImpactScreenFlash()
-        local fxUI = FiveSeasonsFX.FXUi
-
-        local whiteFlash = FiveSeasonsFX.FSWhite:Clone()
-        whiteFlash.Parent = Lighting
-
-        local blackFlash = FiveSeasonsFX.FSBlack:Clone()
-        blackFlash.Parent = Lighting
-
-        fxUI.Vignette.Visible = false
-
-        for _, guiChild in pairs(LocalPlayer.PlayerGui:GetChildren()) do
-            if guiChild.Name == "FXUi" and guiChild ~= fxUI then
-                guiChild:Destroy()
-            end
+    -- 23 handles sounds for participants spatially (parented to their root), mine stays 2D
+    local function PlaySequenceSound()
+        if ACTOR_IS_LOCAL then
+            spiritBombSound:Play()
+            return
         end
-
-        whiteFlash.Enabled = true
-        task.wait(0.035)
-        whiteFlash.Enabled = false
-
-        blackFlash.Enabled = true
-        task.wait(0.035)
-        blackFlash.Enabled = false
-
-        whiteFlash:Destroy()
-        blackFlash:Destroy()
+        local snd = spiritBombSound:Clone()
+        snd.Parent = HumanoidRootPart
+        snd.RollOffMinDistance = 80   -- astronomically loud move: full volume within 80 studs
+        snd.RollOffMaxDistance = 2000 -- and still audible up to 2000 studs away
+        snd:Play()
+        Debris:AddItem(snd, 60)
     end
 
-    local EXPLOSION_COLORS = {
-        White = Color3.fromRGB(235, 248, 255),
-        Ice = Color3.fromRGB(150, 225, 255),
-        Cyan = Color3.fromRGB(60, 175, 255),
-        Blue = Color3.fromRGB(30, 100, 255),
-        Deep = Color3.fromRGB(10, 35, 190),
-    }
-
-    local function NewEffectPart(parent, className, size, cf, color, material, transparency)
-        local part = Instance.new(className)
-        part.Anchored = true
-        part.CanCollide = false
-        part.CanQuery = false
-        part.CanTouch = false
-        part.CastShadow = false
-        part.Size = size
-        part.CFrame = cf
-        part.Color = color
-        part.Material = material
-        part.Transparency = transparency
-        part.Parent = parent
-        return part
+    -- Same call for me and for participants (like 23's PlayAttack4Anim). Returns the module's
+    -- Animation object if it could be read right after the call.
+    local function PlayThrowAnim()
+        local before = getgenv().Animation
+        local throwAnimData = GetAnimData(THROW_ANIM)
+        EnsureAnimModule()
+        Animator6D(throwAnimData, nil, false, Character)
+        local after = getgenv().Animation
+        if after ~= before then
+            return after
+        end
+        return nil
     end
 
-    local function PlayTween(instance, duration, style, direction, goal, delayTime)
-        local function run()
-            if instance.Parent then
-                TweenService:Create(instance, TweenInfo.new(duration, style, direction), goal):Play()
-            end
-        end
-
-        if delayTime and delayTime > 0 then
-            task.delay(delayTime, run)
-        else
-            run()
-        end
-    end
-
-    local function CreateShockRing(folder, center, tilt, diameter, startDelay, color)
-        task.delay(startDelay, function()
-            local ring = NewEffectPart(
-                folder, "Part", Vector3.new(10, 0.2, 10), CFrame.new(center) * tilt,
-                color, Enum.Material.SmoothPlastic, 1
-            )
-
-            local growTime = 1.4
-            PlayTween(ring, growTime, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out,
-                {Size = Vector3.new(diameter, 0.2, diameter)})
-
-            for _, face in ipairs({Enum.NormalId.Top, Enum.NormalId.Bottom}) do
-                local gui = Instance.new("SurfaceGui")
-                gui.Face = face
-                gui.SizingMode = Enum.SurfaceGuiSizingMode.FixedSize
-                gui.CanvasSize = Vector2.new(1024, 1024)
-                gui.LightInfluence = 0
-                gui.Brightness = 3
-                gui.Parent = ring
-
-                local frame = Instance.new("Frame")
-                frame.AnchorPoint = Vector2.new(0.5, 0.5)
-                frame.Position = UDim2.fromScale(0.5, 0.5)
-                frame.Size = UDim2.fromScale(0.94, 0.94)
-                frame.BackgroundTransparency = 1
-                frame.Parent = gui
-
-                local corner = Instance.new("UICorner")
-                corner.CornerRadius = UDim.new(0.5, 0)
-                corner.Parent = frame
-
-                local stroke = Instance.new("UIStroke")
-                stroke.Color = color
-                stroke.Thickness = 26
-                stroke.Parent = frame
-
-                PlayTween(stroke, 1.0, Enum.EasingStyle.Quad, Enum.EasingDirection.In,
-                    {Transparency = 1}, growTime - 0.6)
-            end
-        end)
-    end
-
-    local function SpawnLightSpokes(folder, center, rng)
-        for i = 1, 56 do
-            local dir = Vector3.new(rng:NextNumber(-1, 1), rng:NextNumber(-1, 1), rng:NextNumber(-1, 1))
-            if dir.Magnitude > 0.1 then
-                dir = dir.Unit
-
-                local length = rng:NextNumber(140, 320)
-                local startPos = center + dir * rng:NextNumber(40, 90)
-                local endPos = center + dir * rng:NextNumber(380, 760)
-                local travel = rng:NextNumber(0.6, 1.1)
-                local color = (i % 2 == 0) and EXPLOSION_COLORS.White or EXPLOSION_COLORS.Cyan
-
-                local spoke = NewEffectPart(
-                    folder, "Part", Vector3.new(0.7, 0.7, length),
-                    CFrame.lookAt(startPos, startPos + dir),
-                    color, Enum.Material.Neon, 0
-                )
-
-                PlayTween(spoke, travel, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out,
-                    {CFrame = CFrame.lookAt(endPos, endPos + dir)})
-                PlayTween(spoke, travel * 0.8, Enum.EasingStyle.Quad, Enum.EasingDirection.In,
-                    {Transparency = 1, Size = Vector3.new(0.1, 0.1, length)}, travel * 0.2)
-            end
-        end
-    end
-
-    local function SpawnDebris(folder, center, rng)
-        local rockClasses = {"Part", "WedgePart", "CornerWedgePart"}
-
-        for _ = 1, 48 do
-            local dir = Vector3.new(rng:NextNumber(-1, 1), rng:NextNumber(-0.5, 1), rng:NextNumber(-1, 1))
-            if dir.Magnitude < 0.1 then
-                dir = Vector3.yAxis
-            end
-            dir = dir.Unit
-
-            local size = rng:NextNumber(7, 26)
-            local startCF = CFrame.new(center + dir * rng:NextNumber(40, 110))
-                * CFrame.Angles(rng:NextNumber(0, 6.28), rng:NextNumber(0, 6.28), rng:NextNumber(0, 6.28))
-
-            local rock = NewEffectPart(
-                folder, rockClasses[rng:NextInteger(1, #rockClasses)],
-                Vector3.new(size, size * rng:NextNumber(0.5, 1), size * rng:NextNumber(0.6, 1.2)),
-                startCF, Color3.fromRGB(22, 26, 40), Enum.Material.Slate, 0
-            )
-
-            local a0 = Instance.new("Attachment")
-            a0.Position = Vector3.new(0, size * 0.15, 0)
-            a0.Parent = rock
-            local a1 = Instance.new("Attachment")
-            a1.Position = Vector3.new(0, -size * 0.15, 0)
-            a1.Parent = rock
-
-            local trail = Instance.new("Trail")
-            trail.Attachment0 = a0
-            trail.Attachment1 = a1
-            trail.Color = ColorSequence.new(EXPLOSION_COLORS.Ice, EXPLOSION_COLORS.Deep)
-            trail.Transparency = NumberSequence.new({
-                NumberSequenceKeypoint.new(0, 0.2),
-                NumberSequenceKeypoint.new(1, 1),
-            })
-            trail.WidthScale = NumberSequence.new({
-                NumberSequenceKeypoint.new(0, 1),
-                NumberSequenceKeypoint.new(1, 0),
-            })
-            trail.Lifetime = 0.7
-            trail.LightEmission = 1
-            trail.FaceCamera = true
-            trail.Parent = rock
-
-            local travelTime = rng:NextNumber(2.2, 3.4)
-            local endPos = center + dir * rng:NextNumber(450, 1100) + Vector3.new(0, -rng:NextNumber(0, 60), 0)
-            local endCF = CFrame.new(endPos)
-                * CFrame.Angles(rng:NextNumber(-3, 3), rng:NextNumber(-3, 3), rng:NextNumber(-3, 3))
-
-            PlayTween(rock, travelTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, {CFrame = endCF})
-            PlayTween(rock, 0.8, Enum.EasingStyle.Linear, Enum.EasingDirection.In,
-                {Transparency = 1}, travelTime - 0.8)
-        end
-    end
-
-    local function AttachPlasma(shell)
-        local plasma = Instance.new("ParticleEmitter")
-        plasma.Texture = "rbxasset://textures/particles/smoke_main.dds"
-        plasma.Color = ColorSequence.new({
-            ColorSequenceKeypoint.new(0, EXPLOSION_COLORS.White),
-            ColorSequenceKeypoint.new(0.4, EXPLOSION_COLORS.Cyan),
-            ColorSequenceKeypoint.new(1, EXPLOSION_COLORS.Deep),
-        })
-        plasma.LightEmission = 1
-        plasma.LightInfluence = 0
-        plasma.Size = NumberSequence.new({
-            NumberSequenceKeypoint.new(0, 40),
-            NumberSequenceKeypoint.new(1, 100),
-        })
-        plasma.Transparency = NumberSequence.new({
-            NumberSequenceKeypoint.new(0, 0.5),
-            NumberSequenceKeypoint.new(0.6, 0.7),
-            NumberSequenceKeypoint.new(1, 1),
-        })
-        plasma.Lifetime = NumberRange.new(0.7, 1.4)
-        plasma.Speed = NumberRange.new(0, 6)
-        plasma.Rotation = NumberRange.new(0, 360)
-        plasma.RotSpeed = NumberRange.new(-40, 40)
-        plasma.Rate = 0
-
-        pcall(function()
-            plasma.Shape = Enum.ParticleEmitterShape.Sphere
-            plasma.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
-            plasma.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
-        end)
-
-        plasma.Parent = shell
-        plasma.Rate = 120
-        task.delay(1.4, function()
-            plasma.Rate = 0
-        end)
-    end
-
-    local function AttachSparks(core)
-        local sparks = Instance.new("ParticleEmitter")
-        sparks.Color = ColorSequence.new(EXPLOSION_COLORS.White, EXPLOSION_COLORS.Cyan)
-        sparks.LightEmission = 1
-        sparks.LightInfluence = 0
-        sparks.Size = NumberSequence.new({
-            NumberSequenceKeypoint.new(0, 4),
-            NumberSequenceKeypoint.new(1, 0),
-        })
-        sparks.Lifetime = NumberRange.new(0.8, 1.8)
-        sparks.Speed = NumberRange.new(250, 700)
-        sparks.Drag = 1.5
-        sparks.SpreadAngle = Vector2.new(180, 180)
-        sparks.Orientation = Enum.ParticleOrientation.VelocityParallel
-        sparks.Rate = 0
-        sparks.Parent = core
-        sparks:Emit(220)
-    end
-
-    local function PlayExplosionScreenFX(folder)
-        local bloom = Instance.new("BloomEffect")
-        bloom.Intensity = 3
-        bloom.Size = 56
-        bloom.Threshold = 0.6
-        bloom.Parent = Lighting
-        Debris:AddItem(bloom, 4)
-        PlayTween(bloom, 2.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, {Intensity = 0}, 0.4)
-
-        local grade = Instance.new("ColorCorrectionEffect")
-        grade.TintColor = Color3.fromRGB(150, 200, 255)
-        grade.Brightness = 0.25
-        grade.Contrast = 0.15
-        grade.Saturation = 0.2
-        grade.Parent = Lighting
-        Debris:AddItem(grade, 4)
-        PlayTween(grade, 2.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, {
-            TintColor = Color3.new(1, 1, 1),
-            Brightness = 0,
-            Contrast = 0,
-            Saturation = 0,
-        }, 0.3)
-    end
-
-    local NSK, CSK = NumberSequenceKeypoint.new, ColorSequenceKeypoint.new
-    local WHITE = Color3.new(1, 1, 1)
-    local PI = math.pi
-    local rgb = Color3.fromRGB
-    local SB_BLUE = { rgb(70, 150, 255), rgb(90, 230, 255), rgb(30, 80, 255), rgb(180, 205, 255) }
-    local SB_TILT = -0.2
-
-    local SB_FALL_TIME = 0.8
-    local SB_CHARGE_PRE = 0.3
-    local SB_CHARGE_TIME = SB_CHARGE_PRE + SB_FALL_TIME
-    local SB_ORB_FINAL = 220
-    local SB_FLARE = 1
-    local SB_FLARE_STRETCH = 1
-    local SB_FLARE_TILT = 10
-
-    local function kf(t, pts)
-        if t <= pts[1][1] then return pts[1][2] end
-        for i = 2, #pts do
-            local p0, p1 = pts[i - 1], pts[i]
-            if t <= p1[1] then
-                local s = (t - p0[1]) / (p1[1] - p0[1])
-                s = s * s * (3 - 2 * s)
-                local v0, v1 = p0[2], p1[2]
-                if typeof(v0) == "Color3" then return v0:Lerp(v1, s) end
-                return v0 + (v1 - v0) * s
-            end
-        end
-        return pts[#pts][2]
-    end
-
-    local function outExpo(a)
-        return a >= 1 and 1 or 1 - 2 ^ (-10 * a)
-    end
-
-    local function evalSeq(v, a)
-        if typeof(v) == "number" then return v end
-        a = math.clamp(a, 0, 1)
-        local k = v.Keypoints
-        for i = 2, #k do
-            if a <= k[i].Time then
-                local p0, p1 = k[i - 1], k[i]
-                return p0.Value + (p1.Value - p0.Value) * (a - p0.Time) / (p1.Time - p0.Time)
-            end
-        end
-        return k[#k].Value
-    end
-
-    local function SpiritBombScale(orbDiameter)
-        return math.clamp(orbDiameter * 1.8, 130, 600)
-    end
-
-    local function CreateFXStage(S, orbDiameter)
-        local stage = {
-            S = S,
-            OrbDiameter = orbDiameter,
-            Center = Vector3.zero,
-            Time = 0,
-            Hooks = {},
-            Cleanup = {},
-            CoreDiameter = 0,
-            CoreAlpha = 0,
-            CoreDeep = 0,
-        }
-
-        local rng = Random.new()
-        local function rr(a, b) return rng:NextNumber(a, b) end
-        local function pick(t) return t[rng:NextInteger(1, #t)] end
-        stage.rr, stage.pick = rr, pick
-
-        local root = Instance.new("Folder")
-        root.Name = "SpiritBombFX"
-        root.Parent = Workspace
-
-        local anchor = Instance.new("Part")
-        anchor.Anchored, anchor.CanCollide, anchor.CanQuery, anchor.CanTouch = true, false, false, false
-        anchor.Transparency = 1
-        anchor.Size = Vector3.one
-        anchor.Parent = root
-
-        local plane = CFrame.new()
-        local tasks = {}
-        local function at(t0, dur, fn, done) table.insert(tasks, { t0 = t0, dur = dur, fn = fn, done = done }) end
-
-        local function newAtt()
-            local a = Instance.new("Attachment")
-            a.Parent = anchor
-            return a
-        end
-
-        local function makeBeam(a0, a1, colorSeq)
-            local b = Instance.new("Beam")
-            b.Attachment0, b.Attachment1 = a0, a1
-            b.FaceCamera = true
-            b.LightEmission = 1
-            b.LightInfluence = 0
-            b.Segments = 1
-            b.Color = colorSeq
-            b.Width0, b.Width1 = 0, 0
-            b.Parent = root
-            return b
-        end
-
-        local function neonPart(shape)
-            local p = Instance.new("Part")
-            p.Shape = shape or Enum.PartType.Block
-            p.Material = Enum.Material.Neon
-            p.Anchored = true
-            p.CanCollide, p.CanQuery, p.CanTouch, p.CastShadow = false, false, false, false
-            p.Parent = root
-            return p
-        end
-
-        local function seqFor(base, tr)
-            local t = base + (1 - base) * tr
-            return NumberSequence.new({ NSK(0, t), NSK(0.55, t + (1 - t) * 0.4), NSK(1, 1) })
-        end
-
-        function stage.addRay(s)
-            local dir = Vector3.new(math.cos(s.ang), math.sin(s.ang), s.z or 0).Unit
-            local grow, hold, tm = s.grow or 0.25, s.hold or 0.5, s.tailMove or 0.7
-            local useHalo = s.w > 0.009 * S
-            local a0, a1, halo, body, core
-            at(s.t0, s.life, function(a)
-                if not a0 then
-                    a0, a1 = newAtt(), newAtt()
-                    if useHalo then halo = makeBeam(a0, a1, ColorSequence.new(s.color)) end
-                    body = makeBeam(a0, a1, ColorSequence.new({ CSK(0, WHITE), CSK(0.3, s.color), CSK(1, s.color) }))
-                    core = makeBeam(a0, a1, ColorSequence.new(WHITE))
-                end
-                local g = outExpo(math.min(a / grow, 1))
-                local head = s.r0 + s.len * g
-                local tail = s.r0 + s.len * tm * math.clamp((a - grow) / (1 - grow), 0, 1) ^ 1.5
-                a0.WorldPosition = plane * (dir * tail)
-                a1.WorldPosition = plane * (dir * head)
-                local tr = math.max(1 - math.min(a / 0.05, 1), math.clamp((a - hold) / (1 - hold), 0, 1) ^ 1.3)
-                local w = s.w * (1 - 0.5 * a)
-                if halo then
-                    halo.Width0, halo.Width1 = w * 5, 0
-                    halo.Transparency = seqFor(0.82, tr)
-                end
-                body.Width0, body.Width1 = w * 2, 0
-                body.Transparency = seqFor(0.3, tr)
-                core.Width0, core.Width1 = w * 0.7, 0
-                core.Transparency = seqFor(0, tr)
-            end, function()
-                if a0 then
-                    a0:Destroy(); a1:Destroy(); body:Destroy(); core:Destroy()
-                    if halo then halo:Destroy() end
-                end
-            end)
-        end
-
-        function stage.addComet(s)
-            local part, tr
-            local inward = s.mode == "in"
-            at(s.t0, s.life, function(a)
-                if not part then
-                    part = neonPart(Enum.PartType.Ball)
-                    part.Size = Vector3.one * math.max(s.w * 1.3, 1)
-                    part.Color = s.color:Lerp(WHITE, 0.65)
-                    local a0, a1 = Instance.new("Attachment"), Instance.new("Attachment")
-                    a0.Position, a1.Position = Vector3.new(0, s.w / 2, 0), Vector3.new(0, -s.w / 2, 0)
-                    a0.Parent, a1.Parent = part, part
-                    tr = Instance.new("Trail")
-                    tr.Attachment0, tr.Attachment1 = a0, a1
-                    tr.Lifetime = s.trail
-                    tr.LightEmission = 1
-                    tr.LightInfluence = 0
-                    tr.FaceCamera = true
-                    tr.Color = ColorSequence.new({ CSK(0, WHITE), CSK(0.18, s.color), CSK(1, s.color2 or s.color) })
-                    tr.Transparency = NumberSequence.new({ NSK(0, 0), NSK(0.45, 0.3), NSK(1, 1) })
-                    tr.WidthScale = NumberSequence.new({ NSK(0, 1), NSK(1, 0) })
-                    tr.Parent = part
-                end
-                local e = inward and a ^ 2.2 or outExpo(a) ^ 0.9
-                local r = s.r0 + (s.r1 - s.r0) * e
-                local th = s.ang + s.swirl * e
-                part.CFrame = plane * CFrame.new(math.cos(th) * r, math.sin(th) * r, (s.z or 0) * r)
-                part.Transparency = math.clamp((a - 0.8) / 0.2, 0, 1)
-            end, function()
-                if part then
-                    tr.Enabled = false
-                    part.Transparency = 1
-                    task.delay(s.trail + 0.4, function() part:Destroy() end)
-                end
-            end)
-        end
-
-        function stage.addBolt(s)
-            local N = s.N or 9
-            local dir = Vector3.new(math.cos(s.ang), math.sin(s.ang), 0)
-            local nrm = Vector3.new(-math.sin(s.ang), math.cos(s.ang), 0)
-            local atts, halos, cores
-            local lastTick, jit = -1, {}
-            at(s.t0, s.life, function(a)
-                if not atts then
-                    atts, halos, cores = {}, {}, {}
-                    for i = 0, N do atts[i] = newAtt() end
-                    for i = 1, N do
-                        halos[i] = makeBeam(atts[i - 1], atts[i], ColorSequence.new(s.color))
-                        cores[i] = makeBeam(atts[i - 1], atts[i], ColorSequence.new(WHITE))
-                    end
-                end
-                local tick = math.floor(a * s.life * 24)
-                if tick ~= lastTick then
-                    lastTick = tick
-                    for i = 0, N do jit[i] = rr(-1, 1) end
-                end
-                local g = outExpo(math.min(a / 0.18, 1))
-                for i = 0, N do
-                    local u = i / N
-                    local off = jit[i] * s.len * (s.jitter or 0.07) * math.sin(PI * u) * g
-                    atts[i].WorldPosition = plane * (dir * (s.r0 + s.len * g * u) + nrm * off)
-                end
-                local fade = math.max(1 - math.min(a / 0.04, 1), math.clamp((a - 0.45) / 0.55, 0, 1))
-                if rr(0, 1) < 0.18 then fade = math.min(1, fade + 0.55) end
-                local tsq = NumberSequence.new(fade)
-                local hsq = NumberSequence.new(0.5 + 0.5 * fade)
-                for i = 1, N do
-                    local wa, wb = s.w * (1 - (i - 1) / N) ^ 0.7, s.w * (1 - i / N) ^ 0.7
-                    halos[i].Width0, halos[i].Width1 = wa * 3.2, wb * 3.2
-                    cores[i].Width0, cores[i].Width1 = wa, wb
-                    halos[i].Transparency = hsq
-                    cores[i].Transparency = tsq
-                end
-            end, function()
-                if atts then
-                    for i = 1, N do halos[i]:Destroy(); cores[i]:Destroy() end
-                    for i = 0, N do atts[i]:Destroy() end
-                end
-            end)
-        end
-
-        local NL = 12
-        local mult = { 1, 1.2, 1.45, 1.75, 2.1, 2.6, 3.2, 4, 5, 6.3, 8, 10 }
-        local ctr = { 0, 0.18, 0.36, 0.5, 0.62, 0.72, 0.8, 0.86, 0.91, 0.945, 0.97, 0.985 }
-        local layers, blueL, deepL = {}, {}, {}
-        for i = 1, NL do
-            local u = (i - 1) / (NL - 1)
-            blueL[i] = WHITE:Lerp(rgb(25, 70, 255), u ^ 0.7)
-            deepL[i] = rgb(190, 225, 255):Lerp(rgb(10, 40, 230), u ^ 0.6)
-            layers[i] = neonPart(Enum.PartType.Ball)
-            layers[i].Size = Vector3.one
-            layers[i].Transparency = 1
-        end
-        local function softCap(x)
-            local knee, cap = 1000, 2040
-            if x <= knee then return x end
-            return knee + (cap - knee) * (1 - math.exp(-(x - knee) / (cap - knee)))
-        end
-
-        local FLARE_DEPTH = 13
-        local flareRig = Instance.new("Part")
-        flareRig.Anchored, flareRig.CanCollide, flareRig.CanQuery, flareRig.CanTouch = true, false, false, false
-        flareRig.CastShadow = false
-        flareRig.Transparency = 1
-        flareRig.Size = Vector3.one * 0.05
-        flareRig.Parent = root
-        local flareDefs = {
-            {
-                pos = Vector2.new(1, 1), mult = 1, blend = 0.5, role = 1, squash = -1,
-                size = NumberSequence.new({ NSK(0, 9), NSK(0.5, 4.5), NSK(1, 0) }),
-                alpha = NumberSequence.new({ NSK(0, 0.1), NSK(0.6, 0.55), NSK(1, 1) }),
-            },
-            {
-                pos = Vector2.new(1, 1), mult = 1, blend = 0.15, role = 1, squash = -1.2,
-                size = NumberSequence.new({ NSK(0, 4.5), NSK(1, 0) }),
-                alpha = NumberSequence.new({ NSK(0, 0), NSK(1, 1) }),
-            },
-            {
-                pos = Vector2.new(1, 1), mult = 1, blend = 0.8, role = 2, squash = -4,
-                size = NumberSequence.new({ NSK(0, 6), NSK(1, 0) }),
-                alpha = NumberSequence.new({ NSK(0, 0.25), NSK(0.6, 0.65), NSK(1, 1) }),
-            },
-            {
-                pos = Vector2.new(-0.6, -0.6), mult = 1, blend = 0.75, role = 3, squash = -1.5,
-                size = NumberSequence.new({ NSK(0, 2.2), NSK(1, 0) }),
-                alpha = NumberSequence.new({ NSK(0, 0.65), NSK(1, 1) }),
-            },
-            {
-                pos = Vector2.new(1, 1), mult = 1, blend = 0.85, role = 2,
-                size = NumberSequence.new({ NSK(0, 3.5), NSK(1, 0) }),
-                alpha = NumberSequence.new({ NSK(0, 0.1), NSK(1, 1) }),
-                squash = NumberSequence.new({ NSK(0, -9), NSK(1, -3) }),
-            },
-            {
-                pos = Vector2.new(1, 1), mult = 1, blend = 0.15, role = 1,
-                size = NumberSequence.new({ NSK(0, 2.2), NSK(1, 0) }),
-                alpha = NumberSequence.new({ NSK(0, 0), NSK(1, 1) }),
-                squash = NumberSequence.new({ NSK(0, -14), NSK(1, -5) }),
-            },
-        }
-        for _, d in ipairs(flareDefs) do
-            d.att = Instance.new("Attachment")
-            d.att.Parent = flareRig
-            local e = Instance.new("ParticleEmitter")
-            e.Enabled, e.Rate = false, 0
-            e.Speed, e.RotSpeed = NumberRange.new(0), NumberRange.new(0)
-            e.Lifetime = NumberRange.new(0.05)
-            e.Rotation = NumberRange.new(SB_FLARE_TILT)
-            e.LightEmission, e.LightInfluence, e.ZOffset = 1, 0, -5
-            e.Orientation = Enum.ParticleOrientation.FacingCamera
-            e.Parent = d.att
-            d.e = e
-        end
-
-        local conn
-        conn = RunService.RenderStepped:Connect(function(dt)
-            local cam = Workspace.CurrentCamera
-            stage.Time += dt
-            local t = stage.Time
-
-            if stage.Tracker then stage.Center = stage.Tracker() end
-            local center = stage.Center
-            local cf = cam.CFrame
-            plane = CFrame.fromMatrix(center, cf.RightVector, cf.UpVector, -cf.LookVector)
-            anchor.CFrame = CFrame.new(center)
-
-            for i = #tasks, 1, -1 do
-                local k = tasks[i]
-                if t >= k.t0 then
-                    local a = (t - k.t0) / k.dur
-                    if a >= 1 then
-                        k.fn(1)
-                        if k.done then k.done() end
-                        table.remove(tasks, i)
-                    else
-                        k.fn(a)
-                    end
-                end
-            end
-
-            for _, hook in ipairs(stage.Hooks) do hook(t, dt) end
-
-            local d, al = stage.CoreDiameter, stage.CoreAlpha
-            for i = 1, NL do
-                local l = layers[i]
-                if d > 1 and al > 0.002 then
-                    l.Size = Vector3.one * softCap(d * mult[i])
-                    l.CFrame = CFrame.new(center)
-                    l.Transparency = 1 - (1 - ctr[i]) * al
-                    l.Color = blueL[i]:Lerp(deepL[i], stage.CoreDeep)
-                else
-                    l.Transparency = 1
-                end
-            end
-
-            local V = cam.ViewportSize
-            local P = cam:WorldToViewportPoint(center)
-            local strength, c1, c2, c3 = 0, SB_BLUE[2], SB_BLUE[1], SB_BLUE[3]
-            if stage.FlareFn then strength, c1, c2, c3 = stage.FlareFn(t) end
-            strength = (P.Z > 0) and strength * SB_FLARE or 0
-            if strength > 0.001 then
-                local cols = { c1, c2, c3 }
-                local toSrc = center - cf.Position
-                local viewAngle = math.acos(math.clamp(cf.LookVector:Dot(toSrc.Unit), -1, 1))
-                local vFov = math.rad(cam.FieldOfView)
-                local ar = V.X / V.Y
-                local dFov = 2 * math.atan(math.tan(vFov / 2) * math.sqrt(1 + ar * ar))
-                local angleAlpha = 1 - math.clamp(viewAngle / (dFov / 2), 0, 1)
-                local str = math.clamp(angleAlpha * strength, 0, 1)
-                if str > 0.001 then
-                    local src = Vector2.new(P.X, P.Y)
-                    local b = Vector2.new(V.X / 2, V.Y / 2) - src
-                        + Vector2.new(math.cos(t * 0.7) * V.Y * 0.16, math.sin(t * 0.5) * V.Y * 0.1)
-                    local fovK = math.tan(vFov / 2) / math.tan(math.rad(60) / 2)
-                    local fade = 1 - angleAlpha
-                    for _, fd in ipairs(flareDefs) do
-                        local k = Vector2.one - fd.pos * fd.mult
-                        local pt = src + Vector2.new(b.X * k.X, b.Y * k.Y)
-                        local ray = cam:ViewportPointToRay(pt.X, pt.Y)
-                        fd.att.WorldPosition = ray.Origin + ray.Direction.Unit * FLARE_DEPTH
-                        fd.e.Size = NumberSequence.new(evalSeq(fd.size, fade) * fovK)
-                        fd.e.Squash = NumberSequence.new(evalSeq(fd.squash, fade) * SB_FLARE_STRETCH)
-                        fd.e.Transparency = NumberSequence.new(math.clamp(1 - (1 - evalSeq(fd.alpha, fade)) * str, 0, 1))
-                        fd.e.Color = ColorSequence.new(WHITE:Lerp(cols[fd.role], fd.blend))
-                        fd.e:Emit(1)
-                    end
-                end
-            end
-        end)
-
-        function stage.Destroy()
-            if conn then
-                conn:Disconnect()
-                conn = nil
-            end
-            for _, fn in ipairs(stage.Cleanup) do pcall(fn) end
-            root:Destroy()
-        end
-
-        return stage
-    end
-
-    local function StartSpiritBombCharge(getOrbPosition, orbDiameter)
-        local T1 = SB_CHARGE_TIME
-        local S = SpiritBombScale(orbDiameter)
-        local SU = 2
-        local stage = CreateFXStage(S, orbDiameter)
-        local rr, pick = stage.rr, stage.pick
-
-        local lastPos = getOrbPosition() or Vector3.zero
-        stage.Center = lastPos
-        stage.Tracker = function()
-            lastPos = getOrbPosition() or lastPos
-            return lastPos
-        end
-
-        for _, off in ipairs({ 0, PI }) do
-            stage.addRay{ t0 = 0, life = T1, ang = SB_TILT + off, r0 = 0, len = 0.9 * S, w = 0.007 * S * SU,
-                color = SB_BLUE[2], grow = 0.3, hold = 0.85, tailMove = 0 }
-        end
-        for i = 1, 12 do
-            stage.addRay{ t0 = 0.12 + i * 0.012, life = T1 - 0.15, ang = SB_TILT + PI * i / 6 + rr(-0.1, 0.1), z = rr(-0.2, 0.2),
-                r0 = 0.01 * S, len = rr(0.07, 0.22) * S * SU, w = 0.0035 * S * SU, color = pick(SB_BLUE),
-                grow = 0.3, hold = 0.85, tailMove = 0 }
-        end
-        for _ = 1, 120 do
-            local life = rr(0.38, 0.6)
-            local t0 = 0.05 + (T1 - 0.05 - life) * rr(0, 1) ^ 0.7
-            stage.addComet{ t0 = t0, life = life, mode = "in", ang = rr(0, 2 * PI), r0 = rr(0.5, 1.4) * S, r1 = 0.015 * S,
-                swirl = rr(2.2, 3.6) * (rr(0, 1) < 0.5 and 1 or -1), z = rr(-0.2, 0.2), w = rr(0.003, 0.008) * S * SU,
-                trail = rr(0.14, 0.26), color = pick(SB_BLUE), color2 = SB_BLUE[3] }
-        end
-        for i = 1, 7 do
-            stage.addBolt{ t0 = T1 * 0.6 + i * 0.05, life = 0.3, ang = rr(0, 2 * PI), r0 = 0.03 * S,
-                len = rr(0.1, 0.22) * S * SU, w = 0.003 * S * SU, color = SB_BLUE[2], jitter = 0.14, N = 7 }
-        end
-
-        local coreK = { { 0, 0.28 }, { 0.35, 0.5 }, { 0.85, 0.66 }, { T1 - 0.14, 0.78 }, { T1 - 0.02, 0.5 } }
-        local alphaK = { { 0, 0 }, { 0.3, 0.55 }, { 0.9, 0.95 }, { T1, 1 } }
-        local pulseK = { { 0.1, 0 }, { 0.5, 1 }, { T1 - 0.2, 1 }, { T1 - 0.05, 0 } }
-        table.insert(stage.Hooks, function(t)
-            if stage.BreachAt then return end
-            stage.CoreDiameter = orbDiameter * kf(t, coreK) * (1 + 0.1 * math.sin(t * (18 + 12 * t)) * kf(t, pulseK))
-            stage.CoreAlpha = kf(t, alphaK)
-        end)
-
-        if isLocal then
-            local flarePre = { { 0, 0 }, { 0.25, 0 }, { 0.7, 0.3 }, { T1 - 0.2, 0.45 }, { T1 - 0.05, 0.12 }, { T1, 0.12 } }
-            stage.FlareFn = function(t)
-                return kf(t, flarePre), SB_BLUE[2], SB_BLUE[1], SB_BLUE[3]
-            end
-
-            local bloom = Instance.new("BloomEffect")
-            bloom.Size, bloom.Threshold, bloom.Intensity = 56, 0.8, 0
-            bloom.Parent = Lighting
-            local grade = Instance.new("ColorCorrectionEffect")
-            grade.Parent = Lighting
-
-            local gui = Instance.new("ScreenGui")
-            gui.Name = "SpiritBombVignette"
-            gui.IgnoreGuiInset = true
-            gui.ResetOnSpawn = false
-            gui.DisplayOrder = 1000
-            pcall(function() gui.ScreenInsets = Enum.ScreenInsets.None end)
-            gui.Parent = LocalPlayer.PlayerGui
-
-            local vig = Instance.new("CanvasGroup")
-            vig.Size = UDim2.fromScale(1, 1)
-            vig.BackgroundTransparency = 1
-            vig.GroupTransparency = 1
-            vig.Parent = gui
-            local function edge(anchorP, pos, size, rot)
-                local f = Instance.new("Frame")
-                f.AnchorPoint = anchorP
-                f.Position = pos
-                f.Size = size
-                f.BackgroundColor3 = Color3.new(0, 0, 0)
-                f.BorderSizePixel = 0
-                local g = Instance.new("UIGradient")
-                g.Rotation = rot
-                g.Transparency = NumberSequence.new({ NSK(0, 0.35), NSK(1, 1) })
-                g.Parent = f
-                f.Parent = vig
-            end
-            edge(Vector2.new(0, 0), UDim2.fromScale(0, 0), UDim2.fromScale(0.28, 1), 0)
-            edge(Vector2.new(1, 0), UDim2.fromScale(1, 0), UDim2.fromScale(0.28, 1), 180)
-            edge(Vector2.new(0, 0), UDim2.fromScale(0, 0), UDim2.fromScale(1, 0.28), 90)
-            edge(Vector2.new(0, 1), UDim2.fromScale(0, 1), UDim2.fromScale(1, 0.28), 270)
-
-            local bloomK = { { 0, 0 }, { 0.4, 0.35 }, { T1 - 0.12, 1.0 }, { T1, 1.8 } }
-            local brightK = { { 0, 0 }, { T1 - 0.16, 0 }, { T1 - 0.04, -0.12 }, { T1, -0.12 } }
-            local vigK = { { 0, 1 }, { T1 - 0.1, 0.3 }, { T1, 0.25 } }
-            table.insert(stage.Hooks, function(t)
-                if stage.BreachAt then
-                    vig.GroupTransparency = kf(t - stage.BreachAt, { { 0, 0.25 }, { 0.6, 0.3 }, { 3.4, 1 } })
-                else
-                    bloom.Intensity = kf(t, bloomK)
-                    grade.Brightness = kf(t, brightK)
-                    vig.GroupTransparency = kf(t, vigK)
-                end
-            end)
-
-            function stage.EndCharge()
-                bloom:Destroy()
-                grade:Destroy()
-            end
-            table.insert(stage.Cleanup, function()
-                gui:Destroy()
-                if bloom.Parent then bloom:Destroy() end
-                if grade.Parent then grade:Destroy() end
-            end)
-
-            for _, shake in ipairs({ { 0.2, 2 }, { 0.5, 3 }, { 0.85, 4 } }) do
-                task.delay(shake[1], function()
-                    if not stage.BreachAt then
-                        FireReplicationEvent({ Intensity = shake[2], Effect = "Camshake" })
-                    end
-                end)
-            end
-        end
-
-        return stage
-    end
-
-    local function CreateExplosionOrb(folder, center, stage)
-        local C = EXPLOSION_COLORS
-        local S, orbD = stage.S, stage.OrbDiameter
-        local rr, pick = stage.rr, stage.pick
-        local DF = SB_ORB_FINAL
-        local t0 = stage.Time
-
-        stage.BreachAt = t0
-        stage.Tracker = nil
-        stage.Center = center
-        if stage.EndCharge then stage.EndCharge() end
-
-        local d0 = math.min(orbD * 0.55, DF * 0.9)
-        local dK = { { 0, d0 }, { 0.05, DF * 0.85 }, { 0.28, DF }, { 1.2, DF * 1.1 }, { 2.2, DF * 1.22 }, { 3.4, DF * 1.3 } }
-        local aK = { { 0, 1 }, { 0.7, 1 }, { 1.6, 0.45 }, { 2.7, 0 } }
-        local deepK = { { 0, 0 }, { 1.2, 0.6 }, { 2.7, 1 } }
-        table.insert(stage.Hooks, function(t)
-            local tb = t - t0
-            stage.CoreDiameter = kf(tb, dK) * (1 + 0.025 * math.sin(tb * 22) * math.clamp(1 - tb, 0, 1))
-            stage.CoreAlpha = kf(tb, aK)
-            stage.CoreDeep = kf(tb, deepK)
-        end)
-
-        if isLocal then
-            local flarePost = { { 0, 1 }, { 0.5, 0.75 }, { 1.4, 0.55 }, { 2.4, 0.3 }, { 3.3, 0 } }
-            local mainK = { { 0, SB_BLUE[4] }, { 0.5, SB_BLUE[4] }, { 1.6, SB_BLUE[1] }, { 3.2, SB_BLUE[3] } }
-            local accentK = { { 0, SB_BLUE[2] }, { 1.6, SB_BLUE[1] } }
-            local ghostK = { { 0, SB_BLUE[1] }, { 1.6, SB_BLUE[2] } }
-            stage.FlareFn = function(t)
-                local tb = t - t0
-                return kf(tb, flarePost), kf(tb, mainK), kf(tb, accentK), kf(tb, ghostK)
-            end
-        end
-
-        local function Shield(color, material, tr, diameter, grow, fadeDelay, fadeTime)
-            local p = NewEffectPart(folder, "Part", Vector3.one * math.max(orbD * 0.6, 2), CFrame.new(center), color, material, tr)
-            p.Shape = Enum.PartType.Ball
-            PlayTween(p, grow, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out, { Size = Vector3.one * diameter })
-            PlayTween(p, fadeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.In, { Transparency = 1 }, fadeDelay)
-        end
-        Shield(C.Ice, Enum.Material.ForceField, 0, DF * 1.5, 0.5, 0.9, 1.4)
-        Shield(C.Cyan, Enum.Material.ForceField, 0.15, DF * 2.3, 0.75, 1.1, 1.7)
-        Shield(C.Ice, Enum.Material.Neon, 0.9, DF * 3.4, 0.6, 0.05, 0.75)
-
-        local n = 20
-        for i = 1, n do
-            local big = (i % 4 == 0)
-            stage.addRay{
-                t0 = t0 + rr(0, 0.04), life = 1.6, ang = SB_TILT + (i / n) * 2 * PI, z = rr(-0.08, 0.08),
-                r0 = DF * 0.35, len = 1.5 * S * ((i % 2 == 0) and 1 or 0.55) * (big and 1.25 or 1) * rr(0.9, 1.1),
-                w = 0.007 * S * (big and 1.4 or 1), color = pick(SB_BLUE), grow = 0.12, hold = 0.5, tailMove = 0.45,
-            }
-        end
-        for _, a in ipairs({ 0.15, PI + 0.15, -0.12, PI - 0.12 }) do
-            stage.addRay{ t0 = t0 + 0.04, life = 1.8, ang = a, r0 = DF * 0.4, len = 1.7 * S, w = 0.02 * S,
-                color = SB_BLUE[2], grow = 0.12, hold = 0.6, tailMove = 0.35 }
-        end
-        for _ = 1, 14 do
-            stage.addBolt{ t0 = t0 + rr(0, 0.5), life = rr(0.35, 0.7), ang = rr(0, 2 * PI), r0 = DF * 0.45,
-                len = rr(0.4, 0.95) * S, w = 0.005 * S, color = SB_BLUE[2], jitter = 0.09 }
-        end
-        for _ = 1, 80 do
-            stage.addComet{ t0 = t0 + rr(0, 0.22), life = rr(0.8, 1.5), mode = "out", ang = rr(0, 2 * PI), r0 = DF * 0.4,
-                r1 = rr(0.8, 2.3) * S, swirl = rr(0.7, 1.7) * (rr(0, 1) < 0.5 and 1 or -1), z = rr(-0.25, 0.25),
-                w = rr(0.008, 0.02) * S, trail = rr(0.35, 0.7), color = pick(SB_BLUE), color2 = SB_BLUE[3] }
-        end
-
-        task.delay(3.8, stage.Destroy)
-
-        local core = NewEffectPart(folder, "Part", Vector3.one * DF * 1.1, CFrame.new(center), C.White, Enum.Material.Neon, 1)
-        core.Shape = Enum.PartType.Ball
-        return core
-    end
 
     local function PlaySpiritBombExplosion(center, stage, orbDiameter)
         local C = EXPLOSION_COLORS
@@ -976,16 +1308,18 @@ local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
         folder.Parent = Workspace
         Debris:AddItem(folder, 8)
 
-        if isLocal then
+        if ACTOR_IS_LOCAL then
             PlayExplosionScreenFX(folder)
         end
 
+        -- Orb: 12-layer glow core + shields + rays/lightning/comets + lens flare (see CreateExplosionOrb)
         orbDiameter = orbDiameter or 120
         stage = stage or CreateFXStage(SpiritBombScale(orbDiameter), orbDiameter)
         local core = CreateExplosionOrb(folder, center, stage)
         AttachPlasma(core)
         AttachSparks(core)
 
+        -- Light that blasts the surroundings blue
         local light = Instance.new("PointLight")
         light.Color = C.Cyan
         light.Range = 60
@@ -994,6 +1328,7 @@ local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
         light.Parent = core
         PlayTween(light, 2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, {Brightness = 0}, 0.4)
 
+        -- Flat shock slab on the plane of the blast
         local slab = NewEffectPart(
             folder, "Part", Vector3.new(4, 20, 20),
             CFrame.new(center) * CFrame.Angles(0, 0, math.rad(90)),
@@ -1004,6 +1339,7 @@ local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
             {Size = Vector3.new(1, 760, 760)})
         PlayTween(slab, 0.9, Enum.EasingStyle.Quad, Enum.EasingDirection.In, {Transparency = 1}, 0.1)
 
+        -- Tilted glowing rings, staggered
         CreateShockRing(folder, center + Vector3.new(0, 0, 0),
             CFrame.Angles(math.rad(12), 0, math.rad(5)), 620, 0, C.White)
         CreateShockRing(folder, center + Vector3.new(0, 25, 0),
@@ -1014,7 +1350,8 @@ local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
         SpawnLightSpokes(folder, center, rng)
         SpawnDebris(folder, center, rng)
 
-        if isLocal then
+        -- Camera shake + letting the player drop only apply to MY character
+        if ACTOR_IS_LOCAL then
             FireReplicationEvent({
                 Intensity = 12,
                 Effect = "Camshake"
@@ -1025,9 +1362,10 @@ local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
                     Effect = "Camshake"
                 })
             end)
-        end
 
-        task.delay(EXPLOSION_DURATION, ReleaseFromAir)
+            -- Explosion is over: let the player drop
+            task.delay(EXPLOSION_DURATION, ReleaseFromAir)
+        end
     end
 
     local function PlaySpiritBombOrb()
@@ -1045,7 +1383,7 @@ local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
         end)
 
         local model = template:Clone()
-        model.Parent = isLocal and Character or Thrown
+        model.Parent = Character
 
         model:SetPrimaryPartCFrame(HumanoidRootPart.CFrame * CFrame.new(0, 50, 0))
 
@@ -1055,6 +1393,7 @@ local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
             end
         end
 
+        -- Grow in like a real Spirit Bomb: tiny -> full size over the windup
         local GROW_TIME = 2.1
         local START_SCALE = 0.05
 
@@ -1073,13 +1412,14 @@ local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
         )
         growTween:Play()
 
+        -- Quick charge-up: starts just before the orb finishes growing and lands exactly on impact
         local stage
         task.delay(GROW_TIME - SB_CHARGE_PRE, function()
             if model.Parent then
                 stage = StartSpiritBombCharge(function()
                     local pp = model.Parent and model.PrimaryPart
                     return pp and pp.Position
-                end, orbDiameter)
+                end, orbDiameter, ACTOR_IS_LOCAL)
             end
         end)
 
@@ -1087,6 +1427,8 @@ local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
         scaleValue:Destroy()
         model:ScaleTo(1)
 
+        -- The orb stays anchored the whole time (no physics). One tween drives it
+        -- along a single diagonal path: forward and down together.
         local FORWARD_DISTANCE = 100
         local DROP_DISTANCE = 230
         local FALL_TIME = SB_FALL_TIME
@@ -1135,7 +1477,7 @@ local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
                 Time = 1,
                 AccurateCheck = true,
                 camshake = {
-                    ActorPlayer.Name,
+                    LocalPlayer.Name,
                     "Weakest Dummy"
                 }
             })
@@ -1146,27 +1488,10 @@ local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
             model:Destroy()
             impactPart:Destroy()
 
-            if isLocal then
+            if ACTOR_IS_LOCAL then
                 task.spawn(PlayImpactScreenFlash)
             end
         end)
-    end
-
-    local function StreamPillarTextures(targetPart)
-        local textures = {}
-        for _, decal in pairs(UFW.vfx.Pillar.Preload:GetDescendants()) do
-            if decal:IsA("Decal") and decal.Texture ~= "" and not table.find(textures, decal.Texture) then
-                table.insert(textures, decal.Texture)
-            end
-        end
-
-        for _, texture in pairs(textures) do
-            local newDecal = Instance.new("Decal")
-            newDecal.Parent = targetPart
-            newDecal.Texture = texture
-            Debris:AddItem(newDecal, 3)
-            task.wait(0.0065)
-        end
     end
 
     local function AnchorForWindup()
@@ -1178,209 +1503,10 @@ local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
         end
     end
 
-    local function PlayJumpMeshTrails(character)
-        local jumpMeshes = FiveSeasonsFX.JumpMeshes:Clone()
-        jumpMeshes:SetPrimaryPartCFrame(character.HumanoidRootPart.CFrame)
-        jumpMeshes.Parent = Thrown
-
-        task.delay(0.075, function()
-            for _, emitter in pairs(jumpMeshes.Lines:GetDescendants()) do
-                if emitter:IsA("ParticleEmitter") then
-                    local emitCount = tonumber(emitter.Name) or 0
-                    emitter:Emit(emitCount)
-                end
-            end
-        end)
-
-        task.spawn(function()
-            local mainClone = jumpMeshes.Main:Clone()
-            local startPart, endPart = mainClone.Start, mainClone.End
-            local clonedMesh = startPart:Clone()
-            clonedMesh.Transparency = 0.95
-            clonedMesh.Name = "ClonedMesh"
-            clonedMesh.Parent = jumpMeshes.CurrentTweens
-
-            TweenService:Create(clonedMesh, TweenInfo.new(0.75, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-                CFrame = endPart.CFrame
-            }):Play()
-            TweenService:Create(clonedMesh, TweenInfo.new(0.75, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-                Size = endPart.Size
-            }):Play()
-
-            task.wait(0.75)
-            clonedMesh:Destroy()
-        end)
-
-        task.spawn(function()
-            local wind3Clone = jumpMeshes.Wind3:Clone()
-            local startPart, endPart = wind3Clone.Start, wind3Clone.End
-            local clonedMesh = startPart:Clone()
-            clonedMesh.Transparency = 0.75
-            clonedMesh.Name = "ClonedMesh"
-            clonedMesh.Parent = jumpMeshes.CurrentTweens
-
-            TweenService:Create(clonedMesh, TweenInfo.new(0.8, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-                CFrame = endPart.CFrame,
-                Size = endPart.Size
-            }):Play()
-            TweenService:Create(clonedMesh, TweenInfo.new(0.8, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-                Transparency = 1
-            }):Play()
-
-            task.wait(0.8)
-            clonedMesh:Destroy()
-        end)
-
-        task.spawn(function()
-            local wind2Clone = jumpMeshes.Wind2:Clone()
-            local startPart, endPart = wind2Clone.Start, wind2Clone.End
-            local clonedMesh = startPart:Clone()
-            clonedMesh.Transparency = 0.8
-            clonedMesh.Name = "ClonedMesh"
-            clonedMesh.Parent = jumpMeshes.CurrentTweens
-
-            TweenService:Create(clonedMesh, TweenInfo.new(0.55, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out), {
-                CFrame = endPart.CFrame
-            }):Play()
-            TweenService:Create(clonedMesh, TweenInfo.new(0.55, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
-                Size = endPart.Size,
-                Transparency = 1
-            }):Play()
-
-            task.wait(0.55)
-            clonedMesh:Destroy()
-        end)
-
-        local function PlayWindFX2()
-            task.spawn(function()
-                local windDecalClone = jumpMeshes.WindDecal2:Clone()
-                windDecalClone:ScaleTo(Random.new():NextNumber(0.95, 2.35))
-                local tweenTime = Random.new():NextNumber(1, 2.75)
-                local randomAngle = math.rad(math.random(0, 360))
-
-                windDecalClone:SetPrimaryPartCFrame(windDecalClone.PrimaryPart.CFrame * CFrame.Angles(0, randomAngle, 0))
-                windDecalClone.End.CFrame = windDecalClone.End.CFrame * CFrame.Angles(0, randomAngle, 0)
-
-                local startPart, endPart = windDecalClone.Start, windDecalClone.End
-                local clonedMesh = startPart:Clone()
-                clonedMesh.Decal.Transparency = Random.new():NextNumber(0.8, 0.93)
-                clonedMesh.Name = "ClonedMesh"
-                clonedMesh.Parent = jumpMeshes.CurrentTweens
-
-                TweenService:Create(clonedMesh, TweenInfo.new(tweenTime, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
-                    Size = endPart.Size,
-                    CFrame = endPart.CFrame
-                }):Play()
-                TweenService:Create(clonedMesh.Mesh, TweenInfo.new(tweenTime, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out), {
-                    Scale = endPart.Mesh.Scale
-                }):Play()
-                TweenService:Create(clonedMesh.Decal, TweenInfo.new(tweenTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-                    Transparency = 1
-                }):Play()
-
-                task.wait(4)
-                clonedMesh:Destroy()
-            end)
-        end
-
-        for _ = 1, 5 do
-            task.spawn(PlayWindFX2)
-            task.wait(0.035)
-        end
-
-        task.wait(5)
-        jumpMeshes:Destroy()
-    end
-
-    local function PlayAnimator6DFromCache()
-        local CACHE_URL = "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/anim6d_kfcache_18878778259.json"
-        local CACHE_FILE = "anim6d_kfcache_18878778259.json"
-
-        local jsonBody
-
-        if isfile and isfile(CACHE_FILE) then
-            local ok, raw = pcall(readfile, CACHE_FILE)
-            if ok and raw and #raw > 100 then
-                jsonBody = raw
-                print("[Cache] Loaded from disk")
-            end
-        end
-
-        if not jsonBody then
-            local ok, body = pcall(game.HttpGet, game, CACHE_URL)
-            if ok and body and #body > 100 then
-                jsonBody = body
-                print("[Cache] Fetched from GitHub")
-                if writefile then
-                    writefile(CACHE_FILE, body)
-                end
-            else
-                error("[Animator6D] Failed to fetch JSON — cannot continue")
-            end
-        end
-
-        local animatorData = HttpService:JSONDecode(jsonBody)
-
-        LoadAnimator6D()
-
-        Animator6D(animatorData, nil, nil, Character)
-    end
-
-    local function PlayJumpBurstAndHighlight(character)
-        local jumpFXClone = FiveSeasonsFX.JumpFX:Clone()
-        jumpFXClone:SetPrimaryPartCFrame(character.HumanoidRootPart.CFrame)
-        jumpFXClone.Parent = Thrown
-
-        local burnMark = jumpFXClone.JumpFX:FindFirstChild("BurnMark")
-        if burnMark then
-            burnMark:Destroy()
-        end
-
-        for _, emitter in pairs(jumpFXClone.JumpFX:GetDescendants()) do
-            if emitter:IsA("ParticleEmitter") then
-                emitter:Emit(emitter:GetAttribute("EmitCount") or 0)
-            end
-        end
-
-        jumpFXClone.JumpFX.EnabledP.Enabled = true
-
-        local highlight = Instance.new("Highlight")
-        highlight.FillColor = Color3.fromRGB(255, 66, 28)
-        highlight.OutlineColor = Color3.fromRGB(255, 44, 2)
-        highlight.FillTransparency = 0.5
-        highlight.OutlineTransparency = 0.6
-        highlight.DepthMode = Enum.HighlightDepthMode.Occluded
-        highlight.Parent = character
-
-        TweenService:Create(highlight, TweenInfo.new(0.75, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut), {
-            FillTransparency = 1,
-            OutlineTransparency = 1
-        }):Play()
-
-        task.wait(0.5)
-        jumpFXClone.JumpFX.EnabledP.Enabled = false
-        task.wait(4)
-
-        jumpFXClone:Destroy()
-        highlight:Destroy()
-    end
-
-    local function LaunchCharacterAndCleanup(flashClone, charClone, renderSteppedConn, camRig)
+    local function LaunchCharacterAndCleanup(flashClone, charClone, renderSteppedConn)
         Animator6DStop(charClone)
-        task.spawn(PlayAnimator6DFromCache)
+        task.spawn(PlayPostLaunchAnim, Character, true)
 
-        if not isLocal then
-            task.delay(0.8, function()
-                renderSteppedConn:Disconnect()
-                Animator6DStop(Character)
-                charClone:Destroy()
-                flashClone:Destroy()
-                camRig:Destroy()
-            end)
-            return
-        end
-
-        local launchStartY = HumanoidRootPart.Position.Y
         local goalCFrame = HumanoidRootPart.CFrame + Vector3.new(0, 126, 0)
         local tween = TweenService:Create(
             HumanoidRootPart,
@@ -1407,7 +1533,7 @@ local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
 
         local reachedHeight = false
         local function checkHeight()
-            if HumanoidRootPart.Position.Y >= launchStartY + 125 and not reachedHeight then
+            if HumanoidRootPart.Position.Y >= 125 and not reachedHeight then
                 reachedHeight = true
                 HumanoidRootPart.Anchored = true
                 return true
@@ -1440,7 +1566,7 @@ local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
         local viewport = flashClone.Flashup.Viewport.Viewport
         local viewportCam = Instance.new("Camera", viewport)
         viewport.CurrentCamera = viewportCam
-        flashClone.Parent = LocalPlayer.PlayerGui
+        flashClone.Parent = REAL_LOCAL_PLAYER.PlayerGui
 
         Character.Archivable = true
         local charClone = Character:Clone()
@@ -1464,34 +1590,8 @@ local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
 
         charClone.Parent = viewport.Body
 
-        local VIEWPORT_CACHE_URL = "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/anim6d_kfcache_18385523261.json"
-        local VIEWPORT_CACHE_FILE = "anim6d_kfcache_18385523261.json"
-
-        local viewportJsonBody
-        if isfile and isfile(VIEWPORT_CACHE_FILE) then
-            local ok, raw = pcall(readfile, VIEWPORT_CACHE_FILE)
-            if ok and raw and #raw > 100 then
-                viewportJsonBody = raw
-                print("[Cache] Loaded from disk")
-            end
-        end
-
-        if not viewportJsonBody then
-            local ok, body = pcall(game.HttpGet, game, VIEWPORT_CACHE_URL)
-            if ok and body and #body > 100 then
-                viewportJsonBody = body
-                print("[Cache] Fetched from GitHub")
-                if writefile then
-                    writefile(VIEWPORT_CACHE_FILE, body)
-                end
-            else
-                error("[Animator6D] Failed to fetch JSON — cannot continue")
-            end
-        end
-
-        local viewportAnimData = HttpService:JSONDecode(viewportJsonBody)
-
-        LoadAnimator6D()
+        local viewportAnimData = GetAnimData(THROW_ANIM)
+        EnsureAnimModule()
 
         Animator6D(viewportAnimData, nil, nil, charClone)
 
@@ -1532,9 +1632,7 @@ local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
         task.spawn(function()
             task.wait(0.2)
 
-            if isLocal then
-                task.spawn(AnchorForWindup)
-            end
+            task.spawn(AnchorForWindup)
 
             task.delay(0, function()
                 task.spawn(function()
@@ -1543,38 +1641,13 @@ local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
                 PlayJumpBurstAndHighlight(Character)
             end)
 
-            LaunchCharacterAndCleanup(flashClone, charClone, renderSteppedConn, camRig)
+            LaunchCharacterAndCleanup(flashClone, charClone, renderSteppedConn)
         end)
     end
 
-    local function PlaySpiritBombSound()
-        if isLocal then
-            spiritBombSound:Play()
-            return
-        end
-        local actorSound = Instance.new("Sound")
-        actorSound.SoundId = spiritBombSound.SoundId
-        actorSound.Volume = spiritBombSound.Volume
-        actorSound.RollOffMinDistance = 40
-        actorSound.RollOffMaxDistance = 600
-        actorSound.Parent = HumanoidRootPart
-        actorSound:Play()
-        Debris:AddItem(actorSound, 30)
-    end
-
-    local function PlaySpiritBombSequence()
-        if sequenceRunning then
-            return
-        end
-        sequenceRunning = true
-        task.delay(SEQUENCE_LOCK_TIME, function()
-            sequenceRunning = false
-        end)
-
-        if isLocal then
-            HoldInAir()
-        end
-        PlaySpiritBombSound()
+    local function PlayLocalSequence()
+        HoldInAir()
+        PlaySequenceSound()
 
         task.spawn(function()
             task.wait(3.1)
@@ -1583,86 +1656,35 @@ local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
         end)
 
         task.spawn(function()
-            local THROW_CACHE_URL = "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/anim6d_kfcache_18385523261.json"
-            local THROW_CACHE_FILE = "anim6d_kfcache_18385523261.json"
+            local throwAnimation = PlayThrowAnim()
 
-            local throwJsonBody
-            if isfile and isfile(THROW_CACHE_FILE) then
-                local ok, raw = pcall(readfile, THROW_CACHE_FILE)
-                if ok and raw and #raw > 100 then
-                    throwJsonBody = raw
-                    print("[Cache] Loaded from disk")
-                end
+            local cloneRB = UFW.RB:Clone()
+            if not cloneRB.PrimaryPart then
+                cloneRB:GetPropertyChangedSignal("PrimaryPart"):Wait()
             end
+            cloneRB:SetPrimaryPartCFrame(CFrame.new(1e6, 1e6, 1e6))
+            cloneRB.Parent = Thrown
+            cloneRB:ScaleTo(2)
 
-            if not throwJsonBody then
-                local ok, body = pcall(game.HttpGet, game, THROW_CACHE_URL)
-                if ok and body and #body > 100 then
-                    throwJsonBody = body
-                    print("[Cache] Fetched from GitHub")
-                    if writefile then
-                        writefile(THROW_CACHE_FILE, body)
-                    end
-                else
-                    error("[Animator6D] Failed to fetch JSON — cannot continue")
-                end
-            end
+            local animController = cloneRB:WaitForChild("AnimationController")
+            local animTrack = animController:LoadAnimation(UFW.lastthing)
+            animTrack:Play()
+            animTrack.TimePosition = 1.4
+            Debris:AddItem(cloneRB, 3)
 
-            local throwAnimData = HttpService:JSONDecode(throwJsonBody)
+            local invisiblePart = Instance.new("Part")
+            invisiblePart.Anchored = true
+            invisiblePart.Transparency = 1
+            invisiblePart.CanCollide = false
+            invisiblePart.CanQuery = false
+            invisiblePart.CanTouch = false
+            invisiblePart.CFrame = CFrame.new(40000, 40000, 40000)
+            invisiblePart.Parent = Thrown
+            Debris:AddItem(invisiblePart, 10)
 
-            LoadAnimator6D()
-
-            if isLocal then
-                local impactFrames = UFW.ImpactFrames:Clone()
-                impactFrames.Parent = LocalPlayer.PlayerGui
-                for _, frame in pairs(impactFrames:GetChildren()) do
-                    frame.Size = UDim2.new(0, 0, 0, 1)
-                    frame.ImageTransparency = 0
-                end
-
-                for _, flexwork in pairs(UFW.Flexworks:GetChildren()) do
-                    local cloneFlex = flexwork:Clone()
-                    cloneFlex.Size = UDim2.new(0, 0, 0, 1)
-                    cloneFlex.Position = UDim2.new(0, 0, 0, 0)
-                    cloneFlex.Parent = impactFrames
-                    task.delay(1.6, function()
-                        cloneFlex:Destroy()
-                    end)
-                end
-                task.wait(0.01)
-            end
-
-            Animator6D(throwAnimData, nil, false, Character)
-
-            if isLocal then
-                local cloneRB = UFW.RB:Clone()
-                if not cloneRB.PrimaryPart then
-                    cloneRB:GetPropertyChangedSignal("PrimaryPart"):Wait()
-                end
-                cloneRB:SetPrimaryPartCFrame(CFrame.new(1e6, 1e6, 1e6))
-                cloneRB.Parent = Thrown
-                cloneRB:ScaleTo(2)
-
-                local animController = cloneRB:WaitForChild("AnimationController")
-                local animTrack = animController:LoadAnimation(UFW.lastthing)
-                animTrack:Play()
-                animTrack.TimePosition = 1.4
-                Debris:AddItem(cloneRB, 3)
-
-                local invisiblePart = Instance.new("Part")
-                invisiblePart.Anchored = true
-                invisiblePart.Transparency = 1
-                invisiblePart.CanCollide = false
-                invisiblePart.CanQuery = false
-                invisiblePart.CanTouch = false
-                invisiblePart.CFrame = CFrame.new(40000, 40000, 40000)
-                invisiblePart.Parent = Thrown
-                Debris:AddItem(invisiblePart, 10)
-
-                task.spawn(function()
-                    StreamPillarTextures(invisiblePart)
-                end)
-            end
+            task.spawn(function()
+                StreamPillarTextures(invisiblePart)
+            end)
 
             local camRig = UFW.CamRigWithLetterBox:Clone()
             camRig.RootPart.CFrame = camRig.RootPart.CFrame * CFrame.new(0, 0, 1e6)
@@ -1670,17 +1692,26 @@ local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
             local camAnim = camRig.AnimationController.Animator:LoadAnimation(UFW.Camera)
             camAnim:Play()
 
-            if isLocal then
-                local completedConn
-                completedConn = getgenv().Animation.Completed:Connect(function(finishedCharacter)
-                    -- Completed fires for every character's animation; only OUR throw counts here
-                    -- (an older module passes no character, so nil is still accepted)
-                    if finishedCharacter ~= nil and finishedCharacter ~= Character then
-                        return
-                    end
-                    completedConn:Disconnect()
-                    camAnim:Stop()
-                    Workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+            local completedSource = throwAnimation or getgenv().Animation
+            completedSource.Completed:Connect(function()
+                camAnim:Stop()
+                Workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+            end)
+
+            local impactFrames = UFW.ImpactFrames:Clone()
+            impactFrames.Parent = REAL_LOCAL_PLAYER.PlayerGui
+            for _, frame in pairs(impactFrames:GetChildren()) do
+                frame.Size = UDim2.new(0, 0, 0, 1)
+                frame.ImageTransparency = 0
+            end
+
+            for _, flexwork in pairs(UFW.Flexworks:GetChildren()) do
+                local cloneFlex = flexwork:Clone()
+                cloneFlex.Size = UDim2.new(0, 0, 0, 1)
+                cloneFlex.Position = UDim2.new(0, 0, 0, 0)
+                cloneFlex.Parent = impactFrames
+                task.delay(2, function()
+                    cloneFlex:Destroy()
                 end)
             end
 
@@ -1689,273 +1720,461 @@ local function BuildSpiritBombActor(ActorPlayer, Character, isLocal)
             end)
         end)
 
-        if isLocal then
-            FireReplicationEvent({
-                Intensity = 5,
-                Effect = "Camshake"
-            })
-        end
+        FireReplicationEvent({
+            Intensity = 5,
+            Effect = "Camshake"
+        })
     end
 
-    local TARGET_ANIMATION_ID = "rbxassetid://11365563255"
-    local TARGET_ANIMATION_NUMBER = "11365563255"
-    local connections = {}
+    -- Participant version: everything that is a WORLD effect on their character (throw animation,
+    -- jump trails/burst, launch animation, orb drop + explosion, spatial sound) plays here, on the same
+    -- timeline as mine. Everything that is MY screen (camera rig, viewport flash, impact frames,
+    -- flashes, bloom, shake) and everything that moves/anchors a character is skipped.
+    local function PlayParticipantSequence()
+        local char = Character
+        PlaySequenceSound()
 
-    if isLocal then
-        table.insert(connections, Humanoid.AnimationPlayed:Connect(function(animationTrack)
-            if animationTrack.Animation.AnimationId == TARGET_ANIMATION_ID then
-                PlaySpiritBombSequence()
-            end
-        end))
-        return connections
-    end
-
-    local Animator = Humanoid:FindFirstChildOfClass("Animator")
-    local handledTracks = setmetatable({}, { __mode = "k" })
-
-    local function ScanTrack(animationTrack)
-        if handledTracks[animationTrack] then
-            return
-        end
-        local animation = animationTrack.Animation
-        if not animation or not string.find(animation.AnimationId, TARGET_ANIMATION_NUMBER, 1, true) then
-            return
-        end
-        handledTracks[animationTrack] = true
-        animationTrack.Stopped:Once(function()
-            handledTracks[animationTrack] = nil
+        task.spawn(function()
+            task.wait(3.1)
+            task.spawn(PlaySpiritBombOrb)
         end)
+
+        task.spawn(function()
+            local ok, err = pcall(PlayThrowAnim)
+            if not ok then
+                warn("[SpiritBomb] participant throw animation:", err)
+            end
+        end)
+
+        task.spawn(function()
+            task.wait(1.4) -- 1.2s viewport flash + 0.2s: the moment my own launch happens
+            if not (char and char.Parent) then return end
+            local root = char:FindFirstChild("HumanoidRootPart")
+            if not root then return end
+            local startY = root.Position.Y
+
+            task.spawn(PlayJumpMeshTrails, char)
+            task.spawn(PlayJumpBurstAndHighlight, char)
+            task.spawn(function()
+                local ok, err = pcall(PlayPostLaunchAnim, char, false)
+                if not ok then
+                    warn("[SpiritBomb] participant launch animation:", err)
+                end
+            end)
+
+            -- stop the animations once they reach the top (their own client does the launch)
+            local started = os.clock()
+            local conn
+            conn = RunService.Heartbeat:Connect(function()
+                local r = char:FindFirstChild("HumanoidRootPart")
+                if not r or r.Position.Y - startY >= 120 or os.clock() - started >= 1.5 then
+                    conn:Disconnect()
+                    pcall(Animator6DStop, char)
+                end
+            end)
+        end)
+    end
+
+    local function PlaySpiritBombSequence()
+        if ACTOR_IS_LOCAL then
+            PlayLocalSequence()
+        else
+            PlayParticipantSequence()
+        end
+    end
+
+    -- ---------------------------------------------------------------- detection
+    local TARGET_ANIMATION_ID = "11365563255"
+
+    local function TriggerSequence(track)
+        -- one handling per track (cleared when it stops, so a reused track works next time)
+        if handledTracks[track] then return end
+        handledTracks[track] = true
+        track.Stopped:Once(function()
+            handledTracks[track] = nil
+        end)
+
+        -- 2 second flag: no matter how many tracks / detection paths fire, one sequence runs
+        if GetSequenceFlag() then return end
+        SetSequenceFlag(true)
+        task.delay(SEQUENCE_FLAG_SECONDS, function()
+            SetSequenceFlag(false)
+        end)
+
         task.spawn(function()
             local ok, err = pcall(PlaySpiritBombSequence)
             if not ok then
-                warn("[SpiritBomb] remote sequence error:", err)
+                warn("[SpiritBomb] sequence error:", err)
+                if ACTOR_IS_LOCAL then
+                    ReleaseFromAir()
+                end
             end
         end)
     end
 
-    table.insert(connections, Animator.AnimationPlayed:Connect(ScanTrack))
-    table.insert(connections, RunService.Heartbeat:Connect(function()
-        for _, animationTrack in ipairs(Animator:GetPlayingAnimationTracks()) do
-            ScanTrack(animationTrack)
+    local function ScanTracks(tracks)
+        for _, track in ipairs(tracks) do
+            local animation = track.Animation
+            if animation and string.find(animation.AnimationId, TARGET_ANIMATION_ID, 1, true) then
+                TriggerSequence(track)
+            end
         end
-    end))
-    return connections
-end
-
--- Who gets the effect: once the event is triggered, anyone who chats
--- EVENT_QUALIFY_PHRASE within EVENT_QUALIFY_SECONDS becomes an extra player.
-local EVENT_QUALIFY_PHRASE = "GX-LIMITLESS!"
-local EVENT_QUALIFY_SECONDS = 20
-local EVENT_HOST_USERID = 8029999470
-local EVENT_START_PHRASE = "Okay, Beginning now."
-
-local TextChatService = game:GetService("TextChatService")
-
-local ActorConnections = {}
-local ActorTokens = {}
-local RemoteParticipants = {}
-local eventParticipantsStarted = false
-
-local function DestroyActorInstance(player)
-    local actorConnections = ActorConnections[player]
-    if not actorConnections then
-        return
     end
-    ActorConnections[player] = nil
-    for _, connection in ipairs(actorConnections) do
-        pcall(function()
-            connection:Disconnect()
+
+    -- the same two detection paths 23 uses; these two names are read by destroyActorInstance
+    TriggerConn = RunService.Heartbeat:Connect(function()
+        ScanTracks(Animator:GetPlayingAnimationTracks())
+    end)
+    if ACTOR_IS_LOCAL then
+        AnimPlayedConn = Humanoid.AnimationPlayed:Connect(function(track)
+            ScanTracks({ track })
+        end)
+    else
+        AnimPlayedConn = Animator.AnimationPlayed:Connect(function(track)
+            ScanTracks({ track })
         end)
     end
 end
 
-local function CreateRemoteActorInstance(player, character)
-    ActorTokens[player] = (ActorTokens[player] or 0) + 1
-    local token = ActorTokens[player]
-    DestroyActorInstance(player)
 
-    local humanoid = character:WaitForChild("Humanoid", 10)
-    local rootPart = character:WaitForChild("HumanoidRootPart", 10)
-    if not (humanoid and rootPart) then
-        return
-    end
-    local animator = humanoid:FindFirstChildOfClass("Animator") or humanoid:WaitForChild("Animator", 5)
-    if not animator then
-        return
-    end
-    if ActorTokens[player] ~= token or player.Character ~= character then
-        return
-    end
+-- ============================================================
+--  PARTICIPATION SYSTEM (ported 1:1 from 23)
+-- ============================================================
+local ActorInstances = {}
+local InstanceToken  = {}
 
-    local ok, result = pcall(BuildSpiritBombActor, player, character, false)
-    if not ok then
-        warn("[SpiritBomb] could not build actor for " .. player.Name .. ": " .. tostring(result))
-        return
-    end
-    ActorConnections[player] = result
+local function destroyActorInstance(plr)
+	local inst = ActorInstances[plr]
+	if not inst then return end
+	ActorInstances[plr] = nil
+	for _, name in ipairs({ "TriggerConn", "AnimPlayedConn" }) do
+		local conn = rawget(inst.env, name)
+		if conn then pcall(function() conn:Disconnect() end) end
+	end
 end
 
-local function RegisterParticipant(player)
-    if RemoteParticipants[player] then
-        return
-    end
-    RemoteParticipants[player] = player.CharacterAdded:Connect(function(character)
-        task.spawn(CreateRemoteActorInstance, player, character)
-    end)
-    if player.Character then
-        task.spawn(CreateRemoteActorInstance, player, player.Character)
-    end
+local function createActorInstance(plr, char, isLocal)
+	InstanceToken[plr] = (InstanceToken[plr] or 0) + 1
+	local token = InstanceToken[plr]
+	destroyActorInstance(plr)
+
+	local hum  = char:WaitForChild("Humanoid", 10)
+	local root = char:WaitForChild("HumanoidRootPart", 10)
+	local arm  = char:WaitForChild("Right Arm", 10)
+	if not (hum and root and arm) then return end
+	local animator = hum:FindFirstChildOfClass("Animator") or hum:WaitForChild("Animator", 5)
+	if not animator then
+		animator = Instance.new("Animator")
+		animator.Parent = hum
+	end
+	if InstanceToken[plr] ~= token or plr.Character ~= char then return end
+
+	local env = setmetatable({}, { __index = REAL_ENV })
+	env.ACTOR_IS_LOCAL    = isLocal
+	env.LocalPlayer       = plr
+	env.Character         = char
+	env.Humanoid          = hum
+	env.HumanoidRootPart  = root
+	env.Animator          = animator
+	env.RightArm          = arm
+
+	setfenv(BuildActorLibrary, env)
+	local ok, err = pcall(BuildActorLibrary)
+	if not ok then
+		warn("[Attacks] could not build the attack library for " .. plr.Name .. ": " .. tostring(err))
+		return
+	end
+	ActorInstances[plr] = { env = env, char = char }
 end
 
-Players.PlayerRemoving:Connect(function(player)
-    local connection = RemoteParticipants[player]
-    if connection then
-        connection:Disconnect()
-    end
-    RemoteParticipants[player] = nil
-    ActorTokens[player] = (ActorTokens[player] or 0) + 1
-    DestroyActorInstance(player)
+createActorInstance(REAL_LOCAL_PLAYER, InitialCharacter, true)
+REAL_LOCAL_PLAYER.CharacterAdded:Connect(function(char)
+	task.spawn(createActorInstance, REAL_LOCAL_PLAYER, char, true)
 end)
 
-local eventQualifyDeadline = 0
+-- Who gets the effect: anyone who chats EVENT_QUALIFY_PHRASE at ANY time
+-- (before or after this script loaded) becomes an extra player. This only
+-- enables the attack visuals for them - it does NOT start the event.
+-- The phrase is sent automatically as soon as the script runs.
+local EVENT_QUALIFY_PHRASE  = "GX-LIMITLESS!"
+local EVENT_QUALIFY_SECONDS = 20
 
-local function SendQualifyChat()
+local RemoteParticipants = {}
+
+local function registerParticipant(plr)
+	if RemoteParticipants[plr] then return end
+	RemoteParticipants[plr] = plr.CharacterAdded:Connect(function(char)
+		task.spawn(createActorInstance, plr, char, false)
+	end)
+	if plr.Character then
+		task.spawn(createActorInstance, plr, plr.Character, false)
+	end
+end
+
+Players.PlayerRemoving:Connect(function(plr)
+	local conn = RemoteParticipants[plr]
+	if conn then conn:Disconnect() end
+	RemoteParticipants[plr] = nil
+	InstanceToken[plr] = (InstanceToken[plr] or 0) + 1
+	destroyActorInstance(plr)
+end)
+
+local eventParticipantsStarted = false
+local EventQualify = { deadline = 0 }
+
+function EventQualify.SendChat()
     if _G.GXLimitlessSent then return end
     _G.GXLimitlessSent = true
-    pcall(function()
-        local textChat = game:GetService("TextChatService")
-        if textChat.ChatVersion == Enum.ChatVersion.TextChatService then
-            local channels = textChat:FindFirstChild("TextChannels")
-            local general = channels and channels:FindFirstChild("RBXGeneral")
-            if general then general:SendAsync(EVENT_QUALIFY_PHRASE) end
-        else
-            local chatEvents = game:GetService("ReplicatedStorage"):FindFirstChild("DefaultChatSystemChatEvents")
-            local say = chatEvents and chatEvents:FindFirstChild("SayMessageRequest")
-            if say then say:FireServer(EVENT_QUALIFY_PHRASE, "All") end
-        end
-    end)
-end
-
-local function StartEventParticipants()
-    if eventParticipantsStarted then
-        return
-    end
-    eventParticipantsStarted = true
-    eventQualifyDeadline = os.clock() + EVENT_QUALIFY_SECONDS
-    -- everyone running this chats the phrase the moment the event is triggered
-    SendQualifyChat()
-end
-
-local function CheckQualifyMessage(userId, message)
-    if not eventParticipantsStarted or os.clock() > eventQualifyDeadline then
-        return
-    end
-    if userId == LocalPlayer.UserId then
-        return
-    end
-    if message:match("^%s*(.-)%s*$"):lower() ~= EVENT_QUALIFY_PHRASE:lower() then
-        return
-    end
-    local player = Players:GetPlayerByUserId(userId)
-    if player then
-        RegisterParticipant(player)
-    end
-end
-
-local function CheckEventStartMessage(userId, message)
-    if userId ~= EVENT_HOST_USERID then
-        return
-    end
-    if message:match("^%s*(.-)%s*$") == EVENT_START_PHRASE then
-        StartEventParticipants()
-    end
-end
-
-if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
-    TextChatService.MessageReceived:Connect(function(textChatMessage)
-        if textChatMessage.TextSource then
-            local userId = textChatMessage.TextSource.UserId
-            CheckEventStartMessage(userId, textChatMessage.Text)
-            CheckQualifyMessage(userId, textChatMessage.Text)
-        end
-    end)
-else
-    local function HookChatter(player)
-        player.Chatted:Connect(function(message)
-            CheckEventStartMessage(player.UserId, message)
-            CheckQualifyMessage(player.UserId, message)
+    task.spawn(function()
+        pcall(function()
+            local textChat = game:GetService("TextChatService")
+            if textChat.ChatVersion == Enum.ChatVersion.TextChatService then
+                local channels = textChat:WaitForChild("TextChannels", 10)
+                local general = channels and channels:WaitForChild("RBXGeneral", 10)
+                if general then general:SendAsync(EVENT_QUALIFY_PHRASE) end
+            else
+                local chatEvents = game:GetService("ReplicatedStorage"):WaitForChild("DefaultChatSystemChatEvents", 10)
+                local say = chatEvents and chatEvents:WaitForChild("SayMessageRequest", 10)
+                if say then say:FireServer(EVENT_QUALIFY_PHRASE, "All") end
+            end
         end)
-    end
-    for _, player in ipairs(Players:GetPlayers()) do
-        HookChatter(player)
-    end
-    Players.PlayerAdded:Connect(HookChatter)
+    end)
+end
+
+-- kept so existing callers (flight lock / _G.EventAttackParticipants.Start)
+-- still work; qualification no longer depends on the event having started
+local function EventParticipants_Start()
+	eventParticipantsStarted = true
+end
+
+function EventQualify.Check(userId, message)
+	if userId == REAL_LOCAL_PLAYER.UserId then return end
+	if message:match("^%s*(.-)%s*$"):lower() ~= EVENT_QUALIFY_PHRASE:lower() then return end
+	local plr = Players:GetPlayerByUserId(userId)
+	if plr then registerParticipant(plr) end
+end
+
+do
+	local textChat = game:GetService("TextChatService")
+	if textChat.ChatVersion == Enum.ChatVersion.TextChatService then
+		textChat.MessageReceived:Connect(function(msg)
+			if msg.TextSource then
+				EventQualify.Check(msg.TextSource.UserId, msg.Text)
+			end
+		end)
+	else
+		local function hookQualify(p)
+			p.Chatted:Connect(function(msg)
+				EventQualify.Check(p.UserId, msg)
+			end)
+		end
+		for _, p in ipairs(Players:GetPlayers()) do
+			hookQualify(p)
+		end
+		Players.PlayerAdded:Connect(hookQualify)
+	end
+end
+
+-- Best-effort scan of the chat that is already on screen, so people who said
+-- the phrase BEFORE this script loaded still get picked up. It reads the chat
+-- window UI (new chat: CoreGui.ExperienceChat, legacy chat: PlayerGui.Chat;
+-- it detects which one is active via TextChatService.ChatVersion and scans both),
+-- finds messages that are exactly the phrase, and matches the sender by the
+-- username / display name shown next to the message.
+function EventQualify.ScanHistory()
+	local found = {}
+	local phraseLower = EVENT_QUALIFY_PHRASE:lower()
+
+	local function clean(t)
+		t = tostring(t or ""):gsub("<[^>]->", "")
+		return (t:match("^%s*(.-)%s*$"))
+	end
+
+	local function isText(o)
+		return o:IsA("TextLabel") or o:IsA("TextButton")
+	end
+
+	local function playerFromText(t)
+		local c = clean(t):lower()
+		c = c:gsub("^%[", ""):gsub("%]?%s*:?%s*$", "")
+		if c == "" then return nil end
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= REAL_LOCAL_PLAYER and (p.Name:lower() == c or p.DisplayName:lower() == c) then
+				return p
+			end
+		end
+		return nil
+	end
+
+	local function scanRoot(root)
+		for _, d in ipairs(root:GetDescendants()) do
+			if isText(d) then
+				local low = clean(d.Text):lower()
+				local s1, e1 = low:find(phraseLower, 1, true)
+				if s1 then
+					local rem = (low:sub(1, s1 - 1) .. low:sub(e1 + 1)):match("^%s*(.-)%s*$")
+					local plr
+					if rem ~= "" then
+						-- "Name: GX-LIMITLESS!" in a single label
+						plr = playerFromText(rem)
+					else
+						-- body is only the phrase; look for the name label in the same message
+						local node = d.Parent
+						for _ = 1, 3 do
+							if not node or node == root then break end
+							local texts = {}
+							for _, sib in ipairs(node:GetDescendants()) do
+								if isText(sib) and sib ~= d then texts[#texts + 1] = sib end
+							end
+							-- too many labels = we climbed into the whole chat log, stop
+							if #texts > 6 then break end
+							for _, sib in ipairs(texts) do
+								plr = playerFromText(sib.Text)
+								if plr then break end
+							end
+							if plr then break end
+							node = node.Parent
+						end
+					end
+					if plr then found[plr] = true end
+				end
+			end
+		end
+	end
+
+	local function pass()
+		local roots = {}
+		local isNewChat = false
+		pcall(function()
+			isNewChat = game:GetService("TextChatService").ChatVersion == Enum.ChatVersion.TextChatService
+		end)
+
+		local function getNewChatRoot(wait)
+			local ok, root = pcall(function()
+				local cg = game:GetService("CoreGui")
+				return cg:FindFirstChild("ExperienceChat") or (wait and cg:WaitForChild("ExperienceChat", 5)) or nil
+			end)
+			return ok and root or nil
+		end
+
+		local function getOldChatRoot(wait)
+			local ok, root = pcall(function()
+				local pg = REAL_LOCAL_PLAYER:FindFirstChild("PlayerGui") or (wait and REAL_LOCAL_PLAYER:WaitForChild("PlayerGui", 5)) or nil
+				if not pg then return nil end
+				return pg:FindFirstChild("Chat") or (wait and pg:WaitForChild("Chat", 5)) or nil
+			end)
+			return ok and root or nil
+		end
+
+		-- wait only for the chat type that is actually active, but still
+		-- scan the other one if it happens to exist
+		local newRoot = getNewChatRoot(isNewChat)
+		local oldRoot = getOldChatRoot(not isNewChat)
+		if newRoot then roots[#roots + 1] = newRoot end
+		if oldRoot then roots[#roots + 1] = oldRoot end
+
+		for _, r in ipairs(roots) do
+			local ok, err = pcall(scanRoot, r)
+			if not ok then warn("[Qualify] chat scan error:", err) end
+		end
+		for plr in pairs(found) do
+			pcall(registerParticipant, plr)
+		end
+	end
+
+	task.spawn(function()
+		pass()
+		task.wait(3) -- chat UI can still be filling in right after join
+		pass()
+	end)
 end
 
 -- Second qualify method: anyone who plays this animation is auto-added
 local EVENT_QUALIFY_ANIM_ID = "77366695973257"
 
 do
-    local hooked = setmetatable({}, { __mode = "k" })
-    local seen = setmetatable({}, { __mode = "k" })
+	local hooked = setmetatable({}, { __mode = "k" })
 
-    local function qualifies(track)
-        local a = track and track.Animation
-        return a ~= nil and a.AnimationId:find(EVENT_QUALIFY_ANIM_ID, 1, true) ~= nil
-    end
+	local function qualifies(track)
+		local a = track and track.Animation
+		return a ~= nil and a.AnimationId:find(EVENT_QUALIFY_ANIM_ID, 1, true) ~= nil
+	end
 
-    local function check(player, track)
-        if seen[track] or not qualifies(track) then return end
-        seen[track] = true
-        track.Stopped:Once(function() seen[track] = nil end)
-        RegisterParticipant(player)
-    end
+	local onTrigger
+	local seen = setmetatable({}, { __mode = "k" })
+	local function check(plr, track)
+		if seen[track] or not qualifies(track) then return end
+		seen[track] = true
+		track.Stopped:Once(function() seen[track] = nil end)
+		onTrigger(plr)
+	end
 
-    local function hookAnimator(player, animator)
-        if hooked[animator] then return end
-        hooked[animator] = true
-        animator.AnimationPlayed:Connect(function(track)
-            check(player, track)
-        end)
-        for _, t in ipairs(animator:GetPlayingAnimationTracks()) do
-            check(player, t)
-        end
-    end
+	-- NOTE: no sound here on purpose - 23 already plays it for this animation
+	function onTrigger(plr)
+		registerParticipant(plr)
+	end
 
-    local function hookChar(player, char)
-        for _, d in ipairs(char:GetDescendants()) do
-            if d:IsA("Animator") then hookAnimator(player, d) end
-        end
-        char.DescendantAdded:Connect(function(d)
-            if d:IsA("Animator") then hookAnimator(player, d) end
-        end)
-    end
+	local function hookAnimator(plr, animator)
+		if hooked[animator] then return end
+		hooked[animator] = true
+		animator.AnimationPlayed:Connect(function(track)
+			check(plr, track)
+		end)
+		for _, t in ipairs(animator:GetPlayingAnimationTracks()) do
+			check(plr, t)
+		end
+	end
 
-    local function hookPlayer(player)
-        if player == LocalPlayer then return end
-        if player.Character then hookChar(player, player.Character) end
-        player.CharacterAdded:Connect(function(c) hookChar(player, c) end)
-    end
+	local function hookChar(plr, char)
+		for _, d in ipairs(char:GetDescendants()) do
+			if d:IsA("Animator") then hookAnimator(plr, d) end
+		end
+		char.DescendantAdded:Connect(function(d)
+			if d:IsA("Animator") then hookAnimator(plr, d) end
+		end)
+	end
 
-    for _, p in ipairs(Players:GetPlayers()) do hookPlayer(p) end
-    Players.PlayerAdded:Connect(hookPlayer)
+	local function hookPlayer(plr)
+		if plr == REAL_LOCAL_PLAYER then return end
+		if plr.Character then hookChar(plr, plr.Character) end
+		plr.CharacterAdded:Connect(function(c) hookChar(plr, c) end)
+	end
 
-    -- polling fallback in case AnimationPlayed doesn't fire for replicated tracks
-    task.spawn(function()
-        while true do
-            task.wait(0.5)
-            for _, player in ipairs(Players:GetPlayers()) do
-                if player ~= LocalPlayer and player.Character then
-                    local animator = player.Character:FindFirstChildWhichIsA("Animator", true)
-                    if animator then
-                        for _, t in ipairs(animator:GetPlayingAnimationTracks()) do
-                            check(player, t)
-                        end
-                    end
-                end
-            end
-        end
-    end)
+	for _, p in ipairs(Players:GetPlayers()) do hookPlayer(p) end
+	Players.PlayerAdded:Connect(hookPlayer)
+
+	-- polling fallback in case AnimationPlayed doesn't fire for replicated tracks
+	task.spawn(function()
+		while true do
+			task.wait(0.5)
+			for _, plr in ipairs(Players:GetPlayers()) do
+				if plr ~= REAL_LOCAL_PLAYER and plr.Character then
+					local animator = plr.Character:FindFirstChildWhichIsA("Animator", true)
+					if animator then
+						for _, t in ipairs(animator:GetPlayingAnimationTracks()) do
+							check(plr, t)
+						end
+					end
+				end
+			end
+		end
+	end)
 end
 
-BuildSpiritBombActor(LocalPlayer, Character, true)
+EventQualify.ScanHistory()
+
+-- say the phrase right away (listeners above are already hooked, so we
+-- also catch anyone who answers back)
+EventQualify.SendChat()
+
+local SpiritBombParticipants = {
+	Start = function() EventParticipants_Start() end,
+	List = function()
+		local names = {}
+		for plr in pairs(RemoteParticipants) do names[#names + 1] = plr.Name end
+		return names
+	end,
+}
+_G.SpiritBombParticipants = SpiritBombParticipants
+-- don't overwrite 23's table if it is running at the same time
+_G.EventAttackParticipants = _G.EventAttackParticipants or SpiritBombParticipants
