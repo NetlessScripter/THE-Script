@@ -1502,6 +1502,7 @@ local function BuildActorLibrary()
         Animator6DStop(charClone)
         task.spawn(PlayPostLaunchAnim, Character, true)
 
+        local launchStartY = HumanoidRootPart.Position.Y
         local goalCFrame = HumanoidRootPart.CFrame + Vector3.new(0, 126, 0)
         local tween = TweenService:Create(
             HumanoidRootPart,
@@ -1528,7 +1529,7 @@ local function BuildActorLibrary()
 
         local reachedHeight = false
         local function checkHeight()
-            if HumanoidRootPart.Position.Y >= 125 and not reachedHeight then
+            if HumanoidRootPart.Position.Y >= launchStartY + 125 and not reachedHeight then
                 reachedHeight = true
                 HumanoidRootPart.Anchored = true
                 return true
