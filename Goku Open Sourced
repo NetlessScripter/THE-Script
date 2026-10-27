@@ -230,6 +230,137 @@ local hotbar         = localPlayer.PlayerGui:WaitForChild("Hotbar"):WaitForChild
 local marketShirtId  = 102058923729170
 local marketPantsId  = 18456843948
 
+-- Clothing combos (DLC tab > Clothing). Each outfit is a shirt + pants asset id;
+-- a combo is any outfit's shirt paired with any outfit's pants. The saved combo
+-- is stored by outfit name in SaveFile and applied the next time the script runs.
+local ClothingSystem = {
+    SaveFile     = "GokuClothingCombo.json",
+    PreviewModel = nil, -- the viewport copy of the character, set by the panel while its Clothing window is open
+    Outfits = {
+        { name = "Goku",       shirt = 102058923729170, pants = 18456843948 }, -- the default clothing (same as marketShirtId / marketPantsId)
+        { name = "Vegeta",     shirt = 12856134008,    pants = 12984016931 },
+        { name = "Trunks",     shirt = 74227521106166, pants = 89122850846001 },
+        { name = "Gohan",      shirt = 16529330892,    pants = 88568383176752 },
+        { name = "Android 17", shirt = 13723297799,    pants = 123936619503188 },
+        { name = "Jiren",      shirt = 13671331438,    pants = 14462260888 },
+        { name = "Hit",        shirt = 93036192743554, pants = 75261138126776 },
+    },
+}
+
+do
+    local HttpService   = game:GetService("HttpService")
+    local templateCache = {}
+    local equipToken    = { Shirt = 0, Pants = 0 }
+
+    function ClothingSystem.FindOutfitIndex(outfitName)
+        for outfitIndex, outfit in ipairs(ClothingSystem.Outfits) do
+            if outfit.name == outfitName then
+                return outfitIndex
+            end
+        end
+        return nil
+    end
+
+    -- Returns the saved shirt outfit index and pants outfit index, or nil when
+    -- nothing valid is saved.
+    function ClothingSystem.ReadSaved()
+        if not isfile(ClothingSystem.SaveFile) then return nil end
+
+        local readOk, decoded = pcall(function()
+            return HttpService:JSONDecode(readfile(ClothingSystem.SaveFile))
+        end)
+        if not readOk or type(decoded) ~= "table" then return nil end
+
+        local shirtIndex = ClothingSystem.FindOutfitIndex(decoded.shirt)
+        local pantsIndex = ClothingSystem.FindOutfitIndex(decoded.pants)
+        if shirtIndex and pantsIndex then
+            return shirtIndex, pantsIndex
+        end
+        return nil
+    end
+
+    -- Writes the combo (by outfit name). Returns true when the file was written.
+    function ClothingSystem.WriteSaved(shirtIndex, pantsIndex)
+        local writeOk, writeError = pcall(function()
+            writefile(ClothingSystem.SaveFile, HttpService:JSONEncode({
+                shirt = ClothingSystem.Outfits[shirtIndex].name,
+                pants = ClothingSystem.Outfits[pantsIndex].name,
+            }))
+        end)
+        if not writeOk then
+            warn("[Clothing] Couldn't save the combo: " .. tostring(writeError))
+        end
+        return writeOk
+    end
+
+    -- Same lookup the startup clothing uses: the asset id of a Shirt / Pants item
+    -- is turned into the texture it points at (cached, so picking it again is instant).
+    local function ResolveTemplate(assetId, className)
+        local cacheKey = className .. assetId
+        if templateCache[cacheKey] then
+            return templateCache[cacheKey]
+        end
+
+        local lookupOk, objects = pcall(game.GetObjects, game, "rbxassetid://" .. assetId)
+        if lookupOk and objects then
+            for _, obj in ipairs(objects) do
+                local clothing = obj:IsA(className) and obj or obj:FindFirstChildWhichIsA(className)
+                if clothing then
+                    local template = (className == "Shirt") and clothing.ShirtTemplate or clothing.PantsTemplate
+                    if template ~= "" then
+                        templateCache[cacheKey] = template
+                        return template
+                    end
+                end
+            end
+        end
+
+        -- Lookup failed: use the id directly (not cached, so it retries next time).
+        warn("[Clothing] Couldn't look up " .. className .. " " .. tostring(assetId) .. ", using the id directly")
+        return "rbxassetid://" .. assetId
+    end
+
+    local function SetClothing(model, className, template)
+        if not model or not model.Parent then return end
+
+        local item = model:FindFirstChildOfClass(className)
+        if not item then
+            item = Instance.new(className)
+            item.Parent = model
+        end
+        if className == "Shirt" then
+            item.ShirtTemplate = template
+        else
+            item.PantsTemplate = template
+        end
+    end
+
+    -- Puts one shirt / pants on the real character and on the viewport copy (when
+    -- the Clothing window is open). The lookup yields, so it runs in its own thread;
+    -- a newer pick of the same kind cancels an older one that is still looking up.
+    function ClothingSystem.Equip(className, assetId)
+        equipToken[className] = equipToken[className] + 1
+        local myToken = equipToken[className]
+
+        task.spawn(function()
+            local template = ResolveTemplate(assetId, className)
+            if equipToken[className] ~= myToken then return end
+
+            SetClothing(localPlayer.Character or character, className, template)
+            SetClothing(ClothingSystem.PreviewModel, className, template)
+        end)
+    end
+
+    -- Wears the saved combo, if there is one (called after the default clothing at startup).
+    function ClothingSystem.ApplySaved()
+        local shirtIndex, pantsIndex = ClothingSystem.ReadSaved()
+        if not shirtIndex then return end
+
+        ClothingSystem.Equip("Shirt", ClothingSystem.Outfits[shirtIndex].shirt)
+        ClothingSystem.Equip("Pants", ClothingSystem.Outfits[pantsIndex].pants)
+    end
+end
+
 local function PlayAnimation(id, startPos, stopDelay, speed)
     local anim = Instance.new("Animation")
     anim.AnimationId = "rbxassetid://" .. id
@@ -1256,6 +1387,9 @@ task.spawn(function()
     local CloseAllDropdowns
     local RefreshSettingValues
     local StartDbPackInstall
+    local clothingWindowOpen = false
+    local ToggleClothingWindow
+    local HideClothingWindow
 
     -- DB Music Pack (DLC) install state, read from the JSON record and compared
     -- against the script's pack list every time the panel loads and after every
@@ -1461,6 +1595,17 @@ task.spawn(function()
             end,
             onActivated = function()
                 TriggerMultiplayer()
+            end,
+        },
+        {
+            -- Opens the Clothing window (spinnable preview, shirt / pants pickers, Save).
+            labelText = "Clothing",
+            tab = "DLC",
+            getValueText = function()
+                return clothingWindowOpen and "Close" or "Select"
+            end,
+            onActivated = function()
+                ToggleClothingWindow()
             end,
         },
     }
@@ -2140,6 +2285,426 @@ task.spawn(function()
     end
     -- =========================================================================
 
+    -- ===== Clothing window ====================================================
+    -- Opened by the "Clothing" row in the DLC tab. Left: a viewport with a copy of
+    -- the player - drag it sideways to spin it a full 360 (sideways only, dragging
+    -- up / down does nothing). Right: Shirt and Pants pickers (both list the outfits,
+    -- Goku first, so any shirt can be paired with any pants), then Save and Close.
+    -- A pick is worn straight away. Save writes the combo to ClothingSystem.SaveFile
+    -- so it loads on the next run. This has nothing to do with the participation system.
+    do
+        local clothingOutfits     = ClothingSystem.Outfits
+        local clothingOutfitNames = {}
+        for outfitIndex, outfit in ipairs(clothingOutfits) do
+            clothingOutfitNames[outfitIndex] = outfit.name
+        end
+
+        -- Fixed viewport camera: in front of the character, aimed at its middle.
+        local clothingCameraPosition = Vector3.new(0, 0.5, -9.5)
+        local clothingCameraTarget   = Vector3.new(0, -0.4, 0)
+        local clothingCameraFov      = 40
+        local clothingSpinPerPixel   = 0.025 -- radians per pixel dragged sideways (about 250 px = one full turn)
+
+        -- The pickers start on the saved combo, or Goku / Goku.
+        local clothingShirtIndex, clothingPantsIndex = ClothingSystem.ReadSaved()
+        if not clothingShirtIndex then
+            clothingShirtIndex, clothingPantsIndex = 1, 1
+        end
+
+        local clothingWindow = Instance.new("Frame")
+        clothingWindow.Name = "ClothingWindow"
+        clothingWindow.BackgroundTransparency = 1
+        clothingWindow.BorderSizePixel = 0
+        clothingWindow.ZIndex = 2147483647
+        clothingWindow.AnchorPoint = Vector2.new(0.5, 0.5)
+        clothingWindow.Size = UDim2.new(0.38, 0, panelHeightScale, 0)
+        clothingWindow.Position = UDim2.new(0.27, 0, 0.5, 0)
+        clothingWindow.Visible = false
+        clothingWindow.Parent = overlayGui
+
+        local clothingWindowLayout = Instance.new("UIListLayout")
+        clothingWindowLayout.Padding = UDim.new(panelPaddingScale, 0)
+        clothingWindowLayout.SortOrder = Enum.SortOrder.LayoutOrder
+        clothingWindowLayout.Parent = clothingWindow
+
+        local clothingHeader = Instance.new("TextLabel")
+        clothingHeader.Name = "Header"
+        clothingHeader.LayoutOrder = 0
+        clothingHeader.BackgroundColor3 = headerColor
+        clothingHeader.BorderSizePixel = 0
+        clothingHeader.Size = UDim2.new(1, 0, panelRowScale, 0)
+        clothingHeader.FontFace = settingsFont
+        clothingHeader.Text = "Clothing"
+        clothingHeader.TextColor3 = normalTextColor
+        clothingHeader.TextStrokeColor3 = Color3.new(0, 0, 0)
+        clothingHeader.TextStrokeTransparency = 0
+        clothingHeader.TextScaled = true
+        clothingHeader.Parent = clothingWindow
+
+        local clothingHeaderStroke = Instance.new("UIStroke")
+        clothingHeaderStroke.Color = headerStrokeColor
+        clothingHeaderStroke.Thickness = 2
+        clothingHeaderStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        clothingHeaderStroke.Parent = clothingHeader
+
+        local clothingHeaderPadding = Instance.new("UIPadding")
+        clothingHeaderPadding.PaddingTop = UDim.new(0.2, 0)
+        clothingHeaderPadding.PaddingBottom = UDim.new(0.2, 0)
+        clothingHeaderPadding.Parent = clothingHeader
+
+        local clothingHeaderTextConstraint = Instance.new("UITextSizeConstraint")
+        clothingHeaderTextConstraint.MaxTextSize = 26
+        clothingHeaderTextConstraint.Parent = clothingHeader
+
+        -- Everything under the header (1 - header row - padding = 0.85 of the window).
+        local clothingBody = Instance.new("Frame")
+        clothingBody.Name = "Body"
+        clothingBody.LayoutOrder = 1
+        clothingBody.BackgroundTransparency = 1
+        clothingBody.BorderSizePixel = 0
+        clothingBody.Size = UDim2.new(1, 0, 0.85, 0)
+        clothingBody.Parent = clothingWindow
+
+        -- ----- Viewport (left) -------------------------------------------------
+        local clothingViewport = Instance.new("ViewportFrame")
+        clothingViewport.Name = "ClothingViewport"
+        clothingViewport.BackgroundColor3 = valueBoxColor
+        clothingViewport.BorderSizePixel = 0
+        clothingViewport.Active = true
+        clothingViewport.Position = UDim2.new(0, 0, 0, 0)
+        clothingViewport.Size = UDim2.new(0.52, 0, 1, 0)
+        clothingViewport.Ambient = Color3.fromRGB(190, 190, 190)
+        clothingViewport.LightColor = Color3.fromRGB(255, 255, 255)
+        clothingViewport.LightDirection = Vector3.new(-0.3, -0.5, 1)
+        clothingViewport.Parent = clothingBody
+
+        local clothingViewportStroke = Instance.new("UIStroke")
+        clothingViewportStroke.Color = rowStrokeColor
+        clothingViewportStroke.Thickness = 1
+        clothingViewportStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        clothingViewportStroke.Parent = clothingViewport
+
+        local clothingCamera = Instance.new("Camera")
+        clothingCamera.FieldOfView = clothingCameraFov
+        clothingCamera.CFrame = CFrame.lookAt(clothingCameraPosition, clothingCameraTarget)
+        clothingCamera.Parent = clothingViewport
+        clothingViewport.CurrentCamera = clothingCamera
+
+        local clothingHintLabel = Instance.new("TextLabel")
+        clothingHintLabel.Name = "SpinHint"
+        clothingHintLabel.BackgroundTransparency = 1
+        clothingHintLabel.AnchorPoint = Vector2.new(0.5, 1)
+        clothingHintLabel.Position = UDim2.new(0.5, 0, 0.98, 0)
+        clothingHintLabel.Size = UDim2.new(0.9, 0, 0.09, 0)
+        clothingHintLabel.FontFace = settingsFont
+        clothingHintLabel.Text = "Drag to spin"
+        clothingHintLabel.TextColor3 = normalTextColor
+        clothingHintLabel.TextTransparency = 0.3
+        clothingHintLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+        clothingHintLabel.TextStrokeTransparency = 0.4
+        clothingHintLabel.TextScaled = true
+        clothingHintLabel.Parent = clothingViewport
+
+        local clothingHintTextConstraint = Instance.new("UITextSizeConstraint")
+        clothingHintTextConstraint.MaxTextSize = 16
+        clothingHintTextConstraint.Parent = clothingHintLabel
+
+        -- The viewport shows a copy of the real character, rebuilt every time the
+        -- window opens. Scripts, sounds and effects are stripped from the copy and its
+        -- parts are anchored; it sits at the origin facing the camera.
+        local clothingPreviewModel
+        local clothingYaw = 0
+
+        local function DestroyClothingPreview()
+            if clothingPreviewModel then
+                clothingPreviewModel:Destroy()
+                clothingPreviewModel = nil
+            end
+            ClothingSystem.PreviewModel = nil
+        end
+
+        local function SetClothingYaw(newYaw)
+            clothingYaw = newYaw % (math.pi * 2)
+            if clothingPreviewModel then
+                clothingPreviewModel:PivotTo(CFrame.Angles(0, clothingYaw, 0))
+            end
+        end
+
+        local function BuildClothingPreview()
+            DestroyClothingPreview()
+            clothingYaw = 0
+
+            local sourceCharacter = localPlayer.Character or character
+            if not sourceCharacter then return end
+
+            local wasArchivable = sourceCharacter.Archivable
+            sourceCharacter.Archivable = true
+            local cloneOk, previewClone = pcall(function()
+                return sourceCharacter:Clone()
+            end)
+            sourceCharacter.Archivable = wasArchivable
+            if not cloneOk or not previewClone then
+                warn("[Clothing] Couldn't copy the character for the preview")
+                return
+            end
+
+            for _, descendant in ipairs(previewClone:GetDescendants()) do
+                if descendant:IsA("LuaSourceContainer") or descendant:IsA("Sound")
+                    or descendant:IsA("ParticleEmitter") or descendant:IsA("Trail")
+                    or descendant:IsA("Beam") or descendant:IsA("Light")
+                    or descendant:IsA("Highlight") or descendant:IsA("BillboardGui")
+                    or descendant:IsA("ForceField") or descendant:IsA("Fire")
+                    or descendant:IsA("Smoke") or descendant:IsA("Sparkles") then
+                    descendant:Destroy()
+                elseif descendant:IsA("BasePart") then
+                    descendant.Anchored = true
+                end
+            end
+
+            local previewHumanoid = previewClone:FindFirstChildOfClass("Humanoid")
+            if previewHumanoid then
+                previewHumanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+                previewHumanoid.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+            end
+
+            previewClone:PivotTo(CFrame.new(0, 0, 0))
+            previewClone.Parent = clothingViewport
+            clothingPreviewModel = previewClone
+            ClothingSystem.PreviewModel = previewClone
+        end
+
+        -- Sideways drag spins the copy. Only the X movement is read, so dragging up
+        -- or down never tilts or moves it. Same input pattern as the sliders.
+        clothingViewport.InputBegan:Connect(function(input)
+            local isMouseClick = input.UserInputType == Enum.UserInputType.MouseButton1
+            if not isMouseClick and input.UserInputType ~= Enum.UserInputType.Touch then
+                return
+            end
+
+            CloseAllDropdowns()
+
+            local startPointerX = input.Position.X
+            local startYaw = clothingYaw
+
+            local movedConnection
+            local releasedConnection
+            movedConnection = userInputService.InputChanged:Connect(function(movedInput)
+                if movedInput.UserInputType == Enum.UserInputType.MouseMovement or movedInput == input then
+                    SetClothingYaw(startYaw + (movedInput.Position.X - startPointerX) * clothingSpinPerPixel)
+                end
+            end)
+            releasedConnection = userInputService.InputEnded:Connect(function(endedInput)
+                local mouseReleased = isMouseClick and endedInput.UserInputType == Enum.UserInputType.MouseButton1
+                if mouseReleased or endedInput == input then
+                    movedConnection:Disconnect()
+                    releasedConnection:Disconnect()
+                end
+            end)
+        end)
+
+        -- ----- Pickers + buttons (right) ---------------------------------------
+        -- Four rows of 0.2 with three gaps of 0.0666 fill the column exactly.
+        local clothingColumn = Instance.new("Frame")
+        clothingColumn.Name = "Column"
+        clothingColumn.BackgroundTransparency = 1
+        clothingColumn.BorderSizePixel = 0
+        clothingColumn.Position = UDim2.new(0.55, 0, 0, 0)
+        clothingColumn.Size = UDim2.new(0.45, 0, 1, 0)
+        clothingColumn.Parent = clothingBody
+
+        local clothingColumnLayout = Instance.new("UIListLayout")
+        clothingColumnLayout.Padding = UDim.new(0.0666, 0)
+        clothingColumnLayout.SortOrder = Enum.SortOrder.LayoutOrder
+        clothingColumnLayout.Parent = clothingColumn
+
+        local function CreateClothingPickerRow(rowName, labelText, layoutOrder, rowZIndex)
+            local pickerRow = Instance.new("TextButton")
+            pickerRow.Name = rowName
+            pickerRow.LayoutOrder = layoutOrder
+            pickerRow.AutoButtonColor = false
+            pickerRow.Text = ""
+            pickerRow.BackgroundColor3 = rowBackgroundColor
+            pickerRow.BorderSizePixel = 0
+            pickerRow.Size = UDim2.new(1, 0, 0.2, 0)
+            -- Higher rows sit above lower ones so an open list drops over the rows below.
+            pickerRow.ZIndex = rowZIndex
+            pickerRow.Parent = clothingColumn
+
+            local pickerStroke = Instance.new("UIStroke")
+            pickerStroke.Color = rowStrokeColor
+            pickerStroke.Thickness = 1
+            pickerStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+            pickerStroke.Parent = pickerRow
+
+            local pickerLabel = Instance.new("TextLabel")
+            pickerLabel.Name = "Label"
+            pickerLabel.BackgroundTransparency = 1
+            pickerLabel.AnchorPoint = Vector2.new(0, 0.5)
+            pickerLabel.Position = UDim2.new(0.05, 0, 0.5, 0)
+            pickerLabel.Size = UDim2.new(0.38, 0, 0.5, 0)
+            pickerLabel.FontFace = settingsFont
+            pickerLabel.Text = labelText
+            pickerLabel.TextColor3 = normalTextColor
+            pickerLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+            pickerLabel.TextStrokeTransparency = 0
+            pickerLabel.TextScaled = true
+            pickerLabel.TextXAlignment = Enum.TextXAlignment.Left
+            pickerLabel.ZIndex = 2
+            pickerLabel.Parent = pickerRow
+
+            local pickerLabelConstraint = Instance.new("UITextSizeConstraint")
+            pickerLabelConstraint.MaxTextSize = 22
+            pickerLabelConstraint.Parent = pickerLabel
+
+            local pickerValueBox = Instance.new("Frame")
+            pickerValueBox.Name = "ValueBox"
+            pickerValueBox.BackgroundColor3 = valueBoxColor
+            pickerValueBox.BorderSizePixel = 0
+            pickerValueBox.AnchorPoint = Vector2.new(1, 0.5)
+            pickerValueBox.Position = UDim2.new(0.97, 0, 0.5, 0)
+            pickerValueBox.Size = UDim2.new(0.55, 0, 0.7, 0)
+            pickerValueBox.ZIndex = 2
+            pickerValueBox.Parent = pickerRow
+
+            local pickerValueLabel = Instance.new("TextLabel")
+            pickerValueLabel.Name = "ValueLabel"
+            pickerValueLabel.BackgroundTransparency = 1
+            pickerValueLabel.AnchorPoint = Vector2.new(0.5, 0.5)
+            pickerValueLabel.Position = UDim2.new(0.5, 0, 0.5, 0)
+            pickerValueLabel.Size = UDim2.new(0.9, 0, 0.6, 0)
+            pickerValueLabel.FontFace = settingsFont
+            pickerValueLabel.Text = ""
+            pickerValueLabel.TextColor3 = normalTextColor
+            pickerValueLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+            pickerValueLabel.TextStrokeTransparency = 0
+            pickerValueLabel.TextScaled = true
+            pickerValueLabel.Parent = pickerValueBox
+
+            local pickerValueConstraint = Instance.new("UITextSizeConstraint")
+            pickerValueConstraint.MaxTextSize = 22
+            pickerValueConstraint.Parent = pickerValueLabel
+
+            return pickerRow, pickerValueLabel
+        end
+
+        local clothingShirtRow, clothingShirtValueLabel = CreateClothingPickerRow("ShirtRow", "Shirt", 1, 12)
+        local clothingPantsRow, clothingPantsValueLabel = CreateClothingPickerRow("PantsRow", "Pants", 2, 11)
+
+        local function RefreshClothingLabels()
+            clothingShirtValueLabel.Text = clothingOutfits[clothingShirtIndex].name
+            clothingPantsValueLabel.Text = clothingOutfits[clothingPantsIndex].name
+        end
+        RefreshClothingLabels()
+
+        local clothingShirtDropdown = CreateDropdown(clothingShirtRow, "ClothingShirtDropdown", clothingOutfitNames,
+            function()
+                return clothingShirtIndex
+            end,
+            function(outfitIndex)
+                clothingShirtIndex = outfitIndex
+                RefreshClothingLabels()
+                ClothingSystem.Equip("Shirt", clothingOutfits[outfitIndex].shirt)
+            end)
+
+        local clothingPantsDropdown = CreateDropdown(clothingPantsRow, "ClothingPantsDropdown", clothingOutfitNames,
+            function()
+                return clothingPantsIndex
+            end,
+            function(outfitIndex)
+                clothingPantsIndex = outfitIndex
+                RefreshClothingLabels()
+                ClothingSystem.Equip("Pants", clothingOutfits[outfitIndex].pants)
+            end)
+
+        clothingShirtRow.Activated:Connect(function()
+            playNextSound()
+            clothingShirtDropdown.Toggle()
+        end)
+        clothingPantsRow.Activated:Connect(function()
+            playNextSound()
+            clothingPantsDropdown.Toggle()
+        end)
+
+        local function CreateClothingButton(buttonName, buttonText, layoutOrder)
+            local clothingButton = Instance.new("TextButton")
+            clothingButton.Name = buttonName
+            clothingButton.LayoutOrder = layoutOrder
+            clothingButton.AutoButtonColor = false
+            clothingButton.BackgroundColor3 = headerColor
+            clothingButton.BorderSizePixel = 0
+            clothingButton.Size = UDim2.new(1, 0, 0.2, 0)
+            clothingButton.FontFace = settingsFont
+            clothingButton.Text = buttonText
+            clothingButton.TextColor3 = normalTextColor
+            clothingButton.TextStrokeColor3 = Color3.new(0, 0, 0)
+            clothingButton.TextStrokeTransparency = 0
+            clothingButton.TextScaled = true
+            clothingButton.Parent = clothingColumn
+
+            local clothingButtonStroke = Instance.new("UIStroke")
+            clothingButtonStroke.Color = headerStrokeColor
+            clothingButtonStroke.Thickness = 2
+            clothingButtonStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+            clothingButtonStroke.Parent = clothingButton
+
+            local clothingButtonTextConstraint = Instance.new("UITextSizeConstraint")
+            clothingButtonTextConstraint.MaxTextSize = 20
+            clothingButtonTextConstraint.Parent = clothingButton
+
+            return clothingButton
+        end
+
+        local clothingSaveButton = CreateClothingButton("SaveButton", "Save", 3)
+        local clothingCloseButton = CreateClothingButton("CloseClothingButton", "Close", 4)
+
+        local clothingSaveToken = 0
+        clothingSaveButton.Activated:Connect(function()
+            playNextSound()
+            CloseAllDropdowns()
+
+            local saved = ClothingSystem.WriteSaved(clothingShirtIndex, clothingPantsIndex)
+            clothingSaveToken = clothingSaveToken + 1
+            local myToken = clothingSaveToken
+            clothingSaveButton.Text = saved and "Saved!" or "Failed"
+            task.delay(1.2, function()
+                if clothingSaveToken == myToken then
+                    clothingSaveButton.Text = "Save"
+                end
+            end)
+        end)
+
+        -- ----- Show / hide ------------------------------------------------------
+        local function ShowClothingWindow()
+            CloseAllDropdowns()
+            RefreshClothingLabels()
+            BuildClothingPreview()
+            clothingWindowOpen = true
+            clothingWindow.Visible = true
+        end
+
+        HideClothingWindow = function()
+            if not clothingWindowOpen then return end
+            clothingWindowOpen = false
+            clothingWindow.Visible = false
+            DestroyClothingPreview()
+            CloseAllDropdowns()
+        end
+
+        ToggleClothingWindow = function()
+            if clothingWindowOpen then
+                HideClothingWindow()
+            else
+                ShowClothingWindow()
+            end
+        end
+
+        clothingCloseButton.Activated:Connect(function()
+            playNextSound()
+            HideClothingWindow()
+        end)
+    end
+    -- =========================================================================
+
     local buttonRow = Instance.new("Frame")
     buttonRow.Name = "ButtonRow"
     buttonRow.LayoutOrder = #settingRowDefinitions + 2
@@ -2218,6 +2783,9 @@ task.spawn(function()
     SetActiveTab = function(tabName)
         activeTabName = tabName
         CloseAllDropdowns()
+        if tabName ~= "DLC" then
+            HideClothingWindow() -- the Clothing window belongs to the DLC tab
+        end
 
         local isSettingsTab = tabName == "Settings"
         for _, rowEntry in ipairs(settingRowButtons) do
@@ -2386,6 +2954,7 @@ task.spawn(function()
     local function Exit()
         cancelActiveTweens()
         CloseAllDropdowns()
+        HideClothingWindow()
 
         playTween(characterImage, descendTweenInfo, {
             Position = UDim2.new(0, 0, 0, 945),
@@ -3487,6 +4056,8 @@ end
 task.spawn(function()
     ApplyMarketplaceClothing(marketShirtId, "Shirt")
     ApplyMarketplaceClothing(marketPantsId, "Pants")
+    -- a combo saved from the Clothing window (DLC tab) replaces the defaults
+    ClothingSystem.ApplySaved()
 end)
 
 local ssjSkinColor = Color3.fromRGB(241, 194, 154)
