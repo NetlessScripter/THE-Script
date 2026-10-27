@@ -1266,9 +1266,10 @@ task.spawn(function()
     local dbPackInstallDone = 0
     local dbPackInstallTotal = 0
 
-    -- Multiplayer: plays the qualify animation on the local player for
+    -- Multiplayer: plays the qualify animation + sound on the local player for
     -- 10s so other scripts detect this player as a participant.
     local MULTIPLAYER_ANIM_ID  = "rbxassetid://77366695973257"
+    local MULTIPLAYER_SOUND_ID = "rbxassetid://94111019811702"
     local MULTIPLAYER_SECONDS  = 10
     local multiplayerActive = false
 
@@ -1285,6 +1286,13 @@ task.spawn(function()
         multiplayerActive = true
         track.Looped = true
         track:Play()
+
+        local snd = Instance.new("Sound")
+        snd.SoundId = MULTIPLAYER_SOUND_ID
+        snd.Volume = 1
+        snd.Parent = soundService
+        snd.Ended:Connect(function() snd:Destroy() end)
+        snd:Play()
 
         if RefreshSettingValues then RefreshSettingValues() end
         task.delay(MULTIPLAYER_SECONDS, function()
@@ -3941,24 +3949,7 @@ end)
 local eventParticipantsStarted = false
 local EventQualify = { deadline = 0 }
 
-function EventQualify.SendChat()
-    if _G.GXLimitlessSent then return end
-    _G.GXLimitlessSent = true
-    task.spawn(function()
-        pcall(function()
-            local textChat = game:GetService("TextChatService")
-            if textChat.ChatVersion == Enum.ChatVersion.TextChatService then
-                local channels = textChat:WaitForChild("TextChannels", 10)
-                local general = channels and channels:WaitForChild("RBXGeneral", 10)
-                if general then general:SendAsync(EVENT_QUALIFY_PHRASE) end
-            else
-                local chatEvents = game:GetService("ReplicatedStorage"):WaitForChild("DefaultChatSystemChatEvents", 10)
-                local say = chatEvents and chatEvents:WaitForChild("SayMessageRequest", 10)
-                if say then say:FireServer(EVENT_QUALIFY_PHRASE, "All") end
-            end
-        end)
-    end)
-end
+-- (no SendChat here on purpose: 23 already sends the qualify phrase for me)
 
 -- kept so existing callers (flight lock / _G.EventAttackParticipants.Start)
 -- still work; qualification no longer depends on the event having started
@@ -4182,9 +4173,7 @@ end
 
 EventQualify.ScanHistory()
 
--- say the phrase right away (listeners above are already hooked, so we
--- also catch anyone who answers back)
-EventQualify.SendChat()
+-- (this script only listens for the phrase; 23 is the one that sends it)
 
 local GokuParticipants = {
 	Start = function() EventParticipants_Start() end,
