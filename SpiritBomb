@@ -80,7 +80,7 @@ local spiritBombSound = GetGitSound(
 )
 
 -- ============================================================
---  ANIMATION MODULE + KEYFRAME CACHES (loaded once, reused by every character)
+--  ANIMATION MODULE + KEYFRAME CACHES (loaded exactly like the original, for everyone)
 --  Animator6D takes the target character as its 4th argument, so the exact same
 --  call plays the animation on MY character and on every participant (this is how
 --  23's PlayAttack4Anim works: Animator6D(KFS, 1, false, Character)).
@@ -94,37 +94,32 @@ local POST_LAUNCH_ANIM = {
     Url  = "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/anim6d_kfcache_18878778259.json",
     File = "anim6d_kfcache_18878778259.json",
 }
-local animJsonBodies = {}
-local animModuleLoaded = false
-
+-- Exactly how the original script loads it, for me AND for participants: the module is
+-- downloaded and run fresh before every Animator6D call and the JSON is read from disk
+-- each time, so every animation gets its own independent instance.
 local function EnsureAnimModule()
-    if animModuleLoaded and getgenv().Animator6D then return end
     loadstring(game:HttpGet(ANIM_MODULE_URL))()
-    animModuleLoaded = true
 end
 
--- raw JSON is downloaded/read once; a fresh table is decoded for every play
+-- a fresh table is decoded for every play
 local function GetAnimData(info)
-    local body = animJsonBodies[info.File]
+    local body
+    if isfile and isfile(info.File) then
+        local ok, raw = pcall(readfile, info.File)
+        if ok and raw and #raw > 100 then
+            body = raw
+        end
+    end
     if not body then
-        if isfile and isfile(info.File) then
-            local ok, raw = pcall(readfile, info.File)
-            if ok and raw and #raw > 100 then
-                body = raw
+        local ok, fetched = pcall(game.HttpGet, game, info.Url)
+        if ok and fetched and #fetched > 100 then
+            body = fetched
+            if writefile then
+                writefile(info.File, fetched)
             end
+        else
+            error("[Animator6D] Failed to fetch JSON — cannot continue")
         end
-        if not body then
-            local ok, fetched = pcall(game.HttpGet, game, info.Url)
-            if ok and fetched and #fetched > 100 then
-                body = fetched
-                if writefile then
-                    writefile(info.File, fetched)
-                end
-            else
-                error("[Animator6D] Failed to fetch JSON — cannot continue")
-            end
-        end
-        animJsonBodies[info.File] = body
     end
     return HttpService:JSONDecode(body)
 end
@@ -1922,24 +1917,7 @@ end)
 local eventParticipantsStarted = false
 local EventQualify = { deadline = 0 }
 
-function EventQualify.SendChat()
-    if _G.GXLimitlessSent then return end
-    _G.GXLimitlessSent = true
-    task.spawn(function()
-        pcall(function()
-            local textChat = game:GetService("TextChatService")
-            if textChat.ChatVersion == Enum.ChatVersion.TextChatService then
-                local channels = textChat:WaitForChild("TextChannels", 10)
-                local general = channels and channels:WaitForChild("RBXGeneral", 10)
-                if general then general:SendAsync(EVENT_QUALIFY_PHRASE) end
-            else
-                local chatEvents = game:GetService("ReplicatedStorage"):WaitForChild("DefaultChatSystemChatEvents", 10)
-                local say = chatEvents and chatEvents:WaitForChild("SayMessageRequest", 10)
-                if say then say:FireServer(EVENT_QUALIFY_PHRASE, "All") end
-            end
-        end)
-    end)
-end
+-- (no SendChat here on purpose: 23 already sends the qualify phrase for me)
 
 -- kept so existing callers (flight lock / _G.EventAttackParticipants.Start)
 -- still work; qualification no longer depends on the event having started
@@ -2163,9 +2141,7 @@ end
 
 EventQualify.ScanHistory()
 
--- say the phrase right away (listeners above are already hooked, so we
--- also catch anyone who answers back)
-EventQualify.SendChat()
+-- (this script only listens for the phrase; 23 is the one that sends it)
 
 local SpiritBombParticipants = {
 	Start = function() EventParticipants_Start() end,
