@@ -1540,19 +1540,7 @@ local function BuildActorLibrary()
         local heightCheckConn
         heightCheckConn = RunService.Heartbeat:Connect(function()
             if checkHeight() then
-
                 heightCheckConn:Disconnect()
-                renderSteppedConn:Disconnect()
-
-                Animator6DStop(Character)
-                charClone:Destroy()
-                flashClone:Destroy()
-
-                for _, part in pairs(charClone:GetChildren()) do
-                    if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
-                        part.Anchored = false
-                    end
-                end
             end
         end)
     end
@@ -1562,6 +1550,7 @@ local function BuildActorLibrary()
         local viewport = flashClone.Flashup.Viewport.Viewport
         local viewportCam = Instance.new("Camera", viewport)
         viewport.CurrentCamera = viewportCam
+        flashClone.IgnoreGuiInset = true
         flashClone.Parent = REAL_LOCAL_PLAYER.PlayerGui
 
         Character.Archivable = true
@@ -1603,6 +1592,12 @@ local function BuildActorLibrary()
                     end
                 end
             end
+        end)
+
+        task.delay(1.5, function()
+            renderSteppedConn:Disconnect()
+            charClone:Destroy()
+            flashClone:Destroy()
         end)
 
         task.delay(0.2, function()
@@ -1695,6 +1690,7 @@ local function BuildActorLibrary()
             end)
 
             local impactFrames = UFW.ImpactFrames:Clone()
+            impactFrames.IgnoreGuiInset = true
             impactFrames.Parent = REAL_LOCAL_PLAYER.PlayerGui
             for _, frame in pairs(impactFrames:GetChildren()) do
                 frame.Size = UDim2.new(0, 0, 0, 1)
