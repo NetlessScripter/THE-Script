@@ -244,6 +244,16 @@ local ClothingSystem = {
         { name = "Android 17", shirt = 13723297799,    pants = 123936619503188 },
         { name = "Jiren",      shirt = 13671331438,    pants = 14462260888 },
         { name = "Hit",        shirt = 93036192743554, pants = 75261138126776 },
+        { name = "Meguna",      shirt = 18978174040,     pants = 75818285692117 },
+        { name = "Broly",       shirt = 13018133325,     pants = 16958229895 },
+        { name = "Yuji",        shirt = 82214781746024,  pants = 16656299861 },
+        { name = "Gojo",        shirt = 120579519971862, pants = 18101593805 },
+        { name = "Whis",        shirt = 1060049731,      pants = 6494541110 },
+        { name = "Beerus",      shirt = 121887207282442, pants = 135802755436830 },
+        { name = "Grand Priest", shirt = 112029399241988, pants = 85975129748658 },
+        { name = "Vegito",      shirt = 13852246099,     pants = 83402968089930 },
+        { name = "Gogeta",      shirt = 16028355781,     pants = 17388088112 },
+        { name = "Xeno Goku",   shirt = 9110513486,      pants = 7464019656 },
     },
 }
 
@@ -360,6 +370,494 @@ do
         ClothingSystem.Equip("Pants", ClothingSystem.Outfits[pantsIndex].pants)
     end
 end
+
+local HairOffsets = {
+	["First Hair"] = {AssetId = "rbxassetid://133241012246367", YOffset = 0.900, ZOffset = 0.350, RotationY = 0},
+	["Second Hair"] = {AssetId = "rbxassetid://18988436757", YOffset = 0.850, ZOffset = 0.300, RotationY = 0},
+	["Third Hair"] = {AssetId = "rbxassetid://17169866490", YOffset = 0.500, ZOffset = 0.200, RotationY = 180},
+	["Fourth Hair"] = {AssetId = "rbxassetid://114821109405409", YOffset = 0.900, ZOffset = 0.250, RotationY = 0},
+	["Fifth Hair"] = {AssetId = "rbxassetid://95980191416328", YOffset = 1.100, ZOffset = 0.300, RotationY = 180},
+	["Sixth Hair"] = {AssetId = "rbxassetid://130645847069955", YOffset = 0.650, ZOffset = 0.150, RotationY = 0},
+	["Seventh Hair"] = {AssetId = "http://www.roblox.com/asset/?id=19326912", YOffset = 0.650, ZOffset = 0.100, RotationY = 0},
+	["Eighth Hair"] = {AssetId = "rbxassetid://106981276135512", YOffset = 0.500, ZOffset = 0.250, RotationY = 180},
+	["Ninth Hair"] = {AssetId = "rbxassetid://103347230044233", YOffset = 0.450, ZOffset = 0.300, RotationY = 0},
+	["Tenth Hair"] = {AssetId = "rbxassetid://107039956325024", YOffset = 0.450, ZOffset = 0.250, RotationY = 90},
+	["Eleventh Hair"] = {AssetId = "rbxassetid://119570391860313", YOffset = 0.250, ZOffset = 0.400, RotationY = 0},
+}
+
+local HairSystem = {
+    ModelName = "GokuCustomHair",
+    SaveFile  = "GokuHairSave.json",
+    HairNames = {
+        "First Hair", "Second Hair", "Third Hair", "Fourth Hair", "Fifth Hair",
+        "Sixth Hair", "Seventh Hair", "Eighth Hair", "Ninth Hair", "Tenth Hair",
+        "Eleventh Hair",
+    },
+    Colors = {
+        Base = Color3.fromRGB(15, 15, 15),
+        SSJ  = Color3.fromRGB(255, 221, 51),
+        SSJB = Color3.fromRGB(0, 190, 255),
+    },
+    LightColors = {
+        Base = Color3.fromRGB(255, 255, 255),
+        SSJ  = Color3.fromRGB(255, 255, 150),
+        SSJB = Color3.fromRGB(100, 180, 255),
+    },
+    -- Colour choices shared by the "Base Hair color" and "Ultimate Color" dropdowns
+    -- (Hair window). Every one is a very bright version of a hair colour Goku really
+    -- has in a transformation (SSJ gold, SSG red, SSB blue, UI silver, Ultra Ego
+    -- purple) plus the pink of Goku Black's Super Saiyan Rose.
+    --   Base Hair color = the hair + spotlight colour whenever we are NOT SSJB.
+    --   Ultimate Color  = the SSJB hair + spotlight colour AND the colour of the SSJB
+    --                     trigger / Spirit Bomb effects (energy explosion, aura, burst).
+    -- color = hair, light = spotlight, burst = the hair-change bubble, vfx = the
+    -- energy explosion colour. aura / auraLight / death are filled in below.
+    ColorOptions = {
+        { name = "Super Saiyan",   color = Color3.fromRGB(255, 221, 51),  light = Color3.fromRGB(255, 255, 150),
+          burst = Color3.fromRGB(255, 235, 50),  vfx = Color3.new(1.0, 0.85, 0.15) },
+        { name = "SS God",         color = Color3.fromRGB(255, 45, 70),   light = Color3.fromRGB(255, 120, 130),
+          burst = Color3.fromRGB(255, 70, 90),   vfx = Color3.new(1.0, 0.15, 0.25) },
+        { name = "SS Blue",        color = Color3.fromRGB(0, 190, 255),   light = Color3.fromRGB(100, 180, 255),
+          burst = Color3.fromRGB(0, 230, 255),   vfx = Color3.new(0.05, 0.45, 1.0),
+          -- the original SSJB effect colours, so the default look stays exactly as it was
+          aura = { Color3.new(0.0, 0.2, 0.85), Color3.new(0.05, 0.45, 1.0), Color3.new(0.2, 0.7, 1.0), Color3.new(0.6, 0.9, 1.0) },
+          auraLight = Color3.new(0.1, 0.55, 1.0), death = Color3.new(0.25, 0.75, 1.0) },
+        { name = "Ultra Instinct", color = Color3.fromRGB(255, 255, 255), light = Color3.fromRGB(255, 255, 255),
+          burst = Color3.fromRGB(255, 255, 255), vfx = Color3.new(1.0, 1.0, 1.0) },
+        { name = "Ultra Ego",      color = Color3.fromRGB(190, 70, 255),  light = Color3.fromRGB(200, 130, 255),
+          burst = Color3.fromRGB(205, 100, 255), vfx = Color3.new(0.75, 0.25, 1.0) },
+        { name = "SS Rose",        color = Color3.fromRGB(255, 80, 170),  light = Color3.fromRGB(255, 150, 200),
+          burst = Color3.fromRGB(255, 110, 190), vfx = Color3.new(1.0, 0.3, 0.65) },
+        { name = "Black",          color = Color3.fromRGB(10, 10, 10),    light = Color3.fromRGB(255, 255, 255),
+          burst = Color3.fromRGB(20, 20, 20),    vfx = Color3.new(0.08, 0.08, 0.08) },
+    },
+    BaseColorName      = "Super Saiyan",
+    UltimateColorName  = "SS Blue",
+    SelectedName       = nil,
+    Model              = nil,
+    CurrentForm        = "SSJ",
+    OnChanged          = nil,
+    RestoreDefaultHair = nil,
+}
+
+-- fill in the effect colours an option does not spell out (derived from its vfx colour)
+do
+    local white = Color3.new(1, 1, 1)
+    local black = Color3.new(0, 0, 0)
+    for _, option in ipairs(HairSystem.ColorOptions) do
+        local vfx = option.vfx
+        option.aura      = option.aura or { vfx:Lerp(black, 0.3), vfx, vfx:Lerp(white, 0.3), vfx:Lerp(white, 0.65) }
+        option.auraLight = option.auraLight or vfx:Lerp(white, 0.1)
+        option.death     = option.death or vfx:Lerp(white, 0.3)
+    end
+end
+
+do
+    local equipToken    = 0
+    local formTweenInfo = TweenInfo.new(0.4, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+
+    -- Where each hair stands: "loading", "ready" or "failed" (nil = not asked for yet).
+    -- The Hair window reads this to show "..." / "(failed)" next to a pick.
+    local templateStatus = {}
+    HairSystem.TemplateStatus = templateStatus
+
+    local ContentProvider = game:GetService("ContentProvider")
+
+    local function GetMeshId(hairName)
+        local numericId = string.match(HairOffsets[hairName].AssetId, "%d+")
+        return "rbxassetid://" .. tostring(numericId)
+    end
+
+    -- The hair ids are mesh ids, so there is nothing to GetObjects: a SpecialMesh with
+    -- the id in MeshId is enough. This only asks Roblox to download the mesh and reports
+    -- whether it arrived, so a bad id shows "(failed)" in the Hair window.
+    local function LoadHairTemplate(hairName)
+        if templateStatus[hairName] == "ready" then
+            return true
+        end
+
+        -- Another thread (the startup preload) is already fetching this hair: wait for it.
+        if templateStatus[hairName] == "loading" then
+            local waitedSeconds = 0
+            while templateStatus[hairName] == "loading" and waitedSeconds < 30 do
+                task.wait(0.1)
+                waitedSeconds = waitedSeconds + 0.1
+            end
+            return templateStatus[hairName] == "ready"
+        end
+
+        templateStatus[hairName] = "loading"
+
+        local probeMesh = Instance.new("SpecialMesh")
+        probeMesh.MeshType = Enum.MeshType.FileMesh
+        probeMesh.MeshId   = GetMeshId(hairName)
+
+        local fetchStatus = Enum.AssetFetchStatus.Success
+        local preloadOk, preloadError = pcall(function()
+            ContentProvider:PreloadAsync({ probeMesh }, function(_, status)
+                fetchStatus = status
+            end)
+        end)
+        probeMesh:Destroy()
+
+        if not preloadOk or fetchStatus ~= Enum.AssetFetchStatus.Success then
+            -- "failed" is not final: picking the hair again tries it again.
+            templateStatus[hairName] = "failed"
+            warn("[Hair] Couldn't load " .. hairName .. " (" .. HairOffsets[hairName].AssetId .. "): "
+                .. tostring(preloadOk and fetchStatus or preloadError))
+            return false
+        end
+
+        templateStatus[hairName] = "ready"
+        return true
+    end
+
+    -- Downloads every hair mesh now, in the background, so picking one is instant and a
+    -- hair that can't load is reported at startup instead of on a pick.
+    function HairSystem.Preload()
+        local hairCount    = #HairSystem.HairNames
+        local pendingCount = hairCount
+        local loadedCount  = 0
+        for _, hairName in ipairs(HairSystem.HairNames) do
+            task.spawn(function()
+                if LoadHairTemplate(hairName) then
+                    loadedCount = loadedCount + 1
+                end
+                pendingCount = pendingCount - 1
+                if pendingCount == 0 then
+                    print("[Hair] Preloaded " .. loadedCount .. "/" .. hairCount .. " hairs")
+                    if HairSystem.OnChanged then
+                        HairSystem.OnChanged()
+                    end
+                end
+            end)
+        end
+    end
+
+    local function BuildHairModel(hairName)
+        if not LoadHairTemplate(hairName) then return nil end
+
+        local hairSettings = HairOffsets[hairName]
+
+        local handle = Instance.new("Part")
+        handle.Name = "Handle"
+        handle.Size = Vector3.new(1, 1, 1)
+
+        local hairMesh = Instance.new("SpecialMesh")
+        hairMesh.MeshType    = Enum.MeshType.FileMesh
+        hairMesh.MeshId      = GetMeshId(hairName)
+        hairMesh.TextureId   = ""
+        hairMesh.Scale       = Vector3.new(1, 1, 1)
+        hairMesh.VertexColor = Vector3.new(1, 1, 1)
+        hairMesh.Parent      = handle
+
+        local customHairModel = Instance.new("Model")
+        customHairModel.Name = HairSystem.ModelName
+        handle.Parent = customHairModel
+        customHairModel.PrimaryPart = handle
+
+        handle.Anchored     = false
+        handle.CanCollide   = false
+        handle.CanQuery     = false
+        handle.CanTouch     = false
+        handle.Massless     = true
+        handle.CastShadow   = false
+        handle.Transparency = 0
+        handle.Material     = Enum.Material.Neon
+        handle.Color        = HairSystem.Colors[HairSystem.CurrentForm]
+
+        local customHairLight = Instance.new("PointLight")
+        customHairLight.Color      = HairSystem.LightColors[HairSystem.CurrentForm]
+        customHairLight.Range      = 8
+        customHairLight.Brightness = 1
+        customHairLight.Parent     = handle
+
+        customHairModel.Parent = character
+        handle.CFrame = headPart.CFrame
+            * CFrame.new(0, hairSettings.YOffset, hairSettings.ZOffset)
+            * CFrame.Angles(0, math.rad(hairSettings.RotationY), 0)
+
+        local headWeld = Instance.new("WeldConstraint")
+        headWeld.Part0  = headPart
+        headWeld.Part1  = handle
+        headWeld.Parent = handle
+
+        return customHairModel
+    end
+
+    function HairSystem.IsActive()
+        return HairSystem.Model ~= nil and HairSystem.Model.Parent ~= nil
+    end
+
+    function HairSystem.GetSelectedIndex()
+        for hairIndex, hairName in ipairs(HairSystem.HairNames) do
+            if hairName == HairSystem.SelectedName then
+                return hairIndex
+            end
+        end
+        return nil
+    end
+
+    function HairSystem.ApplyFormLook(formName, animated)
+        local customHairModel = HairSystem.Model
+        if not customHairModel or not customHairModel.Parent then return end
+
+        local formColor  = HairSystem.Colors[formName]
+        local lightColor = HairSystem.LightColors[formName]
+        for _, descendant in ipairs(customHairModel:GetDescendants()) do
+            local targetColor
+            if descendant:IsA("BasePart") then
+                targetColor = formColor
+            elseif descendant:IsA("PointLight") then
+                targetColor = lightColor
+            end
+            if targetColor then
+                if animated then
+                    TweenService:Create(descendant, formTweenInfo, { Color = targetColor }):Play()
+                else
+                    descendant.Color = targetColor
+                end
+            end
+        end
+    end
+
+    function HairSystem.SetForm(formName)
+        HairSystem.CurrentForm = formName
+        if not HairSystem.IsActive() then
+            return false
+        end
+        HairSystem.ApplyFormLook(formName, true)
+        return true
+    end
+
+    local function FindColorOption(optionName)
+        for _, option in ipairs(HairSystem.ColorOptions) do
+            if option.name == optionName then
+                return option
+            end
+        end
+        return nil
+    end
+
+    function HairSystem.GetBaseOption()
+        return FindColorOption(HairSystem.BaseColorName)
+    end
+
+    function HairSystem.GetUltimateOption()
+        return FindColorOption(HairSystem.UltimateColorName)
+    end
+
+    -- The aura particle colour of an option as a ColorSequence.
+    function HairSystem.AuraSequence(option)
+        return ColorSequence.new({
+            ColorSequenceKeypoint.new(0,   option.aura[1]),
+            ColorSequenceKeypoint.new(0.3, option.aura[2]),
+            ColorSequenceKeypoint.new(0.7, option.aura[3]),
+            ColorSequenceKeypoint.new(1,   option.aura[4]),
+        })
+    end
+
+    -- The normal hair (not a custom one) carries its own spotlight; keep it in step
+    -- with the form that is on right now (SSJ = Base Hair color, SSJB = Ultimate Color).
+    function HairSystem.RefreshDefaultLight()
+        if HairSystem.CurrentForm ~= "SSJ" and HairSystem.CurrentForm ~= "SSJB" then return end
+        local lightColor = HairSystem.LightColors[HairSystem.CurrentForm]
+        local defaultHair = character and character:FindFirstChild("GokuSSJHair")
+        local defaultLight = defaultHair and defaultHair:FindFirstChildWhichIsA("PointLight", true)
+        if defaultLight and lightColor then
+            defaultLight.Color = lightColor
+        end
+    end
+
+    -- Picks the Base Hair color (hair + spotlight when we are not SSJB) by option name.
+    -- Returns true when the name is valid.
+    function HairSystem.SetBaseColor(optionName)
+        local option = FindColorOption(optionName)
+        if not option then return false end
+        HairSystem.BaseColorName = option.name
+        HairSystem.Colors.SSJ = option.color
+        HairSystem.LightColors.SSJ = option.light
+        if HairSystem.IsActive() and HairSystem.CurrentForm == "SSJ" then
+            HairSystem.ApplyFormLook("SSJ", true)
+        end
+        HairSystem.RefreshDefaultLight()
+        return true
+    end
+
+    -- Picks the Ultimate Color (SSJB hair + spotlight, and the SSJB effect colours).
+    function HairSystem.SetUltimateColor(optionName)
+        local option = FindColorOption(optionName)
+        if not option then return false end
+        HairSystem.UltimateColorName = option.name
+        HairSystem.Colors.SSJB = option.color
+        HairSystem.LightColors.SSJB = option.light
+        if HairSystem.IsActive() and HairSystem.CurrentForm == "SSJB" then
+            HairSystem.ApplyFormLook("SSJB", true)
+        end
+        HairSystem.RefreshDefaultLight()
+        return true
+    end
+
+    -- The colour M1 punch visuals take: the Ultimate Color while we are SSJB, otherwise
+    -- the Base Hair color (the same colour the hair has right now).
+    function HairSystem.GetPunchColor()
+        if HairSystem.CurrentForm == "SSJB" then
+            return HairSystem.Colors.SSJB
+        end
+        return HairSystem.Colors.SSJ
+    end
+
+    -- Recolours a cloned effect (particles, beams, trails, lights) to the punch colour.
+    function HairSystem.TintPunchEffect(container)
+        local punchColor = HairSystem.GetPunchColor()
+        local punchSequence = ColorSequence.new(punchColor)
+        local items = container:GetDescendants()
+        table.insert(items, container)
+        for _, item in ipairs(items) do
+            if item:IsA("ParticleEmitter") or item:IsA("Beam") or item:IsA("Trail") then
+                item.Color = punchSequence
+            elseif item:IsA("Light") then
+                item.Color = punchColor
+            end
+        end
+    end
+
+    function HairSystem.Equip(hairName)
+        if not HairOffsets[hairName] then
+            warn("[Hair] Unknown hair: " .. tostring(hairName))
+            return
+        end
+
+        equipToken = equipToken + 1
+        local myToken = equipToken
+
+        task.spawn(function()
+            if not LoadHairTemplate(hairName) then
+                -- the load already warned why; refresh the window so it shows "(failed)"
+                if equipToken == myToken and HairSystem.OnChanged then
+                    HairSystem.OnChanged()
+                end
+                return
+            end
+            if equipToken ~= myToken then return end -- a newer pick replaced this one
+
+            local previousModel = HairSystem.Model
+            local buildOk, builtModel = pcall(BuildHairModel, hairName)
+            if not buildOk then
+                warn("[Hair] Couldn't build " .. hairName .. ": " .. tostring(builtModel))
+                builtModel = nil
+            end
+            if not builtModel then
+                templateStatus[hairName] = "failed" -- picking it again retries the build
+                if equipToken == myToken and HairSystem.OnChanged then
+                    HairSystem.OnChanged()
+                end
+                return
+            end
+
+            local regularHair = character:FindFirstChild("GokuSSJHair")
+            if regularHair then
+                regularHair:Destroy()
+            end
+            if previousModel then
+                previousModel:Destroy()
+            end
+
+            HairSystem.Model        = builtModel
+            HairSystem.SelectedName = hairName
+            templateStatus[hairName] = "ready"
+            print("[Hair] Equipped " .. hairName)
+            if HairSystem.OnChanged then
+                HairSystem.OnChanged()
+            end
+        end)
+    end
+
+    function HairSystem.Reset()
+        equipToken = equipToken + 1
+
+        local hadCustomHair = HairSystem.Model ~= nil
+        if HairSystem.Model then
+            HairSystem.Model:Destroy()
+            HairSystem.Model = nil
+        end
+        HairSystem.SelectedName = nil
+
+        if hadCustomHair and HairSystem.RestoreDefaultHair then
+            HairSystem.RestoreDefaultHair(HairSystem.CurrentForm)
+        end
+        if HairSystem.OnChanged then
+            HairSystem.OnChanged()
+        end
+    end
+
+    -- Saved hair (DLC tab > Hair > Save). The hair is stored by name in SaveFile;
+    -- "Default" means no custom hair (the normal form hair stays on).
+    local HttpService = game:GetService("HttpService")
+
+    -- Returns the saved hair name, or nil when nothing valid is saved or Default was saved.
+    function HairSystem.ReadSaved()
+        if not isfile(HairSystem.SaveFile) then return nil end
+
+        local readOk, decoded = pcall(function()
+            return HttpService:JSONDecode(readfile(HairSystem.SaveFile))
+        end)
+        if not readOk or type(decoded) ~= "table" then return nil end
+
+        if HairOffsets[decoded.hair] then
+            return decoded.hair
+        end
+        return nil
+    end
+
+    -- Returns the saved Base Hair color name and Ultimate Color name (each nil when none is saved).
+    function HairSystem.ReadSavedColors()
+        if not isfile(HairSystem.SaveFile) then return nil, nil end
+
+        local readOk, decoded = pcall(function()
+            return HttpService:JSONDecode(readfile(HairSystem.SaveFile))
+        end)
+        if not readOk or type(decoded) ~= "table" then return nil, nil end
+
+        local savedBase = type(decoded.baseColor) == "string" and decoded.baseColor or nil
+        local savedUltimate = type(decoded.ultimateColor) == "string" and decoded.ultimateColor or nil
+        return savedBase, savedUltimate
+    end
+
+    -- Writes the hair by name (nil = Default) and both colours. Returns true when the file was written.
+    function HairSystem.WriteSaved(hairName)
+        local writeOk, writeError = pcall(function()
+            writefile(HairSystem.SaveFile, HttpService:JSONEncode({
+                hair = hairName or "Default",
+                baseColor = HairSystem.BaseColorName,
+                ultimateColor = HairSystem.UltimateColorName,
+            }))
+        end)
+        if not writeOk then
+            warn("[Hair] Couldn't save the hair: " .. tostring(writeError))
+        end
+        return writeOk
+    end
+
+    -- Wears the saved hair, if there is one (called after the default hair exists at startup).
+    function HairSystem.ApplySaved()
+        local savedBaseColor, savedUltimateColor = HairSystem.ReadSavedColors()
+        if savedBaseColor then
+            HairSystem.SetBaseColor(savedBaseColor)
+        end
+        if savedUltimateColor then
+            HairSystem.SetUltimateColor(savedUltimateColor)
+        end
+
+        local savedHairName = HairSystem.ReadSaved()
+        if savedHairName then
+            HairSystem.Equip(savedHairName)
+        end
+    end
+end
+
+-- download every hair mesh now, in the background (see HairSystem.Preload)
+task.spawn(HairSystem.Preload)
 
 local function PlayAnimation(id, startPos, stopDelay, speed)
     local anim = Instance.new("Animation")
@@ -1390,6 +1888,9 @@ task.spawn(function()
     local clothingWindowOpen = false
     local ToggleClothingWindow
     local HideClothingWindow
+    local hairWindowOpen = false
+    local ToggleHairWindow
+    local HideHairWindow
 
     -- DB Music Pack (DLC) install state, read from the JSON record and compared
     -- against the script's pack list every time the panel loads and after every
@@ -1605,7 +2106,20 @@ task.spawn(function()
                 return clothingWindowOpen and "Close" or "Select"
             end,
             onActivated = function()
+                HideHairWindow() -- the Hair window shares the spot, so only one is open at a time
                 ToggleClothingWindow()
+            end,
+        },
+        {
+            -- Opens the Hair window (spinnable preview, hair picker, Save).
+            labelText = "Hair",
+            tab = "DLC",
+            getValueText = function()
+                return hairWindowOpen and "Close" or "Select"
+            end,
+            onActivated = function()
+                HideClothingWindow() -- the Clothing window shares the spot, so only one is open at a time
+                ToggleHairWindow()
             end,
         },
     }
@@ -2239,6 +2753,8 @@ task.spawn(function()
         end,
         SetMusicReverbPreset)
 
+    HairSystem.OnChanged = RefreshSettingValues
+
     CloseAllDropdowns = function()
         for _, openableDropdown in ipairs(allDropdowns) do
             openableDropdown.Close()
@@ -2705,6 +3221,580 @@ task.spawn(function()
     end
     -- =========================================================================
 
+    -- ===== Hair window ========================================================
+    -- Opened by the "Hair" row in the DLC tab. Same layout as the Clothing window:
+    -- left, a viewport with a copy of the player (drag it sideways to spin it a full
+    -- 360, camera aimed at the head and hair); right, the Hair picker (the ten hairs
+    -- plus Default), then Save and Close. A pick is worn straight away and the
+    -- viewport copy is rebuilt from the real character, so it always shows exactly
+    -- what is on you. Save writes the hair to HairSystem.SaveFile so it loads on the
+    -- next run. This has nothing to do with the participation system.
+    do
+        local hairPickerNames = {}
+        for hairIndex, hairName in ipairs(HairSystem.HairNames) do
+            hairPickerNames[hairIndex] = hairName
+        end
+        table.insert(hairPickerNames, "Default")
+        local hairDefaultItemIndex = #hairPickerNames
+
+        -- Fixed viewport camera: in front of the character, aimed at the head and hair.
+        local hairCameraPosition = Vector3.new(0, 2.3, -7)
+        local hairCameraTarget   = Vector3.new(0, 1.9, 0)
+        local hairCameraFov      = 40
+        local hairSpinPerPixel   = 0.025 -- radians per pixel dragged sideways (about 250 px = one full turn)
+
+        -- The hair the picker is on (nil = Default). Reset to what is worn every time the window opens.
+        local pickedHairName = HairSystem.SelectedName
+
+        local hairWindow = Instance.new("Frame")
+        hairWindow.Name = "HairWindow"
+        hairWindow.BackgroundTransparency = 1
+        hairWindow.BorderSizePixel = 0
+        hairWindow.ZIndex = 2147483647
+        hairWindow.AnchorPoint = Vector2.new(0.5, 0.5)
+        hairWindow.Size = UDim2.new(0.38, 0, panelHeightScale, 0)
+        hairWindow.Position = UDim2.new(0.27, 0, 0.5, 0)
+        hairWindow.Visible = false
+        hairWindow.Parent = overlayGui
+
+        local hairWindowLayout = Instance.new("UIListLayout")
+        hairWindowLayout.Padding = UDim.new(panelPaddingScale, 0)
+        hairWindowLayout.SortOrder = Enum.SortOrder.LayoutOrder
+        hairWindowLayout.Parent = hairWindow
+
+        local hairHeader = Instance.new("TextLabel")
+        hairHeader.Name = "Header"
+        hairHeader.LayoutOrder = 0
+        hairHeader.BackgroundColor3 = headerColor
+        hairHeader.BorderSizePixel = 0
+        hairHeader.Size = UDim2.new(1, 0, panelRowScale, 0)
+        hairHeader.FontFace = settingsFont
+        hairHeader.Text = "Hair"
+        hairHeader.TextColor3 = normalTextColor
+        hairHeader.TextStrokeColor3 = Color3.new(0, 0, 0)
+        hairHeader.TextStrokeTransparency = 0
+        hairHeader.TextScaled = true
+        hairHeader.Parent = hairWindow
+
+        local hairHeaderStroke = Instance.new("UIStroke")
+        hairHeaderStroke.Color = headerStrokeColor
+        hairHeaderStroke.Thickness = 2
+        hairHeaderStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        hairHeaderStroke.Parent = hairHeader
+
+        local hairHeaderPadding = Instance.new("UIPadding")
+        hairHeaderPadding.PaddingTop = UDim.new(0.2, 0)
+        hairHeaderPadding.PaddingBottom = UDim.new(0.2, 0)
+        hairHeaderPadding.Parent = hairHeader
+
+        local hairHeaderTextConstraint = Instance.new("UITextSizeConstraint")
+        hairHeaderTextConstraint.MaxTextSize = 26
+        hairHeaderTextConstraint.Parent = hairHeader
+
+        -- Everything under the header (1 - header row - padding = 0.85 of the window).
+        local hairBody = Instance.new("Frame")
+        hairBody.Name = "Body"
+        hairBody.LayoutOrder = 1
+        hairBody.BackgroundTransparency = 1
+        hairBody.BorderSizePixel = 0
+        hairBody.Size = UDim2.new(1, 0, 0.85, 0)
+        hairBody.Parent = hairWindow
+
+        -- ----- Viewport (left) -------------------------------------------------
+        local hairViewport = Instance.new("ViewportFrame")
+        hairViewport.Name = "HairViewport"
+        hairViewport.BackgroundColor3 = valueBoxColor
+        hairViewport.BorderSizePixel = 0
+        hairViewport.Active = true
+        hairViewport.Position = UDim2.new(0, 0, 0, 0)
+        hairViewport.Size = UDim2.new(0.52, 0, 1, 0)
+        hairViewport.Ambient = Color3.fromRGB(190, 190, 190)
+        hairViewport.LightColor = Color3.fromRGB(255, 255, 255)
+        hairViewport.LightDirection = Vector3.new(-0.3, -0.5, 1)
+        hairViewport.Parent = hairBody
+
+        local hairViewportStroke = Instance.new("UIStroke")
+        hairViewportStroke.Color = rowStrokeColor
+        hairViewportStroke.Thickness = 1
+        hairViewportStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        hairViewportStroke.Parent = hairViewport
+
+        local hairCamera = Instance.new("Camera")
+        hairCamera.FieldOfView = hairCameraFov
+        hairCamera.CFrame = CFrame.lookAt(hairCameraPosition, hairCameraTarget)
+        hairCamera.Parent = hairViewport
+        hairViewport.CurrentCamera = hairCamera
+
+        local hairHintLabel = Instance.new("TextLabel")
+        hairHintLabel.Name = "SpinHint"
+        hairHintLabel.BackgroundTransparency = 1
+        hairHintLabel.AnchorPoint = Vector2.new(0.5, 1)
+        hairHintLabel.Position = UDim2.new(0.5, 0, 0.98, 0)
+        hairHintLabel.Size = UDim2.new(0.9, 0, 0.09, 0)
+        hairHintLabel.FontFace = settingsFont
+        hairHintLabel.Text = "Drag to spin"
+        hairHintLabel.TextColor3 = normalTextColor
+        hairHintLabel.TextTransparency = 0.3
+        hairHintLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+        hairHintLabel.TextStrokeTransparency = 0.4
+        hairHintLabel.TextScaled = true
+        hairHintLabel.Parent = hairViewport
+
+        local hairHintTextConstraint = Instance.new("UITextSizeConstraint")
+        hairHintTextConstraint.MaxTextSize = 16
+        hairHintTextConstraint.Parent = hairHintLabel
+
+        -- The viewport shows a copy of the real character. It is rebuilt every time
+        -- the window opens and every time the hair changes (the copy then carries the
+        -- new hair, form colour and all). Scripts, sounds and effects are stripped from
+        -- the copy and its parts are anchored; it sits at the origin facing the camera.
+        local hairPreviewModel
+        local hairYaw = 0
+
+        local function DestroyHairPreview()
+            if hairPreviewModel then
+                hairPreviewModel:Destroy()
+                hairPreviewModel = nil
+            end
+        end
+
+        local function SetHairYaw(newYaw)
+            hairYaw = newYaw % (math.pi * 2)
+            if hairPreviewModel then
+                hairPreviewModel:PivotTo(CFrame.Angles(0, hairYaw, 0))
+            end
+        end
+
+        -- keepYaw: a rebuild after a hair change keeps the angle it was spun to.
+        local function BuildHairPreview(keepYaw)
+            DestroyHairPreview()
+            if not keepYaw then
+                hairYaw = 0
+            end
+
+            local sourceCharacter = character
+            if not sourceCharacter then return end
+
+            local wasArchivable = sourceCharacter.Archivable
+            sourceCharacter.Archivable = true
+            local cloneOk, previewClone = pcall(function()
+                return sourceCharacter:Clone()
+            end)
+            sourceCharacter.Archivable = wasArchivable
+            if not cloneOk or not previewClone then
+                warn("[Hair] Couldn't copy the character for the preview")
+                return
+            end
+
+            for _, descendant in ipairs(previewClone:GetDescendants()) do
+                if descendant:IsA("LuaSourceContainer") or descendant:IsA("Sound")
+                    or descendant:IsA("ParticleEmitter") or descendant:IsA("Trail")
+                    or descendant:IsA("Beam") or descendant:IsA("Light")
+                    or descendant:IsA("Highlight") or descendant:IsA("BillboardGui")
+                    or descendant:IsA("ForceField") or descendant:IsA("Fire")
+                    or descendant:IsA("Smoke") or descendant:IsA("Sparkles") then
+                    descendant:Destroy()
+                elseif descendant:IsA("BasePart") then
+                    descendant.Anchored = true
+                end
+            end
+
+            local previewHumanoid = previewClone:FindFirstChildOfClass("Humanoid")
+            if previewHumanoid then
+                previewHumanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+                previewHumanoid.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+            end
+
+            previewClone:PivotTo(CFrame.Angles(0, hairYaw, 0))
+            previewClone.Parent = hairViewport
+            hairPreviewModel = previewClone
+        end
+
+        -- Sideways drag spins the copy. Only the X movement is read, so dragging up
+        -- or down never tilts or moves it. Same input pattern as the Clothing window.
+        hairViewport.InputBegan:Connect(function(input)
+            local isMouseClick = input.UserInputType == Enum.UserInputType.MouseButton1
+            if not isMouseClick and input.UserInputType ~= Enum.UserInputType.Touch then
+                return
+            end
+
+            CloseAllDropdowns()
+
+            local startPointerX = input.Position.X
+            local startYaw = hairYaw
+
+            local movedConnection
+            local releasedConnection
+            movedConnection = userInputService.InputChanged:Connect(function(movedInput)
+                if movedInput.UserInputType == Enum.UserInputType.MouseMovement or movedInput == input then
+                    SetHairYaw(startYaw + (movedInput.Position.X - startPointerX) * hairSpinPerPixel)
+                end
+            end)
+            releasedConnection = userInputService.InputEnded:Connect(function(endedInput)
+                local mouseReleased = isMouseClick and endedInput.UserInputType == Enum.UserInputType.MouseButton1
+                if mouseReleased or endedInput == input then
+                    movedConnection:Disconnect()
+                    releasedConnection:Disconnect()
+                end
+            end)
+        end)
+
+        -- ----- Picker + buttons (right) ----------------------------------------
+        -- Four rows of 0.2 with a gap of 0.0666 between them, from the top
+        -- (Hair, Base Hair color, Ultimate Color, Save + Close side by side).
+        local hairColumn = Instance.new("Frame")
+        hairColumn.Name = "Column"
+        hairColumn.BackgroundTransparency = 1
+        hairColumn.BorderSizePixel = 0
+        hairColumn.Position = UDim2.new(0.55, 0, 0, 0)
+        hairColumn.Size = UDim2.new(0.45, 0, 1, 0)
+        hairColumn.Parent = hairBody
+
+        local hairColumnLayout = Instance.new("UIListLayout")
+        hairColumnLayout.Padding = UDim.new(0.0666, 0)
+        hairColumnLayout.SortOrder = Enum.SortOrder.LayoutOrder
+        hairColumnLayout.Parent = hairColumn
+
+        local hairPickerRow = Instance.new("TextButton")
+        hairPickerRow.Name = "HairRow"
+        hairPickerRow.LayoutOrder = 1
+        hairPickerRow.AutoButtonColor = false
+        hairPickerRow.Text = ""
+        hairPickerRow.BackgroundColor3 = rowBackgroundColor
+        hairPickerRow.BorderSizePixel = 0
+        hairPickerRow.Size = UDim2.new(1, 0, 0.2, 0)
+        -- Sits above the Save / Close buttons so an open list drops over them.
+        hairPickerRow.ZIndex = 12
+        hairPickerRow.Parent = hairColumn
+
+        local hairPickerStroke = Instance.new("UIStroke")
+        hairPickerStroke.Color = rowStrokeColor
+        hairPickerStroke.Thickness = 1
+        hairPickerStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        hairPickerStroke.Parent = hairPickerRow
+
+        local hairPickerLabel = Instance.new("TextLabel")
+        hairPickerLabel.Name = "Label"
+        hairPickerLabel.BackgroundTransparency = 1
+        hairPickerLabel.AnchorPoint = Vector2.new(0, 0.5)
+        hairPickerLabel.Position = UDim2.new(0.05, 0, 0.5, 0)
+        hairPickerLabel.Size = UDim2.new(0.38, 0, 0.5, 0)
+        hairPickerLabel.FontFace = settingsFont
+        hairPickerLabel.Text = "Hair"
+        hairPickerLabel.TextColor3 = normalTextColor
+        hairPickerLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+        hairPickerLabel.TextStrokeTransparency = 0
+        hairPickerLabel.TextScaled = true
+        hairPickerLabel.TextXAlignment = Enum.TextXAlignment.Left
+        hairPickerLabel.ZIndex = 2
+        hairPickerLabel.Parent = hairPickerRow
+
+        local hairPickerLabelConstraint = Instance.new("UITextSizeConstraint")
+        hairPickerLabelConstraint.MaxTextSize = 22
+        hairPickerLabelConstraint.Parent = hairPickerLabel
+
+        local hairPickerValueBox = Instance.new("Frame")
+        hairPickerValueBox.Name = "ValueBox"
+        hairPickerValueBox.BackgroundColor3 = valueBoxColor
+        hairPickerValueBox.BorderSizePixel = 0
+        hairPickerValueBox.AnchorPoint = Vector2.new(1, 0.5)
+        hairPickerValueBox.Position = UDim2.new(0.97, 0, 0.5, 0)
+        hairPickerValueBox.Size = UDim2.new(0.55, 0, 0.7, 0)
+        hairPickerValueBox.ZIndex = 2
+        hairPickerValueBox.Parent = hairPickerRow
+
+        local hairPickerValueLabel = Instance.new("TextLabel")
+        hairPickerValueLabel.Name = "ValueLabel"
+        hairPickerValueLabel.BackgroundTransparency = 1
+        hairPickerValueLabel.AnchorPoint = Vector2.new(0.5, 0.5)
+        hairPickerValueLabel.Position = UDim2.new(0.5, 0, 0.5, 0)
+        hairPickerValueLabel.Size = UDim2.new(0.9, 0, 0.6, 0)
+        hairPickerValueLabel.FontFace = settingsFont
+        hairPickerValueLabel.Text = ""
+        hairPickerValueLabel.TextColor3 = normalTextColor
+        hairPickerValueLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+        hairPickerValueLabel.TextStrokeTransparency = 0
+        hairPickerValueLabel.TextScaled = true
+        hairPickerValueLabel.Parent = hairPickerValueBox
+
+        local hairPickerValueConstraint = Instance.new("UITextSizeConstraint")
+        hairPickerValueConstraint.MaxTextSize = 22
+        hairPickerValueConstraint.Parent = hairPickerValueLabel
+
+        local function RefreshHairLabel()
+            local labelText = pickedHairName or "Default"
+            if pickedHairName and HairSystem.SelectedName ~= pickedHairName then
+                -- picked but not on the character (yet): still loading, or it failed
+                if HairSystem.TemplateStatus[pickedHairName] == "failed" then
+                    labelText = pickedHairName .. " (failed)"
+                else
+                    labelText = pickedHairName .. " ..."
+                end
+            end
+            hairPickerValueLabel.Text = labelText
+        end
+        RefreshHairLabel()
+
+        local function GetPickedHairIndex()
+            for hairIndex, hairName in ipairs(HairSystem.HairNames) do
+                if hairName == pickedHairName then
+                    return hairIndex
+                end
+            end
+            return hairDefaultItemIndex
+        end
+
+        local hairPickerDropdown = CreateDropdown(hairPickerRow, "HairPickerDropdown", hairPickerNames,
+            function()
+                return GetPickedHairIndex()
+            end,
+            function(itemIndex)
+                if itemIndex == hairDefaultItemIndex then
+                    pickedHairName = nil
+                    RefreshHairLabel()
+                    HairSystem.Reset()
+                else
+                    pickedHairName = HairSystem.HairNames[itemIndex]
+                    RefreshHairLabel()
+                    HairSystem.Equip(pickedHairName)
+                end
+            end)
+
+        hairPickerRow.Activated:Connect(function()
+            playNextSound()
+            hairPickerDropdown.Toggle()
+        end)
+
+        -- ----- Base Hair color + Ultimate Color rows (under the hair picker) ----
+        local hairColorOptions = HairSystem.ColorOptions
+        local hairColorNames = {}
+        for colorIndex, colorOption in ipairs(hairColorOptions) do
+            hairColorNames[colorIndex] = colorOption.name
+        end
+
+        -- Builds one colour row + its dropdown. Returns a function that refreshes the
+        -- row's text (the value text takes the colour that is picked, so it previews it).
+        local function CreateHairColorRow(rowName, labelText, layoutOrder, rowZIndex, getPickedName, onColorPicked)
+            local function GetPickedIndex()
+                for colorIndex, colorOption in ipairs(hairColorOptions) do
+                    if colorOption.name == getPickedName() then
+                        return colorIndex
+                    end
+                end
+                return 1
+            end
+
+            local colorRow = Instance.new("TextButton")
+            colorRow.Name = rowName
+            colorRow.LayoutOrder = layoutOrder
+            colorRow.AutoButtonColor = false
+            colorRow.Text = ""
+            colorRow.BackgroundColor3 = rowBackgroundColor
+            colorRow.BorderSizePixel = 0
+            colorRow.Size = UDim2.new(1, 0, 0.2, 0)
+            -- Each row sits above the ones below it, so an open list drops over them.
+            colorRow.ZIndex = rowZIndex
+            colorRow.Parent = hairColumn
+
+            local colorRowStroke = Instance.new("UIStroke")
+            colorRowStroke.Color = rowStrokeColor
+            colorRowStroke.Thickness = 1
+            colorRowStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+            colorRowStroke.Parent = colorRow
+
+            local colorRowLabel = Instance.new("TextLabel")
+            colorRowLabel.Name = "Label"
+            colorRowLabel.BackgroundTransparency = 1
+            colorRowLabel.AnchorPoint = Vector2.new(0, 0.5)
+            colorRowLabel.Position = UDim2.new(0.05, 0, 0.5, 0)
+            colorRowLabel.Size = UDim2.new(0.38, 0, 0.62, 0)
+            colorRowLabel.FontFace = settingsFont
+            colorRowLabel.Text = labelText
+            colorRowLabel.TextColor3 = normalTextColor
+            colorRowLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+            colorRowLabel.TextStrokeTransparency = 0
+            colorRowLabel.TextScaled = true
+            colorRowLabel.TextXAlignment = Enum.TextXAlignment.Left
+            colorRowLabel.ZIndex = 2
+            colorRowLabel.Parent = colorRow
+
+            local colorRowLabelConstraint = Instance.new("UITextSizeConstraint")
+            colorRowLabelConstraint.MaxTextSize = 22
+            colorRowLabelConstraint.Parent = colorRowLabel
+
+            local colorValueBox = Instance.new("Frame")
+            colorValueBox.Name = "ValueBox"
+            colorValueBox.BackgroundColor3 = valueBoxColor
+            colorValueBox.BorderSizePixel = 0
+            colorValueBox.AnchorPoint = Vector2.new(1, 0.5)
+            colorValueBox.Position = UDim2.new(0.97, 0, 0.5, 0)
+            colorValueBox.Size = UDim2.new(0.55, 0, 0.7, 0)
+            colorValueBox.ZIndex = 2
+            colorValueBox.Parent = colorRow
+
+            local colorValueLabel = Instance.new("TextLabel")
+            colorValueLabel.Name = "ValueLabel"
+            colorValueLabel.BackgroundTransparency = 1
+            colorValueLabel.AnchorPoint = Vector2.new(0.5, 0.5)
+            colorValueLabel.Position = UDim2.new(0.5, 0, 0.5, 0)
+            colorValueLabel.Size = UDim2.new(0.9, 0, 0.6, 0)
+            colorValueLabel.FontFace = settingsFont
+            colorValueLabel.Text = ""
+            colorValueLabel.TextColor3 = normalTextColor
+            colorValueLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+            colorValueLabel.TextStrokeTransparency = 0
+            colorValueLabel.TextScaled = true
+            colorValueLabel.Parent = colorValueBox
+
+            local colorValueConstraint = Instance.new("UITextSizeConstraint")
+            colorValueConstraint.MaxTextSize = 22
+            colorValueConstraint.Parent = colorValueLabel
+
+            local function RefreshColorRow()
+                local pickedOption = hairColorOptions[GetPickedIndex()]
+                colorValueLabel.Text = pickedOption.name
+                colorValueLabel.TextColor3 = pickedOption.color
+            end
+            RefreshColorRow()
+
+            local colorDropdown = CreateDropdown(colorRow, rowName .. "Dropdown", hairColorNames,
+                function()
+                    return GetPickedIndex()
+                end,
+                function(colorIndex)
+                    onColorPicked(hairColorOptions[colorIndex].name)
+                    RefreshColorRow()
+                    -- the viewport copy carries the old colour: rebuild it (keeps the spin angle)
+                    if hairWindowOpen then
+                        BuildHairPreview(true)
+                    end
+                end)
+
+            colorRow.Activated:Connect(function()
+                playNextSound()
+                colorDropdown.Toggle()
+            end)
+
+            return RefreshColorRow
+        end
+
+        local RefreshBaseColorRow = CreateHairColorRow("BaseHairColorRow", "Base Hair color", 2, 11,
+            function() return HairSystem.BaseColorName end,
+            function(colorName) HairSystem.SetBaseColor(colorName) end)
+        local RefreshUltimateColorRow = CreateHairColorRow("UltimateColorRow", "Ultimate Color", 3, 10,
+            function() return HairSystem.UltimateColorName end,
+            function(colorName) HairSystem.SetUltimateColor(colorName) end)
+
+        local function RefreshHairColorLabels()
+            RefreshBaseColorRow()
+            RefreshUltimateColorRow()
+        end
+
+        -- Save and Close share the last row, side by side (like Apply / Close).
+        local hairButtonRow = Instance.new("Frame")
+        hairButtonRow.Name = "ButtonRow"
+        hairButtonRow.LayoutOrder = 4
+        hairButtonRow.BackgroundTransparency = 1
+        hairButtonRow.BorderSizePixel = 0
+        hairButtonRow.Size = UDim2.new(1, 0, 0.2, 0)
+        hairButtonRow.Parent = hairColumn
+
+        local function CreateHairButton(buttonName, buttonText, horizontalAlignment)
+            local hairButton = Instance.new("TextButton")
+            hairButton.Name = buttonName
+            hairButton.AutoButtonColor = false
+            hairButton.BackgroundColor3 = headerColor
+            hairButton.BorderSizePixel = 0
+            hairButton.AnchorPoint = Vector2.new(horizontalAlignment, 0.5)
+            hairButton.Position = UDim2.new(horizontalAlignment, 0, 0.5, 0)
+            hairButton.Size = UDim2.new(0.48, 0, 1, 0)
+            hairButton.FontFace = settingsFont
+            hairButton.Text = buttonText
+            hairButton.TextColor3 = normalTextColor
+            hairButton.TextStrokeColor3 = Color3.new(0, 0, 0)
+            hairButton.TextStrokeTransparency = 0
+            hairButton.TextScaled = true
+            hairButton.Parent = hairButtonRow
+
+            local hairButtonStroke = Instance.new("UIStroke")
+            hairButtonStroke.Color = headerStrokeColor
+            hairButtonStroke.Thickness = 2
+            hairButtonStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+            hairButtonStroke.Parent = hairButton
+
+            local hairButtonTextConstraint = Instance.new("UITextSizeConstraint")
+            hairButtonTextConstraint.MaxTextSize = 20
+            hairButtonTextConstraint.Parent = hairButton
+
+            return hairButton
+        end
+
+        local hairSaveButton = CreateHairButton("SaveButton", "Save", 0)
+        local hairCloseButton = CreateHairButton("CloseHairButton", "Close", 1)
+
+        local hairSaveToken = 0
+        hairSaveButton.Activated:Connect(function()
+            playNextSound()
+            CloseAllDropdowns()
+
+            local saved = HairSystem.WriteSaved(pickedHairName)
+            hairSaveToken = hairSaveToken + 1
+            local myToken = hairSaveToken
+            hairSaveButton.Text = saved and "Saved!" or "Failed"
+            task.delay(1.2, function()
+                if hairSaveToken == myToken then
+                    hairSaveButton.Text = "Save"
+                end
+            end)
+        end)
+
+        -- A hair change finishing (its asset can take a moment to load) rebuilds the
+        -- viewport copy, so the preview shows what actually ended up on the character.
+        local baseHairOnChanged = HairSystem.OnChanged
+        HairSystem.OnChanged = function()
+            if baseHairOnChanged then
+                baseHairOnChanged()
+            end
+            if hairWindowOpen then
+                RefreshHairLabel()
+                BuildHairPreview(true)
+            end
+        end
+
+        -- ----- Show / hide ------------------------------------------------------
+        local function ShowHairWindow()
+            CloseAllDropdowns()
+            pickedHairName = HairSystem.SelectedName
+            RefreshHairLabel()
+            RefreshHairColorLabels() -- a saved colour is applied after this window is built
+            BuildHairPreview(false)
+            hairWindowOpen = true
+            hairWindow.Visible = true
+        end
+
+        HideHairWindow = function()
+            if not hairWindowOpen then return end
+            hairWindowOpen = false
+            hairWindow.Visible = false
+            DestroyHairPreview()
+            CloseAllDropdowns()
+        end
+
+        ToggleHairWindow = function()
+            if hairWindowOpen then
+                HideHairWindow()
+            else
+                ShowHairWindow()
+            end
+        end
+
+        hairCloseButton.Activated:Connect(function()
+            playNextSound()
+            HideHairWindow()
+        end)
+    end
+    -- =========================================================================
+
     local buttonRow = Instance.new("Frame")
     buttonRow.Name = "ButtonRow"
     buttonRow.LayoutOrder = #settingRowDefinitions + 2
@@ -2785,6 +3875,7 @@ task.spawn(function()
         CloseAllDropdowns()
         if tabName ~= "DLC" then
             HideClothingWindow() -- the Clothing window belongs to the DLC tab
+            HideHairWindow() -- so does the Hair window
         end
 
         local isSettingsTab = tabName == "Settings"
@@ -2955,6 +4046,7 @@ task.spawn(function()
         cancelActiveTweens()
         CloseAllDropdowns()
         HideClothingWindow()
+        HideHairWindow()
 
         playTween(characterImage, descendTweenInfo, {
             Position = UDim2.new(0, 0, 0, 945),
@@ -3236,6 +4328,7 @@ end
 local function PlayHitVFX(targetModel)
     local targetRoot = targetModel:FindFirstChild("HumanoidRootPart") or targetModel
     local attachment = ReplicatedStorage.Emotes.VFX.RealAssets["Dragon Combo"].Punch.Attachment:Clone()
+    HairSystem.TintPunchEffect(attachment) -- takes the hair colour (Base Hair color / Ultimate Color)
     attachment.Parent = targetRoot
     for _, emitter in next, attachment:GetChildren() do
         if emitter:IsA("ParticleEmitter") then
@@ -3256,6 +4349,7 @@ local function PlayWindVFX()
     local windEmitter = attachment and attachment:FindFirstChild("Wind")
     if windEmitter then
         windEmitter = windEmitter:Clone()
+        HairSystem.TintPunchEffect(windEmitter) -- takes the hair colour (Base Hair color / Ultimate Color)
         windEmitter.Parent = windPart
         windEmitter:Emit(10)
     end
@@ -3420,6 +4514,12 @@ local HAIR_BURST_COLORS = {
 
 local function PlayHairBurst(kind)
     local color = HAIR_BURST_COLORS[kind]
+    -- SSJ = the Base Hair color's burst, SSJB = the Ultimate Color's burst
+    if kind == "SSJ" then
+        color = HairSystem.GetBaseOption().burst
+    elseif kind == "SSJB" then
+        color = HairSystem.GetUltimateOption().burst
+    end
     if not color then return end
 
     local function MakeSphere(diameter, transparency)
@@ -3509,7 +4609,7 @@ local function TriggerSSJBEmote()
         AnimSent = 96993907314948,
         RealBind = l_Accessory_4,
         NoInsertion = true,
-        Colour = ssjbColor
+        Colour = HairSystem.GetUltimateOption().vfx
     })
     local v3191 = {}
     local v3192 = {}
@@ -3542,6 +4642,10 @@ local function TriggerSSJBEmote()
 
         if ssjbActive and l_Accessory_4 and l_Accessory_4.Parent then
 
+            if HairSystem.SetForm("SSJB") then
+                pcall(PlayHairBurst, "SSJB")
+            end
+
             local oldHair = character:FindFirstChild("GokuSSJHair")
             if oldHair then
                 local oldLight = oldHair:FindFirstChildOfClass("PointLight")
@@ -3562,7 +4666,7 @@ local function TriggerSSJBEmote()
                     weld.Part1 = newHair
                     weld.Parent = newHair
                     if oldLight then
-                        oldLight.Color  = Color3.fromRGB(100, 180, 255)
+                        oldLight.Color  = HairSystem.LightColors.SSJB
                         oldLight.Parent = newHair
                     end
                     pcall(PlayHairBurst, "SSJB")
@@ -3596,7 +4700,7 @@ local function TriggerSSJBEmote()
                     if l_SpecialMesh_0 then
                         l_SpecialMesh_0.TextureId = ""
                         local v3204 = ReplicatedStorage.Resources.DeathEffect.Template:Clone()
-                        v3204.Color3 = Color3.new(0.25, 0.75, 1.0)
+                        v3204.Color3 = HairSystem.GetUltimateOption().death
                         v3204.Parent = v3201
                     end
                 end
@@ -3656,16 +4760,11 @@ local function TriggerSSJBEmote()
                         v3218:SetAttribute("LimitedAura", true)
                         v3218:SetAttribute("InnerRageAura", true)
                         if v3218:IsA("ParticleEmitter") or v3218:IsA("Beam") then
-                            v3218.Color = ColorSequence.new({
-                                ColorSequenceKeypoint.new(0,   Color3.new(0.0,  0.2,  0.85)),
-                                ColorSequenceKeypoint.new(0.3, Color3.new(0.05, 0.45, 1.0)),
-                                ColorSequenceKeypoint.new(0.7, Color3.new(0.2,  0.7,  1.0)),
-                                ColorSequenceKeypoint.new(1,   Color3.new(0.6,  0.9,  1.0)),
-                            })
+                            v3218.Color = HairSystem.AuraSequence(HairSystem.GetUltimateOption())
                         end
                         if v3218:IsA("PointLight") or v3218:IsA("SpotLight") or v3218:IsA("SurfaceLight") then
                             v3218.Brightness = v3218.Brightness * 1.3
-                            v3218.Color = Color3.new(0.1, 0.55, 1.0)
+                            v3218.Color = HairSystem.GetUltimateOption().auraLight
                         end
                         task.delay(200, function()
                             v3218.Enabled = false
@@ -3734,7 +4833,7 @@ local function AddSSJHair()
 end
 
 local hairLight = Instance.new("PointLight")
-hairLight.Color      = Color3.fromRGB(255, 255, 150)
+hairLight.Color      = HairSystem.LightColors.SSJ
 hairLight.Range      = 8
 hairLight.Brightness = 1
 hairLight.Enabled    = true
@@ -3748,6 +4847,14 @@ local ssjbRevertAnimIds = {
 }
 
 local function RevertSSJBHairToSSJ()
+    if HairSystem.IsActive() then
+        if HairSystem.CurrentForm == "SSJB" then
+            HairSystem.SetForm("SSJ")
+            pcall(PlayHairBurst, "SSJ")
+        end
+        return
+    end
+
     local oldHair = character:FindFirstChild("GokuSSJHair")
     if not oldHair or not oldHair:GetAttribute("IsSSJB") then return end
 
@@ -3769,9 +4876,10 @@ local function RevertSSJBHairToSSJ()
     ssjHair = newHair
 
     if oldLight then
-        oldLight.Color  = Color3.fromRGB(255, 255, 150)
+        oldLight.Color  = HairSystem.LightColors.SSJ
         oldLight.Parent = newHair
     end
+    HairSystem.SetForm("SSJ")
     pcall(PlayHairBurst, "SSJ")
 end
 
@@ -3826,13 +4934,18 @@ local function SetSpiritBombHair(kind)
         spiritBombLightTween = nil
     end
 
+    if HairSystem.SetForm(kind) then
+        pcall(PlayHairBurst, kind)
+        return
+    end
+
     local oldHair = character:FindFirstChild("GokuSSJHair")
     local light = oldHair and oldHair:FindFirstChildWhichIsA("PointLight", true)
     if light then light.Parent = nil end
     if oldHair then oldHair:Destroy() end
     if not light then
         light = Instance.new("PointLight")
-        light.Color = Color3.fromRGB(255, 255, 150)
+        light.Color = HairSystem.LightColors.SSJ
         light.Range = 8
         light.Brightness = 1
     end
@@ -3897,15 +5010,17 @@ local function SetSpiritBombHair(kind)
         spiritBombLightTween = TweenService:Create(
             light,
             TweenInfo.new(SPIRIT_BOMB_LIGHT_FADE, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut),
-            {Color = Color3.fromRGB(100, 180, 255)}
+            {Color = HairSystem.LightColors.SSJB}
         )
         spiritBombLightTween:Play()
     elseif kind == "SSJ" then
-        light.Color = Color3.fromRGB(255, 255, 150)
+        light.Color = HairSystem.LightColors.SSJ
     end
 
     pcall(PlayHairBurst, kind)
 end
+
+HairSystem.RestoreDefaultHair = SetSpiritBombHair
 
 local function StopSpiritBombAura()
     local objs = spiritBombAura
@@ -3949,16 +5064,11 @@ local function StartSpiritBombAura()
         table.insert(items, clone)
         for _, d in ipairs(items) do
             if d:IsA("ParticleEmitter") then
-                d.Color = ColorSequence.new({
-                    ColorSequenceKeypoint.new(0,   Color3.new(0.0,  0.2,  0.85)),
-                    ColorSequenceKeypoint.new(0.3, Color3.new(0.05, 0.45, 1.0)),
-                    ColorSequenceKeypoint.new(0.7, Color3.new(0.2,  0.7,  1.0)),
-                    ColorSequenceKeypoint.new(1,   Color3.new(0.6,  0.9,  1.0)),
-                })
+                d.Color = HairSystem.AuraSequence(HairSystem.GetUltimateOption())
                 d.Enabled = true
             elseif d:IsA("PointLight") then
                 d.Brightness = d.Brightness * 1.3
-                d.Color      = Color3.new(0.1, 0.55, 1.0)
+                d.Color      = HairSystem.GetUltimateOption().auraLight
                 d.Enabled    = true
             end
         end
@@ -4060,6 +5170,9 @@ task.spawn(function()
     ClothingSystem.ApplySaved()
 end)
 
+-- hair saved from the Hair window (DLC tab) replaces the default hair (AddSSJHair already ran above)
+HairSystem.ApplySaved()
+
 local ssjSkinColor = Color3.fromRGB(241, 194, 154)
 for _, part in pairs(character:GetDescendants()) do
     if part:IsA("BasePart") then
@@ -4147,9 +5260,9 @@ end)
 
 -- ============================================================
 --  PARTICIPANT SYSTEM (ported from 23)
---  Anyone who qualifies (chats the phrase / plays the qualify animation) gets three of
---  MY effects shown on THEIR character: dodge sounds, teleport VFX and the SSJB
---  transformation. Deliberately NOT included for participants: the morph (outfit, skin,
+--  Anyone who qualifies (chats the phrase / plays the qualify animation) gets four of
+--  MY effects shown on THEIR character: dodge sounds, teleport VFX, the SSJB
+--  transformation and their M1 punch sounds + visuals (tinted with MY hair colour). Deliberately NOT included for participants: the morph (outfit, skin,
 --  face, hair), the SSJB hair + hair burst, the face change, the screen flashes and
 --  every animation (their own client plays those and they replicate).
 -- ============================================================
@@ -4386,6 +5499,93 @@ function PX.StartSSJB(inst)
     end)
 end
 
+-- ---------------------------------------------------------------- M1 punch sounds + visuals
+-- The same effects my own M1 plays (wind, swing sound, hit particles, hit sound), shown on a
+-- participant's punches. Their own client plays them locally, so nobody else sees or hears
+-- them unless they are recreated here. The colour is MY current hair colour
+-- (HairSystem.GetPunchColor), since a participant's own colours can't be known.
+PX.M1Min          = 10    -- swing / hit sounds reach (studs): full volume inside Min, silent past Max
+PX.M1Max          = 150
+PX.M1FlagSeconds  = 0.25  -- the game's M1 animation and my replacement start together: count once
+PX.M1HitWindow    = 0.2   -- seconds the hit box stays out after the swing starts
+PX.M1Anims        = {}    -- digits-only animation id -> combo data (the game's M1 anims + my replacements)
+for animId, data in pairs(comboAnimMap) do
+    local originalId = tostring(animId):match("%d+")
+    if originalId then PX.M1Anims[originalId] = data end
+    local replacementId = tostring(data.hitVfxId):match("%d+")
+    if replacementId then PX.M1Anims[replacementId] = data end
+end
+
+function PX.PlayM1(inst, data)
+    local char = inst.char
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root or inst.dead then return end
+
+    -- wind in front of the punch
+    pcall(function()
+        local windPart = Instance.new("Part")
+        windPart.Anchored     = true
+        windPart.CanCollide   = false
+        windPart.CanQuery     = false
+        windPart.CanTouch     = false
+        windPart.Transparency = 1
+        windPart.CFrame       = root.CFrame * CFrame.new(0, 0, -5)
+        windPart.Parent       = Workspace
+        Debris:AddItem(windPart, 1)
+        local windAttachment = ReplicatedStorage.Resources.KJEffects.DropkickExtra.firstHit:GetChildren()[3]
+        local windEmitter = windAttachment and windAttachment:FindFirstChild("Wind")
+        if windEmitter then
+            windEmitter = windEmitter:Clone()
+            HairSystem.TintPunchEffect(windEmitter)
+            windEmitter.Parent = windPart
+            windEmitter:Emit(10)
+        end
+    end)
+
+    -- swing sound, 3D on the participant
+    local swingSound = comboSwingSounds[data.key]
+    if swingSound then
+        PX.PlaySpatial(swingSound, root, PX.M1Min, PX.M1Max)
+    end
+
+    -- hit particles + hit sound on whoever the punch lands on (checked every frame for a
+    -- moment, so it does not depend on Touched firing for a remote character)
+    local overlap = OverlapParams.new()
+    overlap.FilterType = Enum.RaycastFilterType.Exclude
+    overlap.FilterDescendantsInstances = { char }
+    local startedAt = os.clock()
+    while not inst.dead and os.clock() - startedAt < PX.M1HitWindow do
+        local currentRoot = char:FindFirstChild("HumanoidRootPart")
+        if not currentRoot then return end
+        local nearbyParts = Workspace:GetPartBoundsInBox(currentRoot.CFrame * CFrame.new(0, 0, -5), Vector3.new(10, 8, 10), overlap)
+        for _, nearbyPart in ipairs(nearbyParts) do
+            local hitModel = nearbyPart:FindFirstAncestorOfClass("Model")
+            if hitModel and hitModel ~= char and hitModel:FindFirstChildOfClass("Humanoid") then
+                local hitRoot = hitModel:FindFirstChild("HumanoidRootPart") or hitModel:FindFirstChildWhichIsA("BasePart")
+                if hitRoot then
+                    pcall(function()
+                        local hitAttachment = ReplicatedStorage.Emotes.VFX.RealAssets["Dragon Combo"].Punch.Attachment:Clone()
+                        HairSystem.TintPunchEffect(hitAttachment)
+                        hitAttachment.Parent = hitRoot
+                        Debris:AddItem(hitAttachment, 2)
+                        for _, hitEmitter in ipairs(hitAttachment:GetChildren()) do
+                            if hitEmitter:IsA("ParticleEmitter") then
+                                hitEmitter:Emit(15)
+                            end
+                        end
+                    end)
+                    local hitSound = comboHitSounds[data.key]
+                    if hitSound then
+                        PX.PlaySpatial(hitSound, hitRoot, PX.M1Min, PX.M1Max)
+                    end
+                end
+                return
+            end
+        end
+        RunService.Heartbeat:Wait()
+    end
+end
+
 -- ---------------------------------------------------------------- animation detection
 function PX.HandleTrack(inst, track)
     local animation = track.Animation
@@ -4400,6 +5600,8 @@ function PX.HandleTrack(inst, track)
         kind = "ssjb"
     elseif PX.SSJBRevertAnims[id] then
         kind = "revert"
+    elseif PX.M1Anims[id] then
+        kind = "m1"
     else
         return
     end
@@ -4420,6 +5622,10 @@ function PX.HandleTrack(inst, track)
         if now - inst.lastSSJB < PX.SSJBFlagSeconds then return end
         inst.lastSSJB = now
         task.spawn(PX.StartSSJB, inst)
+    elseif kind == "m1" then
+        if now - inst.lastM1 < PX.M1FlagSeconds then return end
+        inst.lastM1 = now
+        task.spawn(PX.PlayM1, inst, PX.M1Anims[id])
     else
         -- the beam sequence: aura goes away after it, same delay as mine
         local token = inst.ssjbToken
@@ -4462,7 +5668,7 @@ local function createActorInstance(plr, char, isLocal)
     local inst = {
         plr = plr, char = char, dead = false, conns = {},
         handled = setmetatable({}, { __mode = "k" }),
-        lastTeleport = -math.huge, lastSSJB = -math.huge,
+        lastTeleport = -math.huge, lastSSJB = -math.huge, lastM1 = -math.huge,
         ssjbToken = 0, ssjb = nil,
     }
 
