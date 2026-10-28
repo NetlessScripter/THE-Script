@@ -6980,7 +6980,15 @@ sound:Play()
 			if not isPlayer and not isDummy then return end
 			hit = true
 			touchConn:Disconnect()
+			local tpChar, tpHRP = otherChar, otherHRP -- the target this punch hit (the globals can be overwritten meanwhile)
 			task.delay(1, function()
+-- no teleport (effects, sounds or move) behind a target that is already dead / gone
+local function targetDead()
+	local tpHum = tpChar and tpChar:FindFirstChildOfClass("Humanoid")
+	if not (tpHum and tpHRP and tpHRP.Parent and tpChar.Parent) then return true end
+	return tpHum.Health <= 0 or tpHum:GetState() == Enum.HumanoidStateType.Dead
+end
+if targetDead() then return end
 local p = game:GetService("Players")
 local r = game:GetService("ReplicatedStorage")
 local d = game:GetService("Debris")
@@ -7055,8 +7063,8 @@ task.wait(0.01)
 vis(true)
 task.wait(0.01)
 vis(false)
-				if ACTOR_IS_LOCAL and HumanoidRootPart and HumanoidRootPart.Parent then
-					HumanoidRootPart.CFrame = otherHRP.CFrame * CFrame.new(0, 0, 3)
+				if ACTOR_IS_LOCAL and HumanoidRootPart and HumanoidRootPart.Parent and not targetDead() then
+					HumanoidRootPart.CFrame = tpHRP.CFrame * CFrame.new(0, 0, 3)
 				end
 			end)
 		end)
@@ -10481,6 +10489,36 @@ end
 
 -- Second qualify method: anyone who plays this animation is auto-added
 EVENT_QUALIFY_ANIM_ID = "77366695973257"
+EVENT_QUALIFY_ANIM_SECONDS = 10 -- same length as the multiplayer trigger
+
+-- When we detect someone's multiplayer animation, play it on ourselves too, so nobody has
+-- to wait for us to do it as well. Skipped while it is already playing on us (we pressed the
+-- trigger ourselves, or an earlier detection started it), so it never doubles up or restarts.
+function EventQualify.FireOnMe()
+	if EventQualify.myAnimActive then return end
+	local char = REAL_LOCAL_PLAYER.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if not hum or hum.Health <= 0 then return end
+	local animator = hum:FindFirstChildOfClass("Animator") or hum
+
+	for _, t in ipairs(animator:GetPlayingAnimationTracks()) do
+		local a = t.Animation
+		if a and a.AnimationId:find(EVENT_QUALIFY_ANIM_ID, 1, true) then return end
+	end
+
+	local anim = Instance.new("Animation")
+	anim.AnimationId = "rbxassetid://" .. EVENT_QUALIFY_ANIM_ID
+	local ok, track = pcall(function() return animator:LoadAnimation(anim) end)
+	if not ok or not track then return end
+
+	EventQualify.myAnimActive = true
+	track.Looped = true
+	track:Play()
+	task.delay(EVENT_QUALIFY_ANIM_SECONDS, function()
+		pcall(function() track:Stop() end)
+		EventQualify.myAnimActive = false
+	end)
+end
 
 do
 	local hooked = setmetatable({}, { __mode = "k" })
@@ -10512,6 +10550,7 @@ do
 			snd.Ended:Connect(function() snd:Destroy() end)
 			snd:Play()
 		end)
+		pcall(EventQualify.FireOnMe) -- do the animation on us too
 		registerParticipant(plr)
 	end
 
