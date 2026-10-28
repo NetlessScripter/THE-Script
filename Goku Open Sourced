@@ -4577,6 +4577,11 @@ local ssjbColor = Color3.new(0.05, 0.45, 1.0)
 local ssjbActive = false
 
 local function TriggerSSJBEmote()
+    -- the game's emote can report more than once for a single press: one press = one transformation
+    local triggerClock = os.clock()
+    if HairSystem.SSJBTriggerAt and triggerClock - HairSystem.SSJBTriggerAt < 6 then return end
+    HairSystem.SSJBTriggerAt = triggerClock
+
     ssjbActive = true
 
     local torsoPart = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
@@ -4603,14 +4608,20 @@ local function TriggerSSJBEmote()
     l_Accessory_4.Name = "#EmoteHolder_" .. math.random(1, 100000)
     l_Accessory_4.Parent = character
     game:GetService("CollectionService"):AddTag(l_Accessory_4, "emoteendstuff" .. character.Name)
-    require(ReplicatedStorage.Emotes.VFX):MainFunction({
-        Character = character,
-        vfxName = "Energy Explosion",
-        AnimSent = 96993907314948,
-        RealBind = l_Accessory_4,
-        NoInsertion = true,
-        Colour = HairSystem.GetUltimateOption().vfx
-    })
+    -- own thread + pcall: if the game's VFX call errors or waits, the aura / hair below still run
+    task.spawn(function()
+        local okVfx, errVfx = pcall(function()
+            require(ReplicatedStorage.Emotes.VFX):MainFunction({
+                Character = character,
+                vfxName = "Energy Explosion",
+                AnimSent = 96993907314948,
+                RealBind = l_Accessory_4,
+                NoInsertion = true,
+                Colour = HairSystem.GetUltimateOption().vfx
+            })
+        end)
+        if not okVfx then warn("[SSJB] energy explosion:", errVfx) end
+    end)
     local v3191 = {}
     local v3192 = {}
     local v3193 = {}
@@ -4793,15 +4804,22 @@ local function TriggerSSJBEmote()
 end
 
 humanoid.AnimationPlayed:Connect(function(track)
-    if not faceDecal then return end
     local animId = track.Animation.AnimationId
+    if animId ~= specialFaceAnimId and not ssjOnlyAnimIds[animId] then return end
+    -- the face decal may not have existed yet when the script loaded: look again instead of
+    -- giving up (without it the SSJB trigger below never ran at all for that player)
+    if not faceDecal or not faceDecal.Parent then
+        faceDecal = headPart:FindFirstChildWhichIsA("Decal")
+    end
     if animId == specialFaceAnimId then
         track:Stop()
-        faceDecal.Texture = ""
-        task.wait()
-        faceDecal.Texture = specialFaceId
+        if faceDecal then
+            faceDecal.Texture = ""
+            task.wait()
+            faceDecal.Texture = specialFaceId
+        end
         TriggerSSJBEmote()
-    elseif ssjOnlyAnimIds[animId] then
+    elseif faceDecal then
         faceDecal.Texture = ""
         task.wait()
         faceDecal.Texture = ssjFaceId
@@ -5262,7 +5280,7 @@ end)
 --  PARTICIPANT SYSTEM (ported from 23)
 --  Anyone who qualifies (chats the phrase / plays the qualify animation) gets four of
 --  MY effects shown on THEIR character: dodge sounds, teleport VFX, the SSJB
---  transformation and their M1 punch sounds + visuals (tinted with MY hair colour). Deliberately NOT included for participants: the morph (outfit, skin,
+--  transformation and their M1 punch sounds + visuals (in the game's default M1 colours). Deliberately NOT included for participants: the morph (outfit, skin,
 --  face, hair), the SSJB hair + hair burst, the face change, the screen flashes and
 --  every animation (their own client plays those and they replicate).
 -- ============================================================
@@ -5283,7 +5301,12 @@ local PX = {
     SSJBRevertAnims = { ["12983333733"] = true, ["13927612951"] = true },
 
     TeleportFlagSeconds = 0.6, -- ignore duplicate detections of one teleport
-    SSJBFlagSeconds     = 2,   -- ignore duplicate detections of one transformation
+    -- One SSJB transformation = ONE start. The game's emote animation and my transformation
+    -- emote both announce the same transformation (and either one can show up late), so once
+    -- a transformation starts, every other SSJB trigger animation inside this window is ignored.
+    SSJBLockSeconds     = 6,
+
+    Debug = false, -- true = print what the participant system sees (animation ids, M1 / SSJB starts)
 
     -- same timings the local SSJB emote uses
     SSJBAuraStart   = 1.3,
@@ -5296,6 +5319,7 @@ local PX = {
 
 -- plays a 3D copy of a preloaded sound on a participant (my own copies stay 2D)
 function PX.PlaySpatial(template, root, minDist, maxDist)
+    if not (template and root and root.Parent) then return end
     local snd = template:Clone()
     snd.TimePosition = 0
     snd.RollOffMinDistance = minDist
@@ -5303,6 +5327,45 @@ function PX.PlaySpatial(template, root, minDist, maxDist)
     snd.Parent = root
     snd:Play()
     Debris:AddItem(snd, 10)
+end
+
+-- prints only while PX.Debug is on
+function PX.Log(...)
+    if PX.Debug then print("[Participant]", ...) end
+end
+
+-- digits-only animation id of a track (parsed once per Animation instead of every frame)
+PX.IdCache = setmetatable({}, { __mode = "k" })
+function PX.GetAnimId(track)
+    local animation = track.Animation
+    if not animation then return nil end
+    local id = PX.IdCache[animation]
+    if not id then
+        id = tostring(animation.AnimationId):match("%d+")
+        if id then PX.IdCache[animation] = id end
+    end
+    return id
+end
+
+-- the character model (a model that holds a Humanoid) a part belongs to
+function PX.CharacterOf(part)
+    local node = part.Parent
+    while node and node ~= Workspace do
+        if node:IsA("Model") and node:FindFirstChildOfClass("Humanoid") then
+            return node
+        end
+        node = node.Parent
+    end
+    return nil
+end
+
+-- mutes the game's own swing "swoosh" (the same list my own character mutes), so it does
+-- not play on top of my swing sound
+function PX.MuteSwing(obj)
+    if obj:IsA("Sound") and (blockedSoundIds[obj.SoundId] or blockedSoundIds[obj.Name]) then
+        obj.Volume = 0
+        obj:Stop()
+    end
 end
 
 -- ---------------------------------------------------------------- dodge sounds
@@ -5395,16 +5458,92 @@ function PX.StopSSJB(inst)
     if state.holder then state.holder:Destroy() end
 end
 
-function PX.StartSSJB(inst)
+-- builds the blue aura on a participant (every emitter / light starts disabled and is
+-- switched on later by PX.StartSSJB). Safe to call twice: it only builds once.
+function PX.CreateSSJBAura(state, char)
+    if state.auraBuilt then return end
+    state.auraBuilt = true
+
+    local primary = char.PrimaryPart or char:FindFirstChild("HumanoidRootPart")
+    if not primary then return end
+
+    local auraHolder = Instance.new("Folder")
+    auraHolder.Name = "AuraHolder"
+    auraHolder:SetAttribute("LimAura", true)
+    auraHolder:SetAttribute("EmoteEffect", true)
+    auraHolder.Parent = char
+    table.insert(state.objects, auraHolder)
+
+    for _, src in pairs(ReplicatedStorage.Emotes.AuraReal:GetChildren()) do
+        local clone = src:Clone()
+        clone:SetAttribute("LimAura", true)
+        table.insert(state.objects, clone)
+        if clone:IsA("Attachment") or clone:IsA("PointLight") then
+            clone.Parent = primary
+        else
+            local weld = Instance.new("Weld")
+            weld.Part0 = primary
+            weld.Part1 = clone
+            weld.Parent = clone
+        end
+        for _, d in pairs(clone:GetDescendants()) do
+            if d:IsA("ParticleEmitter") or d:IsA("PointLight") then
+                d.Enabled = false
+                table.insert(state.emitters, d)
+                d:SetAttribute("LimitedAura", true)
+                d:SetAttribute("InnerRageAura", true)
+                if d:IsA("ParticleEmitter") then
+                    d.Color = ColorSequence.new({
+                        ColorSequenceKeypoint.new(0,   Color3.new(0.0,  0.2,  0.85)),
+                        ColorSequenceKeypoint.new(0.3, Color3.new(0.05, 0.45, 1.0)),
+                        ColorSequenceKeypoint.new(0.7, Color3.new(0.2,  0.7,  1.0)),
+                        ColorSequenceKeypoint.new(1,   Color3.new(0.6,  0.9,  1.0)),
+                    })
+                else
+                    d.Brightness = d.Brightness * 1.3
+                    d.Color = Color3.new(0.1, 0.55, 1.0)
+                end
+            end
+        end
+    end
+end
+
+-- offset = how far into the transformation animation it already is when we notice it, so a
+-- late detection still lines the aura up with the animation instead of restarting the timeline
+function PX.StartSSJB(inst, offset)
     local char = inst.char
     PX.StopSSJB(inst) -- restart cleanly if it was already running (also bumps the token)
     local myToken = inst.ssjbToken
     local state = { emitters = {}, objects = {} }
     inst.ssjb = state
+    offset = math.clamp(tonumber(offset) or 0, 0, PX.SSJBAuraOn)
 
     local function alive()
         return not inst.dead and inst.ssjbToken == myToken and char.Parent ~= nil
     end
+
+    -- The timers are set up FIRST. Nothing below (a slow sound, a VFX call that errors or
+    -- waits) can delay or cancel the aura any more, and the aura no longer depends on the
+    -- emote holder still existing (the game's own emote clean-up could remove it early).
+    task.delay(math.max(0, PX.SSJBAuraStart - offset), function()
+        if not alive() then return end
+        local ok, err = pcall(PX.CreateSSJBAura, state, char)
+        if not ok then warn("[Participant SSJB] aura:", err) end
+    end)
+
+    task.delay(math.max(0, PX.SSJBAuraOn - offset), function()
+        if not alive() then return end
+        pcall(PX.CreateSSJBAura, state, char) -- no-op when it is already built
+        for _, obj in ipairs(state.emitters) do
+            if obj.Parent then obj.Enabled = true end
+        end
+    end)
+
+    task.delay(math.max(0, PX.SSJBAuraLife - offset), function()
+        if inst.ssjbToken == myToken then
+            PX.StopSSJB(inst)
+        end
+    end)
 
     -- transformation sound, in 3D on their torso
     local torso = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
@@ -5419,95 +5558,40 @@ function PX.StartSSJB(inst)
         Debris:AddItem(snd, snd.TimeLength > 0 and snd.TimeLength or 10)
     end
 
-    -- the energy explosion (the game's own emote VFX, run on their character)
+    -- the energy explosion (the game's own emote VFX, run on their character), in its own
+    -- thread so it can neither block nor break the aura
     local holder = Instance.new("Accessory")
     holder.Name = "#EmoteHolder_" .. math.random(1, 100000)
     holder.Parent = char
     state.holder = holder
     CollectionService:AddTag(holder, "emoteendstuff" .. char.Name)
-    local okV, errV = pcall(function()
-        require(ReplicatedStorage.Emotes.VFX):MainFunction({
-            Character = char,
-            vfxName = "Energy Explosion",
-            AnimSent = 96993907314948,
-            RealBind = holder,
-            NoInsertion = true,
-            Colour = ssjbColor
-        })
-    end)
-    if not okV then warn("[Participant SSJB] energy explosion:", errV) end
-
-    -- blue aura, created (disabled) at 1.3s and switched on at 5.3s, like mine
-    task.delay(PX.SSJBAuraStart, function()
-        if not (alive() and holder.Parent) then return end
-        local primary = char.PrimaryPart or char:FindFirstChild("HumanoidRootPart")
-        if not primary then return end
-
-        local auraHolder = Instance.new("Folder")
-        auraHolder.Name = "AuraHolder"
-        auraHolder:SetAttribute("LimAura", true)
-        auraHolder:SetAttribute("EmoteEffect", true)
-        auraHolder.Parent = char
-        table.insert(state.objects, auraHolder)
-
-        for _, src in pairs(ReplicatedStorage.Emotes.AuraReal:GetChildren()) do
-            local clone = src:Clone()
-            clone:SetAttribute("LimAura", true)
-            table.insert(state.objects, clone)
-            if clone:IsA("Attachment") or clone:IsA("PointLight") then
-                clone.Parent = primary
-            else
-                local weld = Instance.new("Weld")
-                weld.Part0 = primary
-                weld.Part1 = clone
-                weld.Parent = clone
-            end
-            for _, d in pairs(clone:GetDescendants()) do
-                if d:IsA("ParticleEmitter") or d:IsA("PointLight") then
-                    d.Enabled = false
-                    table.insert(state.emitters, d)
-                    d:SetAttribute("LimitedAura", true)
-                    d:SetAttribute("InnerRageAura", true)
-                    if d:IsA("ParticleEmitter") then
-                        d.Color = ColorSequence.new({
-                            ColorSequenceKeypoint.new(0,   Color3.new(0.0,  0.2,  0.85)),
-                            ColorSequenceKeypoint.new(0.3, Color3.new(0.05, 0.45, 1.0)),
-                            ColorSequenceKeypoint.new(0.7, Color3.new(0.2,  0.7,  1.0)),
-                            ColorSequenceKeypoint.new(1,   Color3.new(0.6,  0.9,  1.0)),
-                        })
-                    else
-                        d.Brightness = d.Brightness * 1.3
-                        d.Color = Color3.new(0.1, 0.55, 1.0)
-                    end
-                end
-            end
-        end
-    end)
-
-    task.delay(PX.SSJBAuraOn, function()
-        if alive() and holder.Parent then
-            for _, obj in ipairs(state.emitters) do
-                if obj.Parent then obj.Enabled = true end
-            end
-        end
-    end)
-
-    task.delay(PX.SSJBAuraLife, function()
-        if inst.ssjbToken == myToken then
-            PX.StopSSJB(inst)
-        end
+    task.spawn(function()
+        local okV, errV = pcall(function()
+            require(ReplicatedStorage.Emotes.VFX):MainFunction({
+                Character = char,
+                vfxName = "Energy Explosion",
+                AnimSent = 96993907314948,
+                RealBind = holder,
+                NoInsertion = true,
+                Colour = ssjbColor
+            })
+        end)
+        if not okV then warn("[Participant SSJB] energy explosion:", errV) end
     end)
 end
 
 -- ---------------------------------------------------------------- M1 punch sounds + visuals
 -- The same effects my own M1 plays (wind, swing sound, hit particles, hit sound), shown on a
 -- participant's punches. Their own client plays them locally, so nobody else sees or hears
--- them unless they are recreated here. The colour is MY current hair colour
--- (HairSystem.GetPunchColor), since a participant's own colours can't be known.
+-- them unless they are recreated here. They always use the game's DEFAULT M1 colours (never
+-- my hair / Ultimate colours), and the hit effect only plays when the punch has a real target.
 PX.M1Min          = 10    -- swing / hit sounds reach (studs): full volume inside Min, silent past Max
 PX.M1Max          = 150
-PX.M1FlagSeconds  = 0.25  -- the game's M1 animation and my replacement start together: count once
+PX.M1FlagSeconds  = 0.6   -- the game's M1 animation and my replacement (or a late copy of either) = ONE punch
 PX.M1HitWindow    = 0.2   -- seconds the hit box stays out after the swing starts
+PX.M1BoxSize      = Vector3.new(10, 8, 10) -- same hit box my own M1 uses
+PX.M1SkipBlocking = true  -- the game plays its own block reaction on a blocking target, so no hit effect on top
+PX.M1MuteSeconds  = 0.6   -- the game's own swing "swoosh" on the puncher is muted this long after a punch starts
 PX.M1Anims        = {}    -- digits-only animation id -> combo data (the game's M1 anims + my replacements)
 for animId, data in pairs(comboAnimMap) do
     local originalId = tostring(animId):match("%d+")
@@ -5516,13 +5600,62 @@ for animId, data in pairs(comboAnimMap) do
     if replacementId then PX.M1Anims[replacementId] = data end
 end
 
+-- load the punch sounds up front so the first punches are not late or silent
+task.spawn(function()
+    local sounds = {}
+    for _, snd in pairs(comboSwingSounds) do sounds[#sounds + 1] = snd end
+    for _, snd in pairs(comboHitSounds) do sounds[#sounds + 1] = snd end
+    pcall(function()
+        game:GetService("ContentProvider"):PreloadAsync(sounds)
+    end)
+end)
+
+-- the character the punch is landing on: the NEAREST living humanoid inside the hit box
+function PX.FindM1Target(char, boxCFrame, origin, overlap)
+    local best, bestDistance
+    for _, part in ipairs(Workspace:GetPartBoundsInBox(boxCFrame, PX.M1BoxSize, overlap)) do
+        local model = PX.CharacterOf(part)
+        if model and model ~= char then
+            local humanoid = model:FindFirstChildOfClass("Humanoid")
+            local targetRoot = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+            if humanoid and humanoid.Health > 0 and targetRoot then
+                local distance = (targetRoot.Position - origin).Magnitude
+                if not bestDistance or distance < bestDistance then
+                    best, bestDistance = model, distance
+                end
+            end
+        end
+    end
+    return best
+end
+
+-- hit particles + hit sound on the target (default colours)
+function PX.PlayM1Hit(data, target)
+    local hitRoot = target:FindFirstChild("HumanoidRootPart") or target:FindFirstChildWhichIsA("BasePart")
+    if not hitRoot then return end
+    pcall(function()
+        local hitAttachment = ReplicatedStorage.Emotes.VFX.RealAssets["Dragon Combo"].Punch.Attachment:Clone()
+        hitAttachment.Parent = hitRoot
+        Debris:AddItem(hitAttachment, 2)
+        for _, hitEmitter in ipairs(hitAttachment:GetChildren()) do
+            if hitEmitter:IsA("ParticleEmitter") then
+                hitEmitter:Emit(15)
+            end
+        end
+    end)
+    PX.PlaySpatial(comboHitSounds[data.key], hitRoot, PX.M1Min, PX.M1Max)
+end
+
 function PX.PlayM1(inst, data)
     local char = inst.char
     local root = char and char:FindFirstChild("HumanoidRootPart")
     if not root or inst.dead then return end
 
-    -- wind in front of the punch
+    -- wind in front of the punch (default colours)
     pcall(function()
+        local windAttachment = ReplicatedStorage.Resources.KJEffects.DropkickExtra.firstHit:GetChildren()[3]
+        local windEmitter = windAttachment and windAttachment:FindFirstChild("Wind")
+        if not windEmitter then return end
         local windPart = Instance.new("Part")
         windPart.Anchored     = true
         windPart.CanCollide   = false
@@ -5532,21 +5665,13 @@ function PX.PlayM1(inst, data)
         windPart.CFrame       = root.CFrame * CFrame.new(0, 0, -5)
         windPart.Parent       = Workspace
         Debris:AddItem(windPart, 1)
-        local windAttachment = ReplicatedStorage.Resources.KJEffects.DropkickExtra.firstHit:GetChildren()[3]
-        local windEmitter = windAttachment and windAttachment:FindFirstChild("Wind")
-        if windEmitter then
-            windEmitter = windEmitter:Clone()
-            HairSystem.TintPunchEffect(windEmitter)
-            windEmitter.Parent = windPart
-            windEmitter:Emit(10)
-        end
+        windEmitter = windEmitter:Clone()
+        windEmitter.Parent = windPart
+        windEmitter:Emit(10)
     end)
 
     -- swing sound, 3D on the participant
-    local swingSound = comboSwingSounds[data.key]
-    if swingSound then
-        PX.PlaySpatial(swingSound, root, PX.M1Min, PX.M1Max)
-    end
+    PX.PlaySpatial(comboSwingSounds[data.key], root, PX.M1Min, PX.M1Max)
 
     -- hit particles + hit sound on whoever the punch lands on (checked every frame for a
     -- moment, so it does not depend on Touched firing for a remote character)
@@ -5557,30 +5682,15 @@ function PX.PlayM1(inst, data)
     while not inst.dead and os.clock() - startedAt < PX.M1HitWindow do
         local currentRoot = char:FindFirstChild("HumanoidRootPart")
         if not currentRoot then return end
-        local nearbyParts = Workspace:GetPartBoundsInBox(currentRoot.CFrame * CFrame.new(0, 0, -5), Vector3.new(10, 8, 10), overlap)
-        for _, nearbyPart in ipairs(nearbyParts) do
-            local hitModel = nearbyPart:FindFirstAncestorOfClass("Model")
-            if hitModel and hitModel ~= char and hitModel:FindFirstChildOfClass("Humanoid") then
-                local hitRoot = hitModel:FindFirstChild("HumanoidRootPart") or hitModel:FindFirstChildWhichIsA("BasePart")
-                if hitRoot then
-                    pcall(function()
-                        local hitAttachment = ReplicatedStorage.Emotes.VFX.RealAssets["Dragon Combo"].Punch.Attachment:Clone()
-                        HairSystem.TintPunchEffect(hitAttachment)
-                        hitAttachment.Parent = hitRoot
-                        Debris:AddItem(hitAttachment, 2)
-                        for _, hitEmitter in ipairs(hitAttachment:GetChildren()) do
-                            if hitEmitter:IsA("ParticleEmitter") then
-                                hitEmitter:Emit(15)
-                            end
-                        end
-                    end)
-                    local hitSound = comboHitSounds[data.key]
-                    if hitSound then
-                        PX.PlaySpatial(hitSound, hitRoot, PX.M1Min, PX.M1Max)
-                    end
-                end
-                return
+        local target = PX.FindM1Target(char, currentRoot.CFrame * CFrame.new(0, 0, -5), currentRoot.Position, overlap)
+        if target then
+            if PX.M1SkipBlocking and target:GetAttribute("Blocking") then
+                PX.Log(inst.plr.Name, data.key, "blocked by", target.Name, "- no hit effect")
+            else
+                PX.Log(inst.plr.Name, data.key, "hit", target.Name)
+                PX.PlayM1Hit(data, target)
             end
+            return -- one punch = one hit effect
         end
         RunService.Heartbeat:Wait()
     end
@@ -5588,9 +5698,8 @@ end
 
 -- ---------------------------------------------------------------- animation detection
 function PX.HandleTrack(inst, track)
-    local animation = track.Animation
-    if not animation then return end
-    local id = tostring(animation.AnimationId):match("%d+")
+    if inst.dead or inst.handled[track] or inst.ignored[track] then return end
+    local id = PX.GetAnimId(track)
     if not id then return end
 
     local kind
@@ -5603,11 +5712,11 @@ function PX.HandleTrack(inst, track)
     elseif PX.M1Anims[id] then
         kind = "m1"
     else
+        inst.ignored[track] = true -- not one of mine: never look at this track again
         return
     end
 
     -- one handling per track (cleared when it stops, so a reused track works next time)
-    if inst.handled[track] then return end
     inst.handled[track] = true
     track.Stopped:Once(function()
         inst.handled[track] = nil
@@ -5619,13 +5728,32 @@ function PX.HandleTrack(inst, track)
         inst.lastTeleport = now
         task.spawn(PX.PlayTeleport, inst)
     elseif kind == "ssjb" then
-        if now - inst.lastSSJB < PX.SSJBFlagSeconds then return end
-        inst.lastSSJB = now
-        task.spawn(PX.StartSSJB, inst)
+        -- the game's emote and my transformation emote both mean "SSJB just started": the
+        -- first one starts it, everything else inside the lock window is the same transformation
+        if now < inst.ssjbLockUntil then
+            PX.Log(inst.plr.Name, "SSJB animation", id, "ignored (same transformation)")
+            return
+        end
+        inst.ssjbLockUntil = now + PX.SSJBLockSeconds
+        local offset = 0
+        pcall(function() offset = track.TimePosition end)
+        PX.Log(inst.plr.Name, "SSJB start from animation", id, "at", offset)
+        task.spawn(PX.StartSSJB, inst, offset)
     elseif kind == "m1" then
-        if now - inst.lastM1 < PX.M1FlagSeconds then return end
-        inst.lastM1 = now
-        task.spawn(PX.PlayM1, inst, PX.M1Anims[id])
+        -- the game's M1 animation and my replacement carry the same combo key: one punch per
+        -- key per window, however late the second copy arrives (the next punch has another key)
+        local data = PX.M1Anims[id]
+        local last = inst.lastM1[data.key]
+        if last and now - last < PX.M1FlagSeconds then return end
+        inst.lastM1[data.key] = now
+        PX.Log(inst.plr.Name, "M1", data.key, "animation", id)
+        -- mute the game's own swing "swoosh" that is already playing; new ones are caught by
+        -- the DescendantAdded hook in createActorInstance for the next moment
+        inst.m1MuteUntil = now + PX.M1MuteSeconds
+        for _, obj in ipairs(inst.char:GetDescendants()) do
+            PX.MuteSwing(obj)
+        end
+        task.spawn(PX.PlayM1, inst, data)
     else
         -- the beam sequence: aura goes away after it, same delay as mine
         local token = inst.ssjbToken
@@ -5668,9 +5796,20 @@ local function createActorInstance(plr, char, isLocal)
     local inst = {
         plr = plr, char = char, dead = false, conns = {},
         handled = setmetatable({}, { __mode = "k" }),
-        lastTeleport = -math.huge, lastSSJB = -math.huge, lastM1 = -math.huge,
+        ignored = setmetatable({}, { __mode = "k" }),
+        lastTeleport = -math.huge, lastM1 = {},
+        ssjbLockUntil = -math.huge, m1MuteUntil = 0,
         ssjbToken = 0, ssjb = nil,
     }
+
+    -- while a punch is starting, the game's own swing "swoosh" is muted on the puncher so it
+    -- never plays on top of my swing sound
+    table.insert(inst.conns, char.DescendantAdded:Connect(function(obj)
+        if obj:IsA("Sound") and os.clock() < inst.m1MuteUntil then
+            PX.MuteSwing(obj)
+            task.defer(PX.MuteSwing, obj)
+        end
+    end))
 
     -- dodge sounds: same BlockReact check my own character uses
     local prevBlockReact = char:GetAttribute("BlockReact") or 0
