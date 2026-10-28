@@ -1244,10 +1244,25 @@ local function BuildActorLibrary()
 
     -- Holds the player anchored in the air until the explosion is over (my own character only:
     -- a participant's character is moved by their own client)
+    -- Participants only: LaunchParticipantCharacter (below) anchors their character at the top,
+    -- this lets them drop again once the explosion is over.
+    local participantHeld = false
+    local participantToken = 0
+    local function ReleaseParticipant()
+        if ACTOR_IS_LOCAL or not participantHeld then return end
+        participantHeld = false
+        local root = Character and Character:FindFirstChild("HumanoidRootPart")
+        if root then
+            root.Anchored = false
+        end
+    end
+
     local function ReleaseFromAir()
         holdInAir = false
         if ACTOR_IS_LOCAL then
             HumanoidRootPart.Anchored = false
+        else
+            ReleaseParticipant()
         end
     end
 
@@ -1359,6 +1374,9 @@ local function BuildActorLibrary()
             end)
 
             -- Explosion is over: let the player drop
+            task.delay(EXPLOSION_DURATION, ReleaseFromAir)
+        else
+            -- Participant: explosion is over, let them drop (no-op unless they were launched)
             task.delay(EXPLOSION_DURATION, ReleaseFromAir)
         end
     end
@@ -1828,10 +1846,78 @@ local function BuildActorLibrary()
     end
 
 
+    -- ================================================================
+    --  PARTICIPANT LAUNCH SYSTEM (participants ONLY)
+    --  Taken from SpiritBomb_20.txt's LaunchCharacterAndCleanup: post-launch animation,
+    --  0.8s linear tween 126 studs up, relative height check (launch start Y + 125),
+    --  anchored at the top. I never call this: my own character uses
+    --  PlayClientSpiritBombSequence above, untouched.
+    --  Left out on purpose because they belong to MY screen / MY character: the viewport
+    --  clone, the "Velocity Forward" replication event and the camshake.
+    -- ================================================================
+    local function LaunchParticipantCharacter(char)
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        if not root then return end
+
+        task.spawn(function()
+            local ok, err = pcall(PlayPostLaunchAnim, char, false)
+            if not ok then
+                warn("[SpiritBomb] participant launch animation:", err)
+            end
+        end)
+
+        participantToken += 1
+        local myToken = participantToken
+        participantHeld = true
+
+        local launchStartY = root.Position.Y
+        local goalCFrame = root.CFrame + Vector3.new(0, 126, 0)
+
+        -- their real position is replicated by their own client; anchoring here keeps that from
+        -- fighting the tween on my screen
+        root.Anchored = true
+        local tween = TweenService:Create(
+            root,
+            TweenInfo.new(0.8, Enum.EasingStyle.Linear, Enum.EasingDirection.Out),
+            {CFrame = goalCFrame}
+        )
+        tween:Play()
+        tween.Completed:Connect(function()
+            root.Anchored = true
+        end)
+
+        local reachedHeight = false
+        local started = os.clock()
+        local heightCheckConn
+        heightCheckConn = RunService.Heartbeat:Connect(function()
+            local r = char:FindFirstChild("HumanoidRootPart")
+            if not r then
+                heightCheckConn:Disconnect()
+                return
+            end
+            if r.Position.Y >= launchStartY + 125 and not reachedHeight then
+                reachedHeight = true
+                r.Anchored = true
+                heightCheckConn:Disconnect()
+                pcall(Animator6DStop, char)
+            elseif os.clock() - started >= 1.5 then
+                heightCheckConn:Disconnect()
+                pcall(Animator6DStop, char)
+            end
+        end)
+
+        -- failsafe so a participant can never get stuck up there
+        task.delay(20, function()
+            if participantToken == myToken then
+                ReleaseParticipant()
+            end
+        end)
+    end
+
     -- Participant version: everything that is a WORLD effect on their character (throw animation,
-    -- jump trails/burst, launch animation, orb drop + explosion, spatial sound) plays here, on the same
+    -- jump trails/burst, launch, orb drop + explosion, spatial sound) plays here, on the same
     -- timeline as mine. Everything that is MY screen (camera rig, viewport flash, impact frames,
-    -- flashes, bloom, shake) and everything that moves/anchors a character is skipped.
+    -- flashes, bloom, shake) is skipped. The launch is LaunchParticipantCharacter (v20's method).
     local function PlayParticipantSequence()
         local char = Character
         PlaySequenceSound()
@@ -1851,29 +1937,12 @@ local function BuildActorLibrary()
         task.spawn(function()
             task.wait(1.4) -- 1.2s viewport flash + 0.2s: the moment my own launch happens
             if not (char and char.Parent) then return end
-            local root = char:FindFirstChild("HumanoidRootPart")
-            if not root then return end
-            local startY = root.Position.Y
+            if not char:FindFirstChild("HumanoidRootPart") then return end
 
             task.spawn(PlayJumpMeshTrails, char)
             task.spawn(PlayJumpBurstAndHighlight, char)
-            task.spawn(function()
-                local ok, err = pcall(PlayPostLaunchAnim, char, false)
-                if not ok then
-                    warn("[SpiritBomb] participant launch animation:", err)
-                end
-            end)
 
-            -- stop the animations once they reach the top (their own client does the launch)
-            local started = os.clock()
-            local conn
-            conn = RunService.Heartbeat:Connect(function()
-                local r = char:FindFirstChild("HumanoidRootPart")
-                if not r or r.Position.Y - startY >= 120 or os.clock() - started >= 1.5 then
-                    conn:Disconnect()
-                    pcall(Animator6DStop, char)
-                end
-            end)
+            LaunchParticipantCharacter(char)
         end)
     end
 
