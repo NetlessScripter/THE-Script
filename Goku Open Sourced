@@ -429,7 +429,9 @@ local HairSystem = {
         { name = "SS Rose",        color = Color3.fromRGB(255, 80, 170),  light = Color3.fromRGB(255, 150, 200),
           burst = Color3.fromRGB(255, 110, 190), vfx = Color3.new(1.0, 0.3, 0.65) },
         { name = "Black",          color = Color3.fromRGB(10, 10, 10),    light = Color3.fromRGB(255, 255, 255),
-          burst = Color3.fromRGB(20, 20, 20),    vfx = Color3.new(0.08, 0.08, 0.08) },
+          burst = Color3.fromRGB(20, 20, 20),    vfx = Color3.new(0.08, 0.08, 0.08),
+          -- black gives off no light of its own, so every spotlight for it is white
+          auraLight = Color3.new(1, 1, 1) },
     },
     BaseColorName      = "Super Saiyan",
     UltimateColorName  = "SS Blue",
@@ -659,8 +661,44 @@ do
 
     -- The normal hair (not a custom one) carries its own spotlight; keep it in step
     -- with the form that is on right now (SSJ = Base Hair color, SSJB = Ultimate Color).
+    -- Recolors the normal hair (GokuSSJHair) to the picked Base Hair color / Ultimate
+    -- Color. The normal hair is a clone of the game's own mesh, so it is never touched
+    -- by ApplyFormLook (that only handles custom hairs). The original colour of each
+    -- part is remembered in an attribute so picking the default colour puts it back.
+    function HairSystem.RecolorDefaultHair()
+        local form = HairSystem.CurrentForm
+        if form ~= "SSJ" and form ~= "SSJB" then return end
+        local defaultHair = character and character:FindFirstChild("GokuSSJHair")
+        if not defaultHair then return end
+
+        -- the colours the game's own hair already has: no recolor needed for those
+        local isOriginalLook
+        if form == "SSJ" then
+            isOriginalLook = HairSystem.BaseColorName == "Super Saiyan"
+        else
+            isOriginalLook = HairSystem.UltimateColorName == "SS Blue"
+        end
+        local formColor = HairSystem.Colors[form]
+
+        local parts = defaultHair:GetDescendants()
+        table.insert(parts, defaultHair)
+        for _, d in ipairs(parts) do
+            if d:IsA("BasePart") then
+                if d:GetAttribute("OrigHairColor") == nil then
+                    d:SetAttribute("OrigHairColor", d.Color)
+                end
+                if isOriginalLook then
+                    d.Color = d:GetAttribute("OrigHairColor")
+                else
+                    d.Color = formColor
+                end
+            end
+        end
+    end
+
     function HairSystem.RefreshDefaultLight()
         if HairSystem.CurrentForm ~= "SSJ" and HairSystem.CurrentForm ~= "SSJB" then return end
+        pcall(HairSystem.RecolorDefaultHair)
         local lightColor = HairSystem.LightColors[HairSystem.CurrentForm]
         local defaultHair = character and character:FindFirstChild("GokuSSJHair")
         local defaultLight = defaultHair and defaultHair:FindFirstChildWhichIsA("PointLight", true)
@@ -3652,8 +3690,13 @@ task.spawn(function()
 
             local function RefreshColorRow()
                 local pickedOption = hairColorOptions[GetPickedIndex()]
+                local pickedColor = pickedOption.color
                 colorValueLabel.Text = pickedOption.name
-                colorValueLabel.TextColor3 = pickedOption.color
+                colorValueLabel.TextColor3 = pickedColor
+                -- very dark colours (Black) vanish against the dark box and the black
+                -- outline, so give them a white outline instead
+                local luminance = 0.299 * pickedColor.R + 0.587 * pickedColor.G + 0.114 * pickedColor.B
+                colorValueLabel.TextStrokeColor3 = luminance < 0.15 and Color3.new(1, 1, 1) or Color3.new(0, 0, 0)
             end
             RefreshColorRow()
 
@@ -3664,9 +3707,16 @@ task.spawn(function()
                 function(colorIndex)
                     onColorPicked(hairColorOptions[colorIndex].name)
                     RefreshColorRow()
-                    -- the viewport copy carries the old colour: rebuild it (keeps the spin angle)
+                    -- the viewport copy carries the old colour: rebuild it (keeps the spin angle).
+                    -- The hair tweens to the new colour over 0.4s, so wait for it to finish
+                    -- or the copy is taken mid-tween and shows the old colour.
                     if hairWindowOpen then
                         BuildHairPreview(true)
+                        task.delay(0.5, function()
+                            if hairWindowOpen then
+                                BuildHairPreview(true)
+                            end
+                        end)
                     end
                 end)
 
@@ -4680,6 +4730,7 @@ local function TriggerSSJBEmote()
                         oldLight.Color  = HairSystem.LightColors.SSJB
                         oldLight.Parent = newHair
                     end
+                    pcall(HairSystem.RecolorDefaultHair)
                     pcall(PlayHairBurst, "SSJB")
                 end
             end
@@ -4898,6 +4949,7 @@ local function RevertSSJBHairToSSJ()
         oldLight.Parent = newHair
     end
     HairSystem.SetForm("SSJ")
+    pcall(HairSystem.RecolorDefaultHair)
     pcall(PlayHairBurst, "SSJ")
 end
 
@@ -5035,6 +5087,7 @@ local function SetSpiritBombHair(kind)
         light.Color = HairSystem.LightColors.SSJ
     end
 
+    pcall(HairSystem.RecolorDefaultHair)
     pcall(PlayHairBurst, kind)
 end
 
