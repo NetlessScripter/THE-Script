@@ -21,7 +21,9 @@ local Lighting       = game:GetService("Lighting")
 local Workspace      = game:GetService("Workspace")
 local StarterGui     = game:GetService("StarterGui")
 
-Lighting.LightingStyle = Enum.LightingStyle.Realistic
+if _G.Graphics ~= false then
+    Lighting.LightingStyle = Enum.LightingStyle.Realistic
+end
 
 do
     local todayDate = os.date("*t")
@@ -218,6 +220,7 @@ end
 
 if _G.Rain == nil then _G.Rain = true end
 if _G.Music == nil then _G.Music = true end
+if _G.Graphics == nil then _G.Graphics = true end
 
 local localPlayer    = Players.LocalPlayer
 local character      = localPlayer.Character or localPlayer.CharacterAdded:Wait()
@@ -2510,6 +2513,15 @@ task.spawn(function()
         return rowButton
     end
 
+    -- Graphics off: the Graphics Quality row is removed from the panel entirely.
+    if _G.Graphics == false then
+        for rowIndex = #settingRowDefinitions, 1, -1 do
+            if settingRowDefinitions[rowIndex].dropdownKey == "graphics" then
+                table.remove(settingRowDefinitions, rowIndex)
+            end
+        end
+    end
+
     local dropdownHostButtons = {}
     local settingRowButtons = {}
     for rowIndex, rowDefinition in ipairs(settingRowDefinitions) do
@@ -2762,14 +2774,16 @@ task.spawn(function()
     dbDropdown = CreateSongDropdown(dropdownHostButtons.db, dbSongs, "DB")
 
     -- Option dropdowns: the highlighted item is the current choice.
-    graphicsDropdown = CreateDropdown(dropdownHostButtons.graphics, "GraphicsQualityDropdown", graphicsQualityOptions,
-        function()
-            return graphicsQualityIndex
-        end,
-        function(optionIndex)
-            graphicsQualityIndex = optionIndex
-            settingsState.graphicsQuality = graphicsQualityOptions[graphicsQualityIndex]
-        end)
+    if dropdownHostButtons.graphics then
+        graphicsDropdown = CreateDropdown(dropdownHostButtons.graphics, "GraphicsQualityDropdown", graphicsQualityOptions,
+            function()
+                return graphicsQualityIndex
+            end,
+            function(optionIndex)
+                graphicsQualityIndex = optionIndex
+                settingsState.graphicsQuality = graphicsQualityOptions[graphicsQualityIndex]
+            end)
+    end
 
     local musicVolumeNames = {}
     for optionIndex, volumeOption in ipairs(musicVolumeOptions) do
@@ -3983,6 +3997,7 @@ task.spawn(function()
     })
 
     local function ApplyGraphicsQuality()
+        if _G.Graphics == false then return end
         local qualityLevel = graphicsQualityLevels[settingsState.graphicsQuality]
         if qualityLevel then
             local levelSet, levelError = pcall(function()
@@ -4014,7 +4029,7 @@ task.spawn(function()
     local blurEffect = Instance.new("BlurEffect")
     blurEffect.Name = "BordersBlurEffect"
     blurEffect.Size = 0
-    blurEffect.Parent = lightingService
+    blurEffect.Parent = (_G.Graphics ~= false) and lightingService or nil
 
     local openSound = Instance.new("Sound")
     openSound.Name = "BordersOpenSound"
@@ -4680,8 +4695,9 @@ local function TriggerSSJBEmote()
             local FiveSeasonsFX = ReplicatedStorage.Resources.FiveSeasonsFX
             local FSWhite = FiveSeasonsFX.FSWhite:Clone()
             local FSBlack = FiveSeasonsFX.FSBlack:Clone()
-            FSWhite.Parent = Lighting
-            FSBlack.Parent = Lighting
+            local gfxOn = _G.Graphics ~= false
+            FSWhite.Parent = gfxOn and Lighting or nil
+            FSBlack.Parent = gfxOn and Lighting or nil
 
             for _, child in pairs(localPlayer.PlayerGui:GetChildren()) do
                 if child.Name == "FXUi" then
