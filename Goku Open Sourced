@@ -226,6 +226,69 @@ local rootPart       = character:WaitForChild("HumanoidRootPart")
 local headPart       = character:WaitForChild("Head")
 local hotbar         = localPlayer.PlayerGui:WaitForChild("Hotbar"):WaitForChild("Backpack"):WaitForChild("Hotbar")
 
+-- ===== Respawn support ====================================================
+-- Everything in this file used to be wired to the first character only, so it
+-- all stopped once you died. Now the character variables above are refreshed
+-- every time a new character spawns, and every piece of code that attaches
+-- itself to the character (event listeners, hair, clothing, HUD styling...) is
+-- registered through CharacterHooks.Add: it runs once right away and again on
+-- each respawn. (One table = one local, the file is close to Luau's limit.)
+local CharacterHooks = { list = {}, hudToken = 0 }
+
+-- Walks PlayerGui down to the hotbar without yielding; nil while the game is
+-- still rebuilding its HUD after a respawn.
+function CharacterHooks.FindHotbar()
+    local playerGui = localPlayer:FindFirstChild("PlayerGui")
+    local hudRoot   = playerGui and playerGui:FindFirstChild("Hotbar")
+    local backpack  = hudRoot and hudRoot:FindFirstChild("Backpack")
+    return backpack and backpack:FindFirstChild("Hotbar")
+end
+
+function CharacterHooks.Run(hook)
+    local hookOk, hookError = pcall(hook)
+    if not hookOk then
+        warn("[Respawn] " .. tostring(hookError))
+    end
+end
+
+-- Runs `hook` now and again for every new character.
+function CharacterHooks.Add(hook)
+    table.insert(CharacterHooks.list, hook)
+    CharacterHooks.Run(hook)
+end
+
+function CharacterHooks.OnAnimationPlayed(callback)
+    CharacterHooks.Add(function()
+        humanoid.AnimationPlayed:Connect(callback)
+    end)
+end
+
+function CharacterHooks.OnChildAdded(callback)
+    CharacterHooks.Add(function()
+        character.ChildAdded:Connect(callback)
+    end)
+end
+
+localPlayer.CharacterAdded:Connect(function(newCharacter)
+    local newHumanoid = newCharacter:WaitForChild("Humanoid", 15)
+    local newRoot     = newCharacter:WaitForChild("HumanoidRootPart", 15)
+    local newHead     = newCharacter:WaitForChild("Head", 15)
+    if not (newHumanoid and newRoot and newHead) then return end
+    if localPlayer.Character ~= newCharacter then return end -- already replaced by an even newer one
+
+    character = newCharacter
+    humanoid  = newHumanoid
+    animator  = newHumanoid:FindFirstChildOfClass("Animator") or newHumanoid:WaitForChild("Animator", 5) or Instance.new("Animator", newHumanoid)
+    rootPart  = newRoot
+    headPart  = newHead
+    hotbar    = CharacterHooks.FindHotbar() or hotbar
+
+    for _, hook in ipairs(CharacterHooks.list) do
+        if localPlayer.Character ~= newCharacter then return end
+        CharacterHooks.Run(hook)
+    end
+end)
+
 local marketShirtId  = 102058923729170
 local marketPantsId  = 18456843948
 
@@ -392,6 +455,10 @@ do
     function ClothingSystem.Equip(className, assetId)
         equipToken[className] = equipToken[className] + 1
         local myToken = equipToken[className]
+
+        -- remembered so a respawn can put the same shirt / pants back on
+        ClothingSystem.Current = ClothingSystem.Current or {}
+        ClothingSystem.Current[className] = assetId
 
         task.spawn(function()
             local template = ResolveTemplate(assetId, className)
@@ -1065,10 +1132,7 @@ local function PlayDodgeAnimation()
     PlayNextImpactSound()
 end
 
-character:SetAttribute("Blocking", false)
-character:SetAttribute("BlockReact", 0)
-
-local prevBlockReact = character:GetAttribute("BlockReact")
+local prevBlockReact = 0
 
 local function CheckBlockReact()
     local isBlocking = character:GetAttribute("Blocking")
@@ -1089,18 +1153,25 @@ local function CheckBlockReact()
     prevBlockReact = blockReact
 end
 
-character:GetAttributeChangedSignal("Blocking"):Connect(function()
-    if not character:GetAttribute("Blocking") then
-        for _, track in animator:GetPlayingAnimationTracks() do
-            if table.find(dodgeAnimIds, track.Animation.AnimationId) or track.Animation.AnimationId == blockAnimId then
-                track:Stop()
-                blockLoopActive = false
+CharacterHooks.Add(function()
+    blockLoopActive = false
+    character:SetAttribute("Blocking", false)
+    character:SetAttribute("BlockReact", 0)
+    prevBlockReact = character:GetAttribute("BlockReact")
+
+    character:GetAttributeChangedSignal("Blocking"):Connect(function()
+        if not character:GetAttribute("Blocking") then
+            for _, track in animator:GetPlayingAnimationTracks() do
+                if table.find(dodgeAnimIds, track.Animation.AnimationId) or track.Animation.AnimationId == blockAnimId then
+                    track:Stop()
+                    blockLoopActive = false
+                end
             end
         end
-    end
-end)
+    end)
 
-character:GetAttributeChangedSignal("BlockReact"):Connect(CheckBlockReact)
+    character:GetAttributeChangedSignal("BlockReact"):Connect(CheckBlockReact)
+end)
 
 RunService.Heartbeat:Connect(function()
     humanoid.WalkSpeed = 25
@@ -1735,13 +1806,8 @@ if _G.Music then
     task.spawn(PlaySoundCycle)
 end
 
-humanoid.Died:Connect(function()
-    musicActive = false
-    if currentMusicSound then
-        currentMusicSound:Stop()
-        currentMusicSound:Destroy()
-    end
-end)
+-- (Music used to be stopped here when the character died. It now keeps playing
+-- through death and respawn: the songs live in Workspace, not on the character.)
 
 task.delay(1, function()
     task.spawn(function()
@@ -4248,6 +4314,7 @@ local isMobile = game:GetService("UserInputService").TouchEnabled and not game:G
 local mobileGui = Instance.new("ScreenGui")
 mobileGui.Name            = "MobileGui"
 mobileGui.ZIndexBehavior  = Enum.ZIndexBehavior.Global
+mobileGui.ResetOnSpawn    = false -- keeps the teleport button alive through death / respawn
 mobileGui.Parent          = localPlayer.PlayerGui
 
 local afterImageBtn = Instance.new("ImageButton")
@@ -4514,7 +4581,7 @@ task.spawn(function()
     end
 end)
 
-humanoid.AnimationPlayed:Connect(function(track)
+CharacterHooks.OnAnimationPlayed(function(track)
     local data = comboAnimMap[track.Animation.AnimationId]
     if not data then return end
     track:Stop()
@@ -4541,7 +4608,7 @@ if not EventMode.active then -- if the event already began while this was loadin
     Workspace:SetAttribute("NoDashCooldown", true)
 end
 
-localPlayer.Character.ChildAdded:Connect(function(child)
+CharacterHooks.OnChildAdded(function(child)
     if EventMode.active then return end -- stun and freeze stay on once the event has begun
     if child.Name == "Freeze" or child.Name == "ComboStun" then
         task.wait()
@@ -4549,11 +4616,7 @@ localPlayer.Character.ChildAdded:Connect(function(child)
     end
 end)
 
-humanoid.Died:Connect(function()
-    local playerGui = localPlayer:WaitForChild("PlayerGui")
-    local screenGui = playerGui:FindFirstChild("ScreenGui")
-    if screenGui then screenGui:Destroy() end
-end)
+-- (A Died handler used to destroy PlayerGui.ScreenGui here. Nothing is destroyed on death any more.)
 
 task.spawn(function()
     while task.wait() do
@@ -4574,7 +4637,11 @@ local toolNameMap = {
 }
 
 local function updateToolNames()
-    for _, slot in ipairs(hotbar:GetChildren()) do
+    -- the game rebuilds its hotbar on every respawn, so look it up fresh each time
+    local liveHotbar = CharacterHooks.FindHotbar()
+    if not liveHotbar then return end
+    hotbar = liveHotbar
+    for _, slot in ipairs(liveHotbar:GetChildren()) do
         if slot:FindFirstChild("Base") and slot.Base:FindFirstChild("ToolName") then
             local toolName = slot.Base.ToolName
             local newName  = toolNameMap[toolName.Text]
@@ -4597,9 +4664,19 @@ end
 
 task.spawn(function()
     while true do
-        updateToolNames()
+        pcall(updateToolNames) -- an error can never end the rename loop
         task.wait(1)
     end
+end)
+
+-- after a respawn, rename the new hotbar right away instead of waiting for the next tick
+CharacterHooks.Add(function()
+    task.spawn(function()
+        for _ = 1, 20 do
+            pcall(updateToolNames)
+            task.wait(0.25)
+        end
+    end)
 end)
 
 local ssjFaceId     = "rbxassetid://12876975875"
@@ -4613,8 +4690,11 @@ local ssjOnlyAnimIds = {
     ["rbxassetid://13927612951"] = true,
 }
 
-local faceDecal = headPart:FindFirstChildWhichIsA("Decal")
-if faceDecal then faceDecal.Texture = ssjFaceId end
+local faceDecal
+CharacterHooks.Add(function()
+    faceDecal = headPart:FindFirstChildWhichIsA("Decal")
+    if faceDecal then faceDecal.Texture = ssjFaceId end
+end)
 
 -- Burst bubble that plays on every hair change, colored by the form we switch to
 local HAIR_BURST_SIZE = 11   -- final bubble diameter in studs
@@ -4918,7 +4998,7 @@ local function TriggerSSJBEmote()
     end)
 end
 
-humanoid.AnimationPlayed:Connect(function(track)
+CharacterHooks.OnAnimationPlayed(function(track)
     local animId = track.Animation.AnimationId
     if animId ~= specialFaceAnimId and not ssjOnlyAnimIds[animId] then return end
     -- the face decal may not have existed yet when the script loaded: look again instead of
@@ -4955,7 +5035,7 @@ local function WeldToHead(hairPart)
 end
 
 local function AddSSJHair()
-    if ssjHair and ssjHair.Parent then return end
+    if ssjHair and ssjHair.Parent == character then return end
     ssjHair              = hairModel["Super saiyan 1"]["Ssj dominated (Original)"]:Clone()
     ssjHair.Name         = "GokuSSJHair"
     ssjHair.Anchored     = false
@@ -4971,8 +5051,24 @@ hairLight.Range      = 8
 hairLight.Brightness = 1
 hairLight.Enabled    = true
 
-AddSSJHair()
-if ssjHair then hairLight.Parent = ssjHair end
+CharacterHooks.Add(function()
+    -- a respawn starts a new life: back to the plain SSJ form, new hair on the new head
+    if HairSystem.Model then
+        HairSystem.Model = nil -- the old custom hair went with the old character
+    end
+    HairSystem.CurrentForm = "SSJ"
+    ssjbActive = false
+
+    AddSSJHair()
+    if ssjHair then
+        hairLight.Color   = HairSystem.LightColors.SSJ
+        hairLight.Enabled = true
+        hairLight.Parent  = ssjHair
+    end
+    if CharacterHooks.dressedOnce then
+        pcall(HairSystem.RefreshDefaultLight) -- picked hair colours carry over to the new default hair
+    end
+end)
 
 local ssjbRevertAnimIds = {
     ["rbxassetid://12983333733"] = true,
@@ -5035,7 +5131,7 @@ local function DisableSSJBAura()
     end)
 end
 
-humanoid.AnimationPlayed:Connect(function(track)
+CharacterHooks.OnAnimationPlayed(function(track)
     if ssjbRevertAnimIds[track.Animation.AnimationId] then
         -- Keep Super Saiyan Blue hair and aura active until the beam sequence finishes.
         task.wait(9.9)
@@ -5210,7 +5306,12 @@ local function StartSpiritBombAura()
     end
 end
 
-humanoid.AnimationPlayed:Connect(function(track)
+CharacterHooks.Add(function()
+    spiritBombToken = spiritBombToken + 1 -- cancels the timers of a Spirit Bomb that was running when we died
+    spiritBombAura  = {}
+end)
+
+CharacterHooks.OnAnimationPlayed(function(track)
     if track.Animation.AnimationId ~= SPIRIT_BOMB_ANIM_ID then return end
 
     spiritBombToken = spiritBombToken + 1
@@ -5248,36 +5349,6 @@ humanoid.AnimationPlayed:Connect(function(track)
     end)
 end)
 
-for _, accessory in ipairs(character:GetChildren()) do
-    if accessory:IsA("Accessory") or accessory:IsA("Hat") then
-        accessory:Destroy()
-    end
-end
-
-local liveFolder = Workspace:FindFirstChild("Live")
-if liveFolder then
-    local fakeHead = liveFolder:FindFirstChild(localPlayer.Name) and liveFolder[localPlayer.Name]:FindFirstChild("FakeHead")
-    if fakeHead then
-        for _, item in ipairs(fakeHead:GetChildren()) do
-            if item:IsA("Accessory") or item:IsA("Hat") then item:Destroy() end
-        end
-        local fakeHeadFace = fakeHead:FindFirstChildWhichIsA("Decal")
-        if fakeHeadFace then fakeHeadFace.Texture = ssjFaceId end
-    end
-end
-
-for _, item in ipairs(character:GetChildren()) do
-    if item:IsA("Shirt") or item:IsA("Pants") then item:Destroy() end
-end
-
-local shirt = Instance.new("Shirt")
-shirt.ShirtTemplate = "rbxassetid://102058923729170"
-shirt.Parent        = character
-
-local pants = Instance.new("Pants")
-pants.PantsTemplate = "rbxassetid://18456843948"
-pants.Parent        = character
-
 local function ApplyMarketplaceClothing(assetId, clothingType)
     local ok, objects = pcall(game.GetObjects, game, "rbxassetid://" .. assetId)
     if not ok or not objects then return end
@@ -5298,97 +5369,190 @@ local function ApplyMarketplaceClothing(assetId, clothingType)
     end
 end
 
-task.spawn(function()
-    ApplyMarketplaceClothing(marketShirtId, "Shirt")
-    ApplyMarketplaceClothing(marketPantsId, "Pants")
-    -- a combo saved from the Clothing window (DLC tab) replaces the defaults
-    ClothingSystem.ApplySaved()
+CharacterHooks.Add(function()
+    for _, accessory in ipairs(character:GetChildren()) do
+        if accessory:IsA("Accessory") or accessory:IsA("Hat") then
+            accessory:Destroy()
+        end
+    end
+
+    local liveFolder = Workspace:FindFirstChild("Live")
+    if liveFolder then
+        local fakeHead = liveFolder:FindFirstChild(localPlayer.Name) and liveFolder[localPlayer.Name]:FindFirstChild("FakeHead")
+        if fakeHead then
+            for _, item in ipairs(fakeHead:GetChildren()) do
+                if item:IsA("Accessory") or item:IsA("Hat") then item:Destroy() end
+            end
+            local fakeHeadFace = fakeHead:FindFirstChildWhichIsA("Decal")
+            if fakeHeadFace then fakeHeadFace.Texture = ssjFaceId end
+        end
+    end
+
+    for _, item in ipairs(character:GetChildren()) do
+        if item:IsA("Shirt") or item:IsA("Pants") then item:Destroy() end
+    end
+
+    local shirt = Instance.new("Shirt")
+    shirt.ShirtTemplate = "rbxassetid://102058923729170"
+    shirt.Parent        = character
+
+    local pants = Instance.new("Pants")
+    pants.PantsTemplate = "rbxassetid://18456843948"
+    pants.Parent        = character
+
+
+    task.spawn(function()
+        ApplyMarketplaceClothing(marketShirtId, "Shirt")
+        ApplyMarketplaceClothing(marketPantsId, "Pants")
+        -- a combo saved from the Clothing window (DLC tab) replaces the defaults;
+        -- after a respawn, whatever was worn before dying comes back instead
+        local worn = ClothingSystem.Current
+        if worn and (worn.Shirt or worn.Pants) then
+            if worn.Shirt then ClothingSystem.Equip("Shirt", worn.Shirt) end
+            if worn.Pants then ClothingSystem.Equip("Pants", worn.Pants) end
+        else
+            ClothingSystem.ApplySaved()
+        end
+    end)
+
+    -- hair saved from the Hair window (DLC tab) replaces the default hair (AddSSJHair already ran above).
+    -- After a respawn the hair picked this session comes back as well, saved or not.
+    if CharacterHooks.dressedOnce then
+        local pickedHair = HairSystem.SelectedName
+        if pickedHair then
+            HairSystem.Equip(pickedHair)
+        end
+    else
+        HairSystem.ApplySaved()
+    end
+    CharacterHooks.dressedOnce = true
+
+    local ssjSkinColor = Color3.fromRGB(241, 194, 154)
+    for _, part in pairs(character:GetDescendants()) do
+        -- the hair keeps its own colours (the skin tone used to paint over them on respawn)
+        local isHairPart = part.Name == "GokuSSJHair" or part:FindFirstAncestor("GokuSSJHair") ~= nil
+            or part.Name == HairSystem.ModelName or part:FindFirstAncestor(HairSystem.ModelName) ~= nil
+        if part:IsA("BasePart") and not isHairPart then
+            part.Color = ssjSkinColor
+        end
+    end
 end)
 
--- hair saved from the Hair window (DLC tab) replaces the default hair (AddSSJHair already ran above)
-HairSystem.ApplySaved()
+-- After a respawn, put the Base Hair color / Ultimate Color back on the new hair. This is
+-- registered after the clothing hook above so nothing can repaint over it, and it repeats for
+-- a few seconds in case the game or another script touches the new character's colours.
+CharacterHooks.Add(function()
+    local isRespawn = CharacterHooks.hairColorsHooked
+    CharacterHooks.hairColorsHooked = true
+    if not isRespawn then return end
 
-local ssjSkinColor = Color3.fromRGB(241, 194, 154)
-for _, part in pairs(character:GetDescendants()) do
-    if part:IsA("BasePart") then
-        part.Color = ssjSkinColor
-    end
-end
+    task.spawn(function()
+        local spawnedCharacter = character
+        for _ = 1, 16 do
+            if character ~= spawnedCharacter then return end
+            pcall(HairSystem.RefreshDefaultLight)                         -- the normal hair + its light
+            pcall(HairSystem.ApplyFormLook, HairSystem.CurrentForm, false) -- a custom hair, when one is on
+            task.wait(0.25)
+        end
+    end)
+end)
 
+-- The game rebuilds its HUD (health bar, hotbar) every time you respawn, so the
+-- styling below is applied to every new HUD that shows up, not just the first one.
 task.spawn(function()
-    local p = game.Players.LocalPlayer
-    local h = p:WaitForChild("PlayerGui"):WaitForChild("Bar"):WaitForChild("MagicHealth")
-    local label = h.TextLabel
+    local function StyleHud(h)
+        local p = game.Players.LocalPlayer
+        local label = h.TextLabel
 
-    label.Visible = true
-    label.Position = label.Position + UDim2.new(0, 0, -0.5, 0)
+        label.Visible = true
+        label.Position = label.Position + UDim2.new(0, 0, -0.5, 0)
 
-    local health = h:FindFirstChild("Health")
-    if health then
-        if health:FindFirstChild("Bar") then
-            health.Bar.Image = "rbxassetid://15248647876"
-            health.Bar.ImageTransparency = 1
-            health.Bar.ImageColor3 = Color3.new(0, 0, 0)
+        local health = h:FindFirstChild("Health")
+        if health then
+            if health:FindFirstChild("Bar") then
+                health.Bar.Image = "rbxassetid://15248647876"
+                health.Bar.ImageTransparency = 1
+                health.Bar.ImageColor3 = Color3.new(0, 0, 0)
 
-            if health.Bar:FindFirstChild("Bar") then
-                health.Bar.Bar.Image = "rbxassetid://15248647876"
+                if health.Bar:FindFirstChild("Bar") then
+                    health.Bar.Bar.Image = "rbxassetid://15248647876"
 
-                if health.Bar.Bar:FindFirstChild("Bar") then
-                    health.Bar.Bar.Bar.Image = "rbxassetid://15248647876"
+                    if health.Bar.Bar:FindFirstChild("Bar") then
+                        health.Bar.Bar.Bar.Image = "rbxassetid://15248647876"
+                    end
                 end
+            end
+
+            if health:FindFirstChild("Glow") then
+                health.Glow.Image = "rbxassetid://15247550681"
+                health.Glow.ImageTransparency = 0
+                health.Glow.ImageColor3 = Color3.new(0, 0, 0)
             end
         end
 
-        if health:FindFirstChild("Glow") then
-            health.Glow.Image = "rbxassetid://15247550681"
-            health.Glow.ImageTransparency = 0
-            health.Glow.ImageColor3 = Color3.new(0, 0, 0)
+        local b = Font.new("rbxasset://fonts/families/Balthazar.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
+        local s = Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+
+        label.FontFace = b
+        h.Ult.FontFace = b
+        h.Ult.TextLabel.FontFace = b
+
+        local strokeMain = Instance.new("UIStroke")
+        strokeMain.LineJoinMode = Enum.LineJoinMode.Round
+        strokeMain.Color = Color3.new(0, 0, 0)
+        strokeMain.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
+        strokeMain.Thickness = 2
+        strokeMain.Parent = label
+
+        local hot = p.PlayerGui:WaitForChild("Hotbar"):WaitForChild("Backpack"):WaitForChild("Hotbar")
+        for _, v in pairs(hot:GetDescendants()) do
+            if v:IsA("TextButton") then
+                v.FontFace = b
+            end
+        end
+
+        local texts = {
+            "THE SOVEREIGN OF DIVINITY",
+            "DIETY'S VERDICT",
+            "THE ZENITH OF STRENGTH",
+        }
+
+        local function typeText(text, duration)
+            label.Text = ""
+            local length = #text
+            local step = duration / math.max(length, 1)
+
+            for i = 1, length do
+                label.Text = text:sub(1, i)
+                task.wait(step)
+            end
+        end
+
+
+        while h:IsDescendantOf(game) do
+            for _, text in ipairs(texts) do
+                if not h:IsDescendantOf(game) then return end
+                typeText(text, 1.45)
+                task.wait(38.55)
+            end
         end
     end
 
-    local b = Font.new("rbxasset://fonts/families/Balthazar.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
-    local s = Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
-
-    label.FontFace = b
-    h.Ult.FontFace = b
-    h.Ult.TextLabel.FontFace = b
-
-    local strokeMain = Instance.new("UIStroke")
-    strokeMain.LineJoinMode = Enum.LineJoinMode.Round
-    strokeMain.Color = Color3.new(0, 0, 0)
-    strokeMain.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
-    strokeMain.Thickness = 2
-    strokeMain.Parent = label
-
-    local hot = p.PlayerGui:WaitForChild("Hotbar"):WaitForChild("Backpack"):WaitForChild("Hotbar")
-    for _, v in pairs(hot:GetDescendants()) do
-        if v:IsA("TextButton") then
-            v.FontFace = b
-        end
-    end
-
-    local texts = {
-        "THE SOVEREIGN OF DIVINITY",
-        "DIETY'S VERDICT",
-        "THE ZENITH OF STRENGTH",
-    }
-
-    local function typeText(text, duration)
-        label.Text = ""
-        local length = #text
-        local step = duration / math.max(length, 1)
-
-        for i = 1, length do
-            label.Text = text:sub(1, i)
-            task.wait(step)
-        end
-    end
-
+    local styledHud = nil
     while true do
-        for _, text in ipairs(texts) do
-            typeText(text, 1.45)
-            task.wait(38.55)
+        local playerGui   = localPlayer:FindFirstChild("PlayerGui")
+        local bar         = playerGui and playerGui:FindFirstChild("Bar")
+        local magicHealth = bar and bar:FindFirstChild("MagicHealth")
+        if magicHealth and magicHealth ~= styledHud then
+            styledHud = magicHealth
+            task.spawn(function()
+                local styleOk, styleError = pcall(StyleHud, magicHealth)
+                if not styleOk then
+                    warn("[HUD] " .. tostring(styleError))
+                end
+            end)
         end
+        task.wait(0.25)
     end
 end)
 
