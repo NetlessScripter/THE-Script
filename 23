@@ -6981,7 +6981,7 @@ sound:Play()
 			hit = true
 			touchConn:Disconnect()
 			local tpChar, tpHRP = otherChar, otherHRP -- the target this punch hit (the globals can be overwritten meanwhile)
-			task.delay(1, function()
+			task.delay(0.85, function()
 -- no teleport (effects, sounds or move) behind a target that is already dead / gone
 local function targetDead()
 	local tpHum = tpChar and tpChar:FindFirstChildOfClass("Humanoid")
