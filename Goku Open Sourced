@@ -21,10 +21,6 @@ local Lighting       = game:GetService("Lighting")
 local Workspace      = game:GetService("Workspace")
 local StarterGui     = game:GetService("StarterGui")
 
-if _G.Graphics ~= false then
-    Lighting.LightingStyle = Enum.LightingStyle.Realistic
-end
-
 do
     local todayDate = os.date("*t")
     if todayDate.month == 6 and todayDate.day == 6 then
@@ -257,6 +253,7 @@ local ClothingSystem = {
         { name = "Vegito",      shirt = 13852246099,     pants = 83402968089930 },
         { name = "Gogeta",      shirt = 16028355781,     pants = 17388088112 },
         { name = "Xeno Goku",   shirt = 9110513486,      pants = 7464019656 },
+        { name = "Future Gohan", shirt = 14832093352,    pants = 14832078259 },
     },
 }
 
@@ -348,6 +345,47 @@ do
         end
     end
 
+    -- Future Gohan lost his left arm: while his shirt is worn, that arm is made
+    -- completely invisible (real character and the viewport copies). Any other shirt
+    -- brings the arm back to the transparency it had before.
+    ClothingSystem.MissingArmShirtId = 14832093352
+    ClothingSystem.MissingArmParts   = { "LeftUpperArm", "LeftLowerArm", "LeftHand", "Left Arm" }
+    ClothingSystem.MissingArmGuards  = setmetatable({}, { __mode = "k" })
+
+    function ClothingSystem.SetMissingArm(model, hidden)
+        if not model or not model.Parent then return end
+
+        for _, partName in ipairs(ClothingSystem.MissingArmParts) do
+            local armPart = model:FindFirstChild(partName)
+            if armPart and armPart:IsA("BasePart") then
+                if armPart:GetAttribute("OrigArmTransparency") == nil then
+                    armPart:SetAttribute("OrigArmTransparency", armPart.Transparency)
+                end
+
+                local guards = ClothingSystem.MissingArmGuards
+                if hidden then
+                    armPart:SetAttribute("ArmHidden", true)
+                    armPart.Transparency = 1
+                    -- if anything else tries to show the arm again, put it back to invisible
+                    if not guards[armPart] then
+                        guards[armPart] = armPart:GetPropertyChangedSignal("Transparency"):Connect(function()
+                            if armPart:GetAttribute("ArmHidden") and armPart.Transparency ~= 1 then
+                                armPart.Transparency = 1
+                            end
+                        end)
+                    end
+                else
+                    armPart:SetAttribute("ArmHidden", false)
+                    if guards[armPart] then
+                        guards[armPart]:Disconnect()
+                        guards[armPart] = nil
+                    end
+                    armPart.Transparency = armPart:GetAttribute("OrigArmTransparency") or 0
+                end
+            end
+        end
+    end
+
     -- Puts one shirt / pants on the real character and on the viewport copy (when
     -- the Clothing window is open). The lookup yields, so it runs in its own thread;
     -- a newer pick of the same kind cancels an older one that is still looking up.
@@ -361,6 +399,12 @@ do
 
             SetClothing(localPlayer.Character or character, className, template)
             SetClothing(ClothingSystem.PreviewModel, className, template)
+
+            if className == "Shirt" then
+                local hideArm = tostring(assetId) == tostring(ClothingSystem.MissingArmShirtId)
+                ClothingSystem.SetMissingArm(localPlayer.Character or character, hideArm)
+                ClothingSystem.SetMissingArm(ClothingSystem.PreviewModel, hideArm)
+            end
         end)
     end
 
@@ -386,6 +430,7 @@ local HairOffsets = {
 	["Ninth Hair"] = {AssetId = "rbxassetid://103347230044233", YOffset = 0.450, ZOffset = 0.300, RotationY = 0},
 	["Tenth Hair"] = {AssetId = "rbxassetid://107039956325024", YOffset = 0.450, ZOffset = 0.250, RotationY = 90},
 	["Eleventh Hair"] = {AssetId = "rbxassetid://119570391860313", YOffset = 0.250, ZOffset = 0.400, RotationY = 0},
+	["Twelfth Hair"] = {AssetId = "rbxassetid://119182614796017", YOffset = 0.550, ZOffset = 0.063, RotationY = 0},
 }
 
 local HairSystem = {
@@ -394,7 +439,7 @@ local HairSystem = {
     HairNames = {
         "First Hair", "Second Hair", "Third Hair", "Fourth Hair", "Fifth Hair",
         "Sixth Hair", "Seventh Hair", "Eighth Hair", "Ninth Hair", "Tenth Hair",
-        "Eleventh Hair",
+        "Eleventh Hair", "Twelfth Hair",
     },
     Colors = {
         Base = Color3.fromRGB(15, 15, 15),
@@ -409,7 +454,7 @@ local HairSystem = {
     -- Colour choices shared by the "Base Hair color" and "Ultimate Color" dropdowns
     -- (Hair window). Every one is a very bright version of a hair colour Goku really
     -- has in a transformation (SSJ gold, SSG red, SSB blue, UI silver, Ultra Ego
-    -- purple) plus the pink of Goku Black's Super Saiyan Rose.
+    -- purple) plus the pink of Goku Black's Super Saiyan Rose and Broly's bright green.
     --   Base Hair color = the hair + spotlight colour whenever we are NOT SSJB.
     --   Ultimate Color  = the SSJB hair + spotlight colour AND the colour of the SSJB
     --                     trigger / Spirit Bomb effects (energy explosion, aura, burst).
@@ -435,6 +480,8 @@ local HairSystem = {
           burst = Color3.fromRGB(20, 20, 20),    vfx = Color3.new(0.08, 0.08, 0.08),
           -- black gives off no light of its own, so every spotlight for it is white
           auraLight = Color3.new(1, 1, 1) },
+        { name = "Broly",          color = Color3.fromRGB(90, 255, 60),   light = Color3.fromRGB(160, 255, 130),
+          burst = Color3.fromRGB(120, 255, 90),  vfx = Color3.new(0.3, 1.0, 0.2) },
     },
     BaseColorName      = "Super Saiyan",
     UltimateColorName  = "SS Blue",
@@ -1123,6 +1170,7 @@ local musicSongs = {
     { name = "simpsonwave 1995 - FRANK.JAVCEE", file = "simpsonwave.mp3", url = "https://raw.githubusercontent.com/ChosenSkibidi/Goku-Update-Testing-/refs/heads/main/simpsonwave%201995%20(slowed).mp3" },
     { name = "still love you - GLM-RST", file = "sly.mp3", url = "https://raw.githubusercontent.com/ChosenSkibidi/Goku-Update-Testing-/refs/heads/main/still%20love%20you%20(Slowed).mp3" },
     { name = "Warmpop", file = "Warmpop.mp3", url = "https://raw.githubusercontent.com/ChosenSkibidi/Goku-Update-Testing-/refs/heads/main/ESPRIT%20%E7%A9%BA%E6%83%B3%2C%20George%20Clanton%20-%20Warmpop.mp3" },
+    { name = "I can't handle change - ROAR", file = "ICantHandleChange.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/I%20can%27t%20handle%20change%20-%20ROAR.mp3" },
 }
 
 -- Dragon Ball music pack (DLC). Downloaded on demand from the panel's DLC tab.
