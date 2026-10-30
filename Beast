@@ -1,3 +1,13 @@
+loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/Universal-KJ-Port/refs/heads/main/Sound%20Module"))()
+
+local GOHAN_AWAKENING_MUSIC_ID = "rbxassetid://15536889949"
+local GOHAN_AWAKEN_SFX_ID = "rbxassetid://15536889495"
+
+local MUSIC_VOLUME = 1
+local SFX_VOLUME = 1
+
+Sound6D(GOHAN_AWAKEN_SFX_ID, SFX_VOLUME)
+
 local player    = game.Players.LocalPlayer;
 local character = player.Character or player.CharacterAdded:Wait();
 local humanoid  = character:WaitForChild("Humanoid");
