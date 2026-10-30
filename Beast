@@ -7,6 +7,7 @@ local MUSIC_VOLUME = 1
 local SFX_VOLUME = 1
 
 Sound6D(GOHAN_AWAKEN_SFX_ID, SFX_VOLUME)
+Sound6D(GOHAN_AWAKENING_MUSIC_ID,MUSIC_VOLUME)
 
 local player    = game.Players.LocalPlayer;
 local character = player.Character or player.CharacterAdded:Wait();
