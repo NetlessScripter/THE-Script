@@ -1,4 +1,3 @@
--- ===== SAFE LOADER =====
 local function safeLoad(url)
     local ok, err = pcall(function()
         loadstring(game:HttpGet(url))()
