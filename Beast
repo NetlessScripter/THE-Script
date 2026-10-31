@@ -12999,15 +12999,24 @@ task.spawn(function()
                         local v35 = self._maid:give(Instance.new("Highlight"))
 
                         table.insert(CleanupTable, v35)
-                        v35.DepthMode = Enum.HighlightDepthMode.Occluded
+                        local BLACK_HOLD = 3.5 -- seconds the black stays fully solid
+                        local BLACK_FADE = 0.5 -- quick fade-out at the end
+
+                        v35.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
                         v35.FillColor = Color3.fromRGB(0, 0, 0)
+                        v35.OutlineColor = Color3.fromRGB(0, 0, 0)
                         v35.FillTransparency = 0
-                        v35.OutlineTransparency = 1
+                        v35.OutlineTransparency = 0
                         v35.Parent = Char
-                        TweenService:Create(v35, TweenInfo.new(4, Enum.EasingStyle.Sine), {
-                            FillTransparency = 1
-                        }):Play()
-                        game.Debris:AddItem(v35, 4)
+                        task.delay(BLACK_HOLD, function()
+                            if v35 and v35.Parent then
+                                TweenService:Create(v35, TweenInfo.new(BLACK_FADE, Enum.EasingStyle.Sine), {
+                                    FillTransparency = 1,
+                                    OutlineTransparency = 1
+                                }):Play()
+                            end
+                        end)
+                        game.Debris:AddItem(v35, BLACK_HOLD + BLACK_FADE + 0.1)
 
                         local v36 = QuickFX({
                             FX = vfx.LinesFx,
@@ -13371,6 +13380,75 @@ task.spawn(function()
                 FX = v22
             })
         end
+
+        -- ===== AURA ON CHARACTER (camera lift, ~12s into the cutscene) =====
+        local AURA_CAMERA_TIME = 12 -- seconds on the cutscene camera clock; tweak to taste
+        local AURA_SOUND_URL = "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/Gohan%20Beast%20Aura%20(SOUND%20RIP).mp3"
+        local AURA_SOUND_FILE = "GohanBeastAura.mp3"
+        local AURA_SOUND_VOLUME = 1.45
+
+        task.spawn(function()
+            -- download + writefile now so the sound is ready the moment the aura activates (no Sound6D)
+            local auraSoundAsset
+            local dlOk, dlErr = pcall(function()
+                writefile(AURA_SOUND_FILE, game:HttpGet(AURA_SOUND_URL))
+                auraSoundAsset = (getcustomasset or getsynasset)(AURA_SOUND_FILE)
+            end)
+
+            if not dlOk then
+                warn("[FinalStand] aura sound failed: " .. tostring(dlErr))
+            end
+
+            local remaining = AURA_CAMERA_TIME - (os.clock() - startClock)
+
+            if remaining > 0 then
+                task.wait(remaining)
+            end
+
+            if v7 or not Bind or not Bind.Parent then
+                return
+            end
+
+            if auraSoundAsset then
+                local auraSound = Instance.new("Sound")
+
+                auraSound.Name = "GohanBeastAuraSound"
+                auraSound.SoundId = auraSoundAsset
+                auraSound.Volume = AURA_SOUND_VOLUME
+                auraSound.Parent = game:GetService("SoundService")
+                auraSound.Ended:Connect(function()
+                    auraSound:Destroy()
+                end)
+                auraSound:Play()
+            end
+
+            local v3572 = Char
+            local clone = vfx.Aura:Clone()
+
+            for _, v in pairs(clone:GetChildren()) do
+                local vName = v3572:FindFirstChild(v.Name)
+
+                if vName then
+                    for _, v48 in pairs(v:GetChildren()) do
+                        if v.Name == "HumanoidRootPart" then
+                            vName = Torso
+                        end
+
+                        if v48:IsA("ParticleEmitter") then
+                            v48.LockedToPart = true
+                        end
+
+                        v48.Parent = vName
+                        v48:SetAttribute("LimitedAura", true)
+                        task.delay(53, function()
+                            if v48 and v48.Parent then
+                                v48:Destroy()
+                            end
+                        end)
+                    end
+                end
+            end
+        end)
 
         task.spawn(FirstEvent)
         wait(19.1)
