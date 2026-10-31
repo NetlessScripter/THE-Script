@@ -1,3 +1,4 @@
+-- ===== SAFE LOADER =====
 local function safeLoad(url)
     local ok, err = pcall(function()
         loadstring(game:HttpGet(url))()
@@ -15,9 +16,10 @@ local GOHAN_AWAKEN_SFX_ID = "rbxassetid://15536889495"
 
 local MUSIC_VOLUME = 1
 local SFX_VOLUME = 1
-    pcall(Sound6D, GOHAN_AWAKENING_MUSIC_ID, MUSIC_VOLUME)
+
 if Sound6D then
     pcall(Sound6D, GOHAN_AWAKEN_SFX_ID, SFX_VOLUME)
+    pcall(Sound6D, GOHAN_AWAKENING_MUSIC_ID, MUSIC_VOLUME)
 else
     warn("[FinalStand] Sound6D not available - continuing without audio")
 end
@@ -12526,6 +12528,41 @@ task.spawn(function()
 
     do -- line: 34
         -- upvalues: PlayAttachment (copy), Maid (copy), PlayTween (copy), dtwait (copy), EFP (copy), PlayMesh (copy), Able (copy), LifeScale (copy), QuickFX (copy), vfx (copy), t2 (copy), v1 (copy), TweenService (copy)
+        -- ===== SCREEN STARTS BLACK, THEN FADES OUT =====
+        do
+            local SCREEN_FADE_TIME = 1.4
+
+            local fadeGui = Instance.new("ScreenGui")
+            fadeGui.Name = "FinalStandBlackFade"
+            fadeGui.IgnoreGuiInset = true
+            fadeGui.ResetOnSpawn = false
+            fadeGui.DisplayOrder = 999999
+
+            local blackFrame = Instance.new("Frame")
+            blackFrame.Size = UDim2.fromScale(1, 1)
+            blackFrame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+            blackFrame.BackgroundTransparency = 0
+            blackFrame.BorderSizePixel = 0
+            blackFrame.Parent = fadeGui
+
+            pcall(function()
+                fadeGui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
+            end)
+
+            if not fadeGui.Parent then
+                fadeGui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
+            end
+
+            local fadeTween = TweenService:Create(blackFrame, TweenInfo.new(SCREEN_FADE_TIME), {
+                BackgroundTransparency = 1
+            })
+
+            fadeTween.Completed:Connect(function()
+                fadeGui:Destroy()
+            end)
+            fadeTween:Play()
+        end
+
         local Char = game.Players.LocalPlayer.Character or game.Players.LocalPlayer.CharacterAdded:Wait()
         local v2 = false
 
@@ -12986,8 +13023,15 @@ task.spawn(function()
                         end)
                     end
 
-                    local function AuraEvent() -- line: 364
+                    local function AuraEvent(chargeTime, releaseTime, runState) -- line: 364
                         -- upvalues: Char (copy), v2 (ref), CleanupTable (copy), RealAnim (copy), Bind (copy), HumanoidRootPart (copy), self (copy), v7 (ref), PlayAttachment (copy), PlayTween (copy), dtwait (copy), EFP (copy), PlayMesh (copy), Able (copy), LifeScale (copy), QuickFX (copy), vfx (copy), v1 (copy), TweenService (copy)
+                        chargeTime = chargeTime or 5.5 -- seconds of charge before the release
+                        releaseTime = releaseTime or 1.6 -- seconds the big aura burst stays on
+
+                        if runState then
+                            runState.startIndex = #CleanupTable -- everything this run creates lands after this index
+                        end
+
                         if v7 or not Bind or not Bind.Parent then
                             v7 = true
 
@@ -12997,8 +13041,8 @@ task.spawn(function()
                         local v35 = self._maid:give(Instance.new("Highlight"))
 
                         table.insert(CleanupTable, v35)
-                        local BLACK_HOLD = 3.5 -- seconds the black stays fully solid
-                        local BLACK_FADE = 0.5 -- quick fade-out at the end
+                        local BLACK_HOLD = chargeTime -- solid black for the whole charge, until the release fires
+                        local BLACK_FADE = 1.5 -- seconds for the black to fade out after the release fires
 
                         v35.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
                         v35.FillColor = Color3.fromRGB(0, 0, 0)
@@ -13118,6 +13162,10 @@ task.spawn(function()
                             task.spawn(function() -- line: 452
                                 -- upvalues: v2 (ref), CleanupTable (copy), RealAnim (copy), Bind (copy), HumanoidRootPart (copy), v7 (ref), dtwait (copy), PlayMesh (copy), vfx (copy)
                                 for i = 1, 28 do
+                                    if runState and runState.aborted then
+                                        return
+                                    end
+
                                     local v43 = false
 
                                     if not v7 and Bind and Bind.Parent then
@@ -13152,14 +13200,14 @@ task.spawn(function()
                                 end
                             end)
                             v41.Value = v40:GetScale()
-                            TweenService:Create(v41, TweenInfo.new(5.5, Enum.EasingStyle.Sine), {
+                            TweenService:Create(v41, TweenInfo.new(chargeTime, Enum.EasingStyle.Sine), {
                                 Value = v2 and 2.5 or 4
                             }):Play()
                             Able({
                                 On = true,
                                 FX = v40
                             })
-                            table.insert(CleanupTable, (task.delay(5.5, function() -- line: 477
+                            table.insert(CleanupTable, (task.delay(chargeTime, function() -- line: 477
                                 -- upvalues: v40 (copy), Able (copy)
                                 Able({
                                     On = false,
@@ -13176,7 +13224,7 @@ task.spawn(function()
 
                             v51.Value = 5
                             table.insert(CleanupTable, v51)
-                            TweenService:Create(v51, TweenInfo.new(5.5, Enum.EasingStyle.Sine), {
+                            TweenService:Create(v51, TweenInfo.new(chargeTime, Enum.EasingStyle.Sine), {
                                 Value = v2 and 25 or 40
                             }):Play()
                             task.spawn(function() -- line: 492
@@ -13185,7 +13233,11 @@ task.spawn(function()
                                 local v53 = tick()
 
                                 while true do
-                                    if tick() - v53 < 5.5 then
+                                    if runState and runState.aborted then
+                                        return
+                                    end
+
+                                    if tick() - v53 < chargeTime then
                                         if not v7 and Bind and Bind.Parent then
                                             for _ = 1, math.random(6, 9) do
                                                 local v54 = false
@@ -13262,7 +13314,11 @@ task.spawn(function()
                             if v7 or not Bind or not Bind.Parent then
                                 v7 = true
                             else
-                                dtwait(5.5)
+                                dtwait(chargeTime)
+
+                                if runState and runState.aborted then
+                                    return
+                                end
 
                                 if v7 or not Bind or not Bind.Parent then
                                     v7 = true
@@ -13320,7 +13376,7 @@ task.spawn(function()
                                         end
                                     end
 
-                                    dtwait(1.6)
+                                    dtwait(releaseTime)
 
                                     if v7 or not Bind or not Bind.Parent then
                                         v7 = true
@@ -13362,7 +13418,49 @@ task.spawn(function()
                         end
                     end
 
-                    task.spawn(AuraEvent)
+                    -- first run starts ~7.1s: charge 3.2s -> release at ~10.3s -> burst 1.1s, gone before the 12s custom aura
+                    local FIRST_AURA_CHARGE_TIME = 3.2
+                    local FIRST_AURA_RELEASE_TIME = 1.1
+
+                    local firstAuraRun = { aborted = false }
+
+                    task.spawn(AuraEvent, FIRST_AURA_CHARGE_TIME, FIRST_AURA_RELEASE_TIME, firstAuraRun)
+
+                    -- second AuraEvent run on the cutscene camera clock
+                    local SECOND_AURA_CAMERA_TIME = 9.3
+
+                    task.spawn(function()
+                        local remaining = SECOND_AURA_CAMERA_TIME - (os.clock() - startClock)
+
+                        if remaining > 0 then
+                            task.wait(remaining)
+                        end
+
+                        if v7 or not Bind or not Bind.Parent then
+                            return
+                        end
+
+                        -- second run charges only this long, then does the normal release
+                        -- (lines/PreAura off, lightning fades, BigAuraFx burst)
+                        -- timeline: 9.3s start + 1s charge + 1.1s burst + 0.25s fade = ~11.65s, done before the 12s custom aura
+                        local AURA_RELEASE_DELAY = 1
+                        local AURA_RELEASE_TIME = 1.1
+
+                        -- the second run replaces the first: stop it and destroy every effect it created
+                        firstAuraRun.aborted = true
+
+                        for i = (firstAuraRun.startIndex or #CleanupTable) + 1, #CleanupTable do
+                            local fx = CleanupTable[i]
+
+                            if typeof(fx) == "Instance" then
+                                pcall(function()
+                                    fx:Destroy()
+                                end)
+                            end
+                        end
+
+                        AuraEvent(AURA_RELEASE_DELAY, AURA_RELEASE_TIME)
+                    end)
                 end
 
                 EyeEvent()
