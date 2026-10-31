@@ -15,10 +15,9 @@ local GOHAN_AWAKEN_SFX_ID = "rbxassetid://15536889495"
 
 local MUSIC_VOLUME = 1
 local SFX_VOLUME = 1
-
+    pcall(Sound6D, GOHAN_AWAKENING_MUSIC_ID, MUSIC_VOLUME)
 if Sound6D then
     pcall(Sound6D, GOHAN_AWAKEN_SFX_ID, SFX_VOLUME)
-    pcall(Sound6D, GOHAN_AWAKENING_MUSIC_ID, MUSIC_VOLUME)
 else
     warn("[FinalStand] Sound6D not available - continuing without audio")
 end
