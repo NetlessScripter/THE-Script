@@ -13,7 +13,7 @@ safeLoad("https://raw.githubusercontent.com/NetlessScripter/Universal-KJ-Port/re
 local GOHAN_AWAKENING_MUSIC_ID = "rbxassetid://15536889949"
 local GOHAN_AWAKEN_SFX_ID = "rbxassetid://15536889495"
 
-local MUSIC_VOLUME = 0
+local MUSIC_VOLUME = 1
 local SFX_VOLUME = 1
 
 if Sound6D then
