@@ -1,5 +1,21 @@
 do
-    local hotbar = game:GetService("Players").LocalPlayer.PlayerGui:WaitForChild("Hotbar"):WaitForChild("Backpack"):WaitForChild("Hotbar")
+    local guardParent = game:GetService("ReplicatedStorage")
+    if guardParent:FindFirstChild("RickPrimeLoaded") then
+        warn("[RickPrime] already running - rejoin the server to reload it")
+        return
+    end
+    local marker = Instance.new("Folder")
+    marker.Name = "RickPrimeLoaded"
+    marker.Parent = guardParent
+end
+
+task.spawn(function()
+    local hotbar = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui"):WaitForChild("Hotbar", 30)
+    hotbar = hotbar and hotbar:WaitForChild("Backpack", 30)
+    hotbar = hotbar and hotbar:WaitForChild("Hotbar", 30)
+    if not hotbar then
+        return
+    end
 
     local toolNameMap = {
         ["Normal Punch"]           = "Fatal Indifference",
@@ -34,13 +50,11 @@ do
         end
     end
 
-    task.spawn(function()
-        while true do
-            updateToolNames()
-            task.wait(1)
-        end
-    end)
-end
+    while hotbar.Parent do
+        pcall(updateToolNames)
+        task.wait(1)
+    end
+end)
 
 do
     local plr = game:GetService("Players").LocalPlayer
@@ -63,7 +77,14 @@ do
     plr.CharacterAdded:Connect(applyOutline)
 end
 
-loadstring(game:HttpGet("https://raw.githubusercontent.com/ChosenSkibidi/RickVA/refs/heads/main/RickPortalStuff"))()
+task.spawn(function()
+    local portalOk, portalErr = pcall(function()
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/ChosenSkibidi/RickVA/refs/heads/main/RickPortalStuff"))()
+    end)
+    if not portalOk then
+        warn("[RickPrime] portal script failed to load:", portalErr)
+    end
+end)
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -1509,11 +1530,22 @@ function FX.hideCharacter(character)
 	local hidden = true
 	local bindName = "RickPrimeHide" .. tostring(os.clock())
 
+	local cache = character:GetDescendants()
+	local descendantAddedConnection = character.DescendantAdded:Connect(function(addedDescendant)
+		cache[#cache + 1] = addedDescendant
+	end)
+
 	local function apply()
 		if not hidden then
 			return
 		end
-		for _, descendant in ipairs(character:GetDescendants()) do
+		for index = #cache, 1, -1 do
+			local descendant = cache[index]
+			if not descendant.Parent then
+				cache[index] = cache[#cache]
+				cache[#cache] = nil
+				continue
+			end
 			if descendant:IsA("BasePart") then
 				descendant.LocalTransparencyModifier = 1
 				if savedTransparency[descendant] == nil then
@@ -1535,7 +1567,6 @@ function FX.hideCharacter(character)
 	end
 
 	apply()
-	local heartbeatConnection = RunService.Heartbeat:Connect(apply)
 	RunService:BindToRenderStep(bindName, Enum.RenderPriority.Last.Value, apply)
 
 	return function()
@@ -1543,7 +1574,7 @@ function FX.hideCharacter(character)
 			return
 		end
 		hidden = false
-		heartbeatConnection:Disconnect()
+		descendantAddedConnection:Disconnect()
 		pcall(function()
 			RunService:UnbindFromRenderStep(bindName)
 		end)
@@ -1805,7 +1836,15 @@ end
 
 local droneFire
 
-local function runSequence(character, onFinished)
+local function runCleanups(list)
+	for index = #list, 1, -1 do
+		local cleanup = list[index]
+		list[index] = nil
+		pcall(cleanup)
+	end
+end
+
+local function runSequenceInner(character, onFinished, cleanups)
 	local humanoid = character:WaitForChild("Humanoid")
 	if humanoid.RigType ~= Enum.HumanoidRigType.R6 then
 		onFinished()
@@ -1845,6 +1884,9 @@ local function runSequence(character, onFinished)
 	cloneHumanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
 	clone.HumanoidRootPart.Anchored = true
 	clone.Parent = workspace
+	cleanups[#cleanups + 1] = function()
+		clone:Destroy()
+	end
 	clone:PivotTo(rootPart.CFrame)
 
 	pcall(FX.releaseAttack2Camera)
@@ -1857,10 +1899,21 @@ local function runSequence(character, onFinished)
 	local shakeBindName = "RickPrimeShake" .. tostring(os.clock())
 	local cameraRig = FX.camera(shakeBindName, camera, baseCameraCFrame, savedFov, fovZoomStart, BEAM_DELAY)
 	local screenFx = FX.screen(camera)
+	cleanups[#cleanups + 1] = function()
+		pcall(function()
+			RunService:UnbindFromRenderStep(shakeBindName)
+		end)
+		camera.FieldOfView = savedFov
+		camera.CameraType = savedCameraType
+		screenFx.destroy()
+	end
 
 	local stage = Instance.new("Folder")
 	stage.Name = "RickPrimeStage"
 	stage.Parent = workspace
+	cleanups[#cleanups + 1] = function()
+		stage:Destroy()
+	end
 	task.delay(SEQUENCE_TIMEOUT + 5, function()
 		if stage.Parent then
 			stage:Destroy()
@@ -1870,6 +1923,17 @@ local function runSequence(character, onFinished)
 	local savedDisplayDistance = humanoid.DisplayDistanceType
 	humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
 	local savedDecalTransparency = {}
+	cleanups[#cleanups + 1] = function()
+		humanoid.DisplayDistanceType = savedDisplayDistance
+		for _, descendant in ipairs(character:GetDescendants()) do
+			if descendant:IsA("BasePart") then
+				descendant.LocalTransparencyModifier = 0
+			end
+		end
+		for decal, originalTransparency in pairs(savedDecalTransparency) do
+			decal.Transparency = originalTransparency
+		end
+	end
 	local cloneRoot = clone.HumanoidRootPart
 	local cloneBasePosition = cloneRoot.Position
 	local bodyKick = 0
@@ -1910,6 +1974,16 @@ local function runSequence(character, onFinished)
 	local savedAutoRotate = humanoid.AutoRotate
 	local lockDirection
 	local sequenceFinished = false
+	cleanups[#cleanups + 1] = function()
+		sequenceFinished = true
+		sequenceConnection:Disconnect()
+		cloneFaceConnection:Disconnect()
+		for _, lockConnection in ipairs(lockConnections) do
+			lockConnection:Disconnect()
+		end
+		table.clear(lockConnections)
+		humanoid.AutoRotate = savedAutoRotate
+	end
 
 	local function stopLock()
 		for _, lockConnection in ipairs(lockConnections) do
@@ -1985,6 +2059,12 @@ local function runSequence(character, onFinished)
 	local gunModel
 	local cloneGunTrack
 	local shotLoop
+	cleanups[#cleanups + 1] = function()
+		if shotLoop then
+			shotLoop:Disconnect()
+			shotLoop = nil
+		end
+	end
 	local shotStart
 	local chargeStart
 	local returnedToPlayer = false
@@ -2036,7 +2116,9 @@ local function runSequence(character, onFinished)
 		sequenceFinished = true
 		sequenceConnection:Disconnect()
 		cloneFaceConnection:Disconnect()
-		RunService:UnbindFromRenderStep(shakeBindName)
+		pcall(function()
+			RunService:UnbindFromRenderStep(shakeBindName)
+		end)
 		screenFx.destroy()
 		if shotLoop then
 			shotLoop:Disconnect()
@@ -2138,6 +2220,15 @@ local function runSequence(character, onFinished)
 	task.delay(CLONE_LIFETIME, returnToPlayer)
 
 	task.delay(BEAM_DELAY + 2, finishSequence)
+end
+
+local function runSequence(character, onFinished)
+	local cleanups = {}
+	local ok, err = pcall(runSequenceInner, character, onFinished, cleanups)
+	if not ok then
+		runCleanups(cleanups)
+		error(err, 0)
+	end
 end
 
 local ATTACK3_ANIM_ID = "rbxassetid://85025226664507"
@@ -2526,14 +2617,23 @@ local function followBehindTarget(character, targetRoot)
 	end
 end
 
+local keyPressWarned = false
 local function pressKeyOne()
-	print("[Attack3] pressing 1")
-	keypress(KEY_ONE)
+	if type(keypress) ~= "function" or type(keyrelease) ~= "function" then
+		if not keyPressWarned then
+			keyPressWarned = true
+			warn("[Attack3] this executor has no keypress/keyrelease - skipping the follow-up key press")
+		end
+		return
+	end
+	local pressed = pcall(keypress, KEY_ONE)
 	task.wait(KEYPRESS_HOLD_TIME)
-	keyrelease(KEY_ONE)
+	if pressed then
+		pcall(keyrelease, KEY_ONE)
+	end
 end
 
-local function runAttack3(character, animator, onDone)
+local function runAttack3Inner(character, animator, onDone)
 	pcall(FX.releaseAttack2Camera)
 	local root = character:FindFirstChild("HumanoidRootPart")
 	local camera = workspace.CurrentCamera
@@ -2665,8 +2765,10 @@ local function runAttack3(character, animator, onDone)
 	end
 
 	local grade = Instance.new("ColorCorrectionEffect")
+	grade.Name = "RickPrimeA3Grade"
 	grade.Parent = lighting
 	local blur = Instance.new("BlurEffect")
+	blur.Name = "RickPrimeA3Blur"
 	blur.Size = 0
 	blur.Parent = lighting
 
@@ -2758,6 +2860,12 @@ local function runAttack3(character, animator, onDone)
 	FX.sound(ATTACK3_SOUNDS.charge, root)
 
 	local lastOffset, lastApplied = CFrame.identity, nil
+	pcall(function()
+		RunService:UnbindFromRenderStep("Attack3CamPre")
+	end)
+	pcall(function()
+		RunService:UnbindFromRenderStep("Attack3CamPost")
+	end)
 	RunService:BindToRenderStep("Attack3CamPre", Enum.RenderPriority.First.Value, function()
 		if lastApplied and camera.CFrame == lastApplied then
 			camera.CFrame = camera.CFrame * lastOffset:Inverse()
@@ -2966,8 +3074,12 @@ local function runAttack3(character, animator, onDone)
 			stopFollow()
 			stopFollow = nil
 		end
-		RunService:UnbindFromRenderStep("Attack3CamPre")
-		RunService:UnbindFromRenderStep("Attack3CamPost")
+		pcall(function()
+			RunService:UnbindFromRenderStep("Attack3CamPre")
+		end)
+		pcall(function()
+			RunService:UnbindFromRenderStep("Attack3CamPost")
+		end)
 		camera.FieldOfView = baseFov
 		for _, bit in ipairs(trailBits) do
 			bit:Destroy()
@@ -3118,12 +3230,39 @@ local function runAttack3(character, animator, onDone)
 	task.delay(ATTACK3_TOTAL + 1, finish)
 end
 
+local function runAttack3(character, animator, onDone)
+	local camera = workspace.CurrentCamera
+	local savedFov = camera and camera.FieldOfView
+	local ok, err = pcall(runAttack3Inner, character, animator, onDone)
+	if not ok then
+		pcall(function()
+			RunService:UnbindFromRenderStep("Attack3CamPre")
+		end)
+		pcall(function()
+			RunService:UnbindFromRenderStep("Attack3CamPost")
+		end)
+		if camera and savedFov then
+			camera.FieldOfView = savedFov
+		end
+		local lighting = game:GetService("Lighting")
+		for _, effect in ipairs(lighting:GetChildren()) do
+			if effect.Name == "RickPrimeA3Grade" or effect.Name == "RickPrimeA3Blur" then
+				effect:Destroy()
+			end
+		end
+		for _, folder in ipairs(workspace:GetChildren()) do
+			if folder.Name == "Attack3FX" then
+				folder:Destroy()
+			end
+		end
+		error(err, 0)
+	end
+end
+
 local sequenceBusy = false
 local attackRunning = false
 local attack3Running = false
 
--- move gate: nothing can start a move while the script is still loading, only a freshly started
--- animation counts as a trigger, and only one move runs at a time (so they can never stack up)
 local MOVES = {
 	armDelay = 1.5,
 	maxTrackAge = 0.6,
@@ -3163,7 +3302,6 @@ RunService.Heartbeat:Connect(function()
 
 	for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
 		local animationId = track.Animation and track.Animation.AnimationId
-		-- only a swing that just started can trigger a move (never one that was already playing)
 		if animationId and track.TimePosition <= MOVES.maxTrackAge then
 			if not attackRunning and string.find(animationId, TRIGGER_ANIM_IDS.ATTACK) and MOVES.tryStart("attack1") then
 				attackRunning = true
@@ -3268,8 +3406,9 @@ local BAR_TEXT_TYPE_DURATION = 1.45
 local BAR_TEXT_HOLD_TIME = 38.55
 
 task.spawn(function()
+	local barOk, barErr = pcall(function()
 	local magicHealthFrame = localPlayer:WaitForChild("PlayerGui"):WaitForChild("Bar"):WaitForChild("MagicHealth")
-	local healthLabel = magicHealthFrame.TextLabel
+	local healthLabel = magicHealthFrame:WaitForChild("TextLabel")
 
 	healthLabel.Visible = true
 	healthLabel.Position = healthLabel.Position + UDim2.new(0, 0, -0.5, 0)
@@ -3338,11 +3477,15 @@ task.spawn(function()
 		end
 	end
 
-	while true do
+	while healthLabel.Parent do
 		for _, barText in ipairs(RICK_PRIME_BAR_TEXTS) do
 			typeText(barText, BAR_TEXT_TYPE_DURATION)
 			task.wait(BAR_TEXT_HOLD_TIME)
 		end
+	end
+	end)
+	if not barOk then
+		warn("[RickPrime] bar text thread stopped:", barErr)
 	end
 end)
 
@@ -3361,7 +3504,7 @@ local CONFIG = {
 	Follow     = 12,
 	Scale    = 1,
 	Collide  = false,
-	Detail   = 5,
+	Detail   = 3,
 	EyeLight = false,
 }
 
@@ -3942,7 +4085,6 @@ local DRONE_BEAM_HOLD_TIME = 0.05
 local DRONE_BEAM_COLLAPSE_TIME = 0.14
 local ownTracks = setmetatable({}, { __mode = "k" })
 
--- how hard each hit of the string lands (1st -> 4th), every M1 effect scales off this
 local COMBO_POWER = {
 	["rbxassetid://10469493270"] = 0.85,
 	["rbxassetid://10469630950"] = 1.0,
@@ -3950,24 +4092,19 @@ local COMBO_POWER = {
 	["rbxassetid://10469643643"] = 1.35,
 }
 
--- every M1 tunable lives here as a fixed value
 local M1 = {
-	-- animation hand-off
 	crossFade = 0.12,
 	endFade = 0.22,
 
-	-- charge (hit -> shot)
 	coreMax = 0.62,
 	gatherRate = 130,
 	gatherSize = 5.5,
 
-	-- drone shot timing (attack 2 keeps its own DRONE_BEAM_* values)
 	travelTime = 0.07,
 	holdTime = 0.12,
 	collapseTime = 0.36,
 	cometLength = 7,
 
-	-- drone body: turns to face the victim, kicks back when it fires
 	aimIn = 0.13,
 	aimHold = 0.6,
 	aimOut = 0.5,
@@ -3978,20 +4115,17 @@ local M1 = {
 	kickFreq = 26,
 	kickTime = 0.7,
 
-	-- hit detection (swing -> victim): overlap query polled for a short window
 	hitSize = Vector3.new(12, 12, 12),
 	hitForward = 0.3,
 	hitMargin = 2,
 	hitWindow = 0.3,
 
-	-- gun finisher (4th hit)
 	gunCharge = 1.35,
 	gunTravel = 0.09,
 	gunHold = 0.2,
 	gunFade = 0.44,
 }
 
--- runs an M1 effect and reports a failure in the output instead of swallowing it
 function M1.guard(label, callback, ...)
 	local ok, err = pcall(callback, ...)
 	if not ok then
@@ -4000,8 +4134,6 @@ function M1.guard(label, callback, ...)
 	return ok
 end
 
--- the victim of a swing: nearest humanoid inside the hit box
--- (overlap query instead of Touched, which never fires for resting or anchored targets)
 function M1.findVictim(root, character, overlapParams)
 	local boxFrame = root.CFrame * CFrame.new(0, 0, -M1.hitForward)
 	local best, bestDistance
@@ -4030,7 +4162,6 @@ function M1.findVictim(root, character, overlapParams)
 		return best
 	end
 
-	-- fallback for targets whose parts can't be queried: test their root against the same box
 	local live = workspace:FindFirstChild(DUMMY_FOLDER_NAME)
 	if live then
 		local reach = M1.hitSize / 2 + Vector3.one * M1.hitMargin
@@ -4047,7 +4178,6 @@ function M1.findVictim(root, character, overlapParams)
 	return best
 end
 
--- fades the swing out before it ends so the arm eases back to idle instead of snapping
 function M1.smoothEnd(comboTrack)
 	local connection
 	connection = RunService.Heartbeat:Connect(function()
@@ -4063,7 +4193,6 @@ function M1.smoothEnd(comboTrack)
 	end)
 end
 
--- extra drone motion during an M1: turns toward the victim, springs back when it fires
 function M1.dronePose(rig, pose, now)
 	local aim = rig.m1Aim
 	if aim then
@@ -4127,7 +4256,6 @@ function FX.comboFlash(parent, position, aimPosition, color, size, fadeTime)
 	Debris:AddItem(flashPart, fadeTime + 0.1)
 end
 
--- gun finisher camera: spring kicks on fire and on impact, slow noise on top (no per-frame random)
 function FX.comboShake(duration)
 	local rollSign = FX.rng:NextNumber() < 0.5 and -1 or 1
 	local noiseSeed = FX.rng:NextNumber(1, 90)
@@ -4195,7 +4323,6 @@ function FX.comboShake(duration)
 	return shake
 end
 
--- drone M1 camera: one spring impulse + slow noise, settles smoothly instead of buzzing
 function FX.m1Shake(duration, side, power)
 	power = power or 1
 	local noiseSeed = FX.rng:NextNumber(1, 90)
@@ -4242,7 +4369,6 @@ local function findDroneRig(side)
 	end
 end
 
--- shared muzzle charge (drones + gun finisher): soft core, inward gather, lens star, lock-on line
 function M1.charge(stage, duration, power, getFrame, getTarget)
 	local palette = VFX.palette
 	local accent = FX.accent()
@@ -4259,7 +4385,6 @@ function M1.charge(stage, duration, power, getFrame, getTarget)
 	light.Shadows = false
 	light.Parent = core
 
-	-- four point star
 	local starPart, starAttachment = FX.node(stage)
 	local spikes = {}
 	for index = 1, 4 do
@@ -4273,7 +4398,6 @@ function M1.charge(stage, duration, power, getFrame, getTarget)
 		}
 	end
 
-	-- energy gathering inward (particles travel toward the centre)
 	local gatherPart = FX.part(stage, Enum.PartType.Block, palette.hot, 1, Vector3.one * M1.gatherSize, startFrame)
 	local gather = Instance.new("ParticleEmitter")
 	gather.Rate = 0
@@ -4306,7 +4430,6 @@ function M1.charge(stage, duration, power, getFrame, getTarget)
 	end)
 	gather.Parent = gatherPart
 
-	-- lock-on line toward the victim
 	local laserFar, laserFarAttachment = FX.node(stage)
 	local laserNear, laserNearAttachment = FX.node(stage)
 	local laser = FX.beam(stage, laserNearAttachment, laserFarAttachment, ColorSequence.new(palette.red), 0.07, 0.03, NumberSequence.new(1), 0)
@@ -4341,7 +4464,6 @@ function M1.charge(stage, duration, power, getFrame, getTarget)
 		laserFar.Position = getTarget()
 		laser.Transparency = NumberSequence.new(1 - 0.55 * swell * swell)
 	end, function()
-		-- soft hand-off: the shot's own flare takes over at this size, so nothing pops out
 		FX.tween(core, 0.12, { Size = core.Size * 1.6, Transparency = 1 })
 		FX.tween(halo, 0.16, { Size = halo.Size * 1.7, Transparency = 1 })
 		FX.tween(aura, 0.2, { Size = aura.Size * 1.8, Transparency = 1 })
@@ -4368,7 +4490,6 @@ local function chargeDroneM1(side, targetRoot, shotStage, duration, power)
 		return
 	end
 
-	-- the drone turns to face the victim for the whole charge
 	local now = os.clock()
 	local lastTargetPosition = targetRoot.Position
 	shooter.m1Aim = { root = targetRoot, last = lastTargetPosition, start = now, releaseAt = now + duration + M1.aimHold }
@@ -4391,7 +4512,6 @@ local function chargeDroneM1(side, targetRoot, shotStage, duration, power)
 	end)
 end
 
--- 4th hit: the same charge, at the gun's muzzle
 local function chargeGunM1(gunModel, targetRoot, shotStage, duration, power)
 	local muzzlePlug = gunModel.Parent and gunModel:FindFirstChild("MuzzlePlug")
 	if not muzzlePlug or not targetRoot or not targetRoot.Parent then
@@ -4444,14 +4564,12 @@ local function fireDroneM1(side, targetRoot, shotStage, power, onImpact)
 	local initialDirection = initialOffset.Magnitude > 0.1 and initialOffset.Unit or shooter.model:GetPivot().LookVector
 	local totalTime = M1.travelTime + M1.holdTime + M1.collapseTime
 
-	-- the drone holds its aim a moment longer and recoils
 	local now = os.clock()
 	if shooter.m1Aim then
 		shooter.m1Aim.releaseAt = now + M1.aimHold
 	end
 	shooter.m1Kick = { start = now, direction = -initialDirection, power = power }
 
-	-- release: the charge core blooms outward from the size it ended at
 	local flareSize = 0.05 + M1.coreMax * power
 	local flare = FX.part(shotStage, ball, palette.hot, 0, Vector3.one * flareSize, CFrame.new(startPosition))
 	FX.tween(flare, 0.2, { Size = Vector3.one * 2.1 * power, Transparency = 1 })
@@ -4488,7 +4606,6 @@ local function fireDroneM1(side, targetRoot, shotStage, power, onImpact)
 	local auraBeam = FX.beam(shotStage, tailAttachment, headAttachment, ColorSequence.new(palette.red), 1.3 * power, 1.3 * power, NumberSequence.new(0.8), 0)
 	local glowBeam = FX.beam(shotStage, tailAttachment, headAttachment, ColorSequence.new(palette.bright, palette.red), 0.55 * power, 0.55 * power, NumberSequence.new(0.2), 0.02)
 	local coreBeam = FX.beam(shotStage, tailAttachment, headAttachment, ColorSequence.new(palette.hot), 0.2 * power, 0.2 * power, NumberSequence.new(0), 0.04)
-	-- comet: a white-hot leading edge that fades back into the beam while it travels
 	local cometBeam = FX.beam(
 		shotStage,
 		cometAttachment,
@@ -4509,7 +4626,6 @@ local function fireDroneM1(side, targetRoot, shotStage, power, onImpact)
 	)
 	local headBall = FX.part(shotStage, ball, Color3.new(1, 1, 1), 0, Vector3.one * 0.6 * power, CFrame.new(startPosition))
 
-	-- glitter shed along the whole beam (box shaped emitter stretched over the path)
 	local sparklePart = FX.part(shotStage, Enum.PartType.Block, palette.hot, 1, Vector3.new(0.5, 0.5, 1), CFrame.new(startPosition))
 	local sparkle = Instance.new("ParticleEmitter")
 	sparkle.Enabled = false
@@ -4549,7 +4665,6 @@ local function fireDroneM1(side, targetRoot, shotStage, power, onImpact)
 	local function spawnImpact(impactPosition, impactDirection)
 		impactAt = os.clock()
 
-		-- white-hot flash and a wider red bloom
 		local impactFlash = FX.part(shotStage, ball, palette.hot, 0.05, Vector3.one * 0.9 * power, CFrame.new(impactPosition))
 		FX.tween(impactFlash, 0.2, { Size = Vector3.one * 3.4 * power, Transparency = 1 })
 		local impactBloom = FX.part(shotStage, ball, palette.red, 0.45, Vector3.one * 1.4 * power, CFrame.new(impactPosition))
@@ -4557,7 +4672,6 @@ local function fireDroneM1(side, targetRoot, shotStage, power, onImpact)
 		Debris:AddItem(impactFlash, 0.5)
 		Debris:AddItem(impactBloom, 0.5)
 
-		-- lingering scorch glow that cools with the beam
 		scorch = FX.part(shotStage, ball, palette.red, 0.5, Vector3.one * 0.9 * power, CFrame.new(impactPosition))
 		scorchLight = Instance.new("PointLight")
 		scorchLight.Color = palette.bright
@@ -4605,7 +4719,6 @@ local function fireDroneM1(side, targetRoot, shotStage, power, onImpact)
 			disc:Destroy()
 		end)
 
-		-- ring on the floor under the victim
 		local floorFrame, floorHit = FX.floorFrameAt(impactPosition, FX.ignoreList(shotStage, targetRoot.Parent), 0.12)
 		if floorHit and (impactPosition - floorHit.Position).Magnitude < 9 then
 			FX.dashRing(shotStage, floorFrame, {
@@ -4621,7 +4734,6 @@ local function fireDroneM1(side, targetRoot, shotStage, power, onImpact)
 			})
 		end
 
-		-- the victim heats up and cools off
 		local victim = targetRoot.Parent
 		if victim and victim:IsA("Model") then
 			local heat = Instance.new("Highlight")
@@ -4725,7 +4837,6 @@ local function fireDroneM1(side, targetRoot, shotStage, power, onImpact)
 	end)
 end
 
--- gun finisher muzzle: the original big blast, plus lens stars, embers and a floor ring
 function FX.m1GunMuzzle(stage, origin, direction, palette, feetPosition, ignore)
 	FX.muzzleBurst(stage, origin, direction)
 	local feetHit = feetPosition and FX.floorAt(feetPosition, ignore)
@@ -4762,7 +4873,6 @@ function FX.m1GunMuzzle(stage, origin, direction, palette, feetPosition, ignore)
 	end)
 end
 
--- gun finisher impact: the original big impact, plus lens stars, embers, floor rings and cracks
 function FX.m1GunImpact(stage, position, direction, palette, hitModel, ignore)
 	FX.impact(stage, position, direction, hitModel, ignore)
 	pcall(function()
@@ -4911,11 +5021,6 @@ function FX.arc(parent, startPoint, endPoint, thickness, life, segments, jag)
 	end
 end
 
--- ============================================================================
--- ATTACK 2 : SCORCHING DEATH RAYS  -  full visual rework
--- charge -> braided death rays -> solar cage + sigil -> solar detonation
--- ============================================================================
-
 function FX.accent()
 	return CHARGE_RED and Color3.fromRGB(255, 170, 70) or VFX.palette.tint
 end
@@ -4927,7 +5032,6 @@ function FX.randomUnit(minY, maxY)
 	return Vector3.new(math.cos(angle) * flat, y, math.sin(angle) * flat)
 end
 
--- frame whose X axis (the attachment / cylinder axis) points along `axis`
 function FX.axisFrame(position, axis)
 	axis = axis.Unit
 	local reference = math.abs(axis.Y) > 0.95 and Vector3.xAxis or Vector3.yAxis
@@ -4951,7 +5055,6 @@ function FX.emitAt(parent, cframe, count, config)
 	Debris:AddItem(node, lifetime + 0.4)
 end
 
--- soft four point lens star (uses the default sparkle texture)
 function FX.star(parent, position, size, life, color)
 	local palette = VFX.palette
 	local node = FX.node(parent)
@@ -4985,7 +5088,6 @@ function FX.star(parent, position, size, life, color)
 	Debris:AddItem(node, life + 0.25)
 end
 
--- streak sparks with a single update loop (velocity aligned, gravity, fade)
 function FX.sparkField(parent, origin, config)
 	local palette = VFX.palette
 	local accent = FX.accent()
@@ -5035,7 +5137,6 @@ function FX.sparkField(parent, origin, config)
 	end)
 end
 
--- expanding ring made of spinning dashes (instead of a solid ring)
 function FX.dashRing(parent, frame, config)
 	local count = config.count or 30
 	local fill = config.fill or 0.6
@@ -5064,7 +5165,6 @@ function FX.dashRing(parent, frame, config)
 	end)
 end
 
--- glowing fissures that crawl out across the floor and cool off
 function FX.groundCracks(parent, floorFrame, count, minLength, maxLength)
 	local palette = VFX.palette
 	local segmentCount = 7
@@ -5097,7 +5197,6 @@ function FX.groundCracks(parent, floorFrame, count, minLength, maxLength)
 	end
 end
 
--- twin strands that spiral around the beam axis (braided light)
 function FX.attack2Braid(parent, attachment0, attachment1, widthScale, amplitude)
 	local palette = VFX.palette
 	local colors = { palette.hot, FX.accent() }
@@ -5129,7 +5228,6 @@ function FX.attack2Braid(parent, attachment0, attachment1, widthScale, amplitude
 	end
 end
 
--- rotating floor sigil: dashed rings, locked hexagram, tick marks
 function FX.attack2Sigil(stage, initialFrame, radius, options)
 	options = options or {}
 	local palette = VFX.palette
@@ -5251,7 +5349,6 @@ function FX.attack2Sigil(stage, initialFrame, radius, options)
 	return sigil
 end
 
--- spiked solar corona: tapered rays that rotate and breathe around a point
 function FX.attack2Corona(stage, rayCount)
 	local palette = VFX.palette
 	local accent = FX.accent()
@@ -5300,7 +5397,6 @@ function FX.attack2Corona(stage, rayCount)
 	return corona
 end
 
--- bloom, anamorphic streak and screen-space shock rings for attack 2
 function FX.attack2Screen(camera)
 	local palette = VFX.palette
 	local lighting = game:GetService("Lighting")
@@ -5430,7 +5526,6 @@ function FX.attack2Screen(camera)
 	return screen
 end
 
--- drone charge: gathering motes, four point star, lock-on laser
 function FX.attack2Charge(side, targetRoot, stage, duration)
 	local shooter = findDroneRig(side)
 	if not shooter or not targetRoot or not targetRoot.Parent then
@@ -5463,7 +5558,6 @@ function FX.attack2Charge(side, targetRoot, stage, duration)
 	light.Shadows = false
 	light.Parent = core
 
-	-- four point star
 	local starPart, starAttachment = FX.node(stage)
 	local spikes = {}
 	for index = 1, 4 do
@@ -5477,7 +5571,6 @@ function FX.attack2Charge(side, targetRoot, stage, duration)
 		}
 	end
 
-	-- energy gathering inward (sphere shell, particles travel toward the centre)
 	local gatherPart = FX.part(stage, Enum.PartType.Block, palette.hot, 1, Vector3.one * 7, startFrame)
 	local gather = Instance.new("ParticleEmitter")
 	gather.Rate = 190
@@ -5510,7 +5603,6 @@ function FX.attack2Charge(side, targetRoot, stage, duration)
 	end)
 	gather.Parent = gatherPart
 
-	-- lock-on laser
 	local laserFar, laserFarAttachment = FX.node(stage)
 	local laserNear, laserNearAttachment = FX.node(stage)
 	local laser = FX.beam(stage, laserNearAttachment, laserFarAttachment, ColorSequence.new(palette.red), 0.06, 0.06, NumberSequence.new(1), 0)
@@ -5556,7 +5648,6 @@ function FX.attack2Charge(side, targetRoot, stage, duration)
 	end)
 end
 
--- one braided death ray from a drone
 function FX.attack2Ray(side, targetRoot, stage)
 	if not (targetRoot and targetRoot.Parent and stage.Parent) then
 		return
@@ -5582,7 +5673,6 @@ function FX.attack2Ray(side, targetRoot, stage)
 	local widthMul = rng:NextNumber(0.85, 1.4)
 	local overshoot = rng:NextNumber(2.5, 6)
 
-	-- muzzle: lens star + spark spray + light
 	FX.star(stage, startPosition + initialDirection * 0.3, rng:NextNumber(3.4, 5), 0.14, palette.hot)
 	FX.emitAt(stage, CFrame.lookAt(startPosition, startPosition + initialDirection), 5, {
 		speed = NumberRange.new(24, 58),
@@ -5679,7 +5769,6 @@ function FX.attack2Ray(side, targetRoot, stage)
 	end)
 end
 
--- clone gun: cross shaped muzzle flash, petals, spray, ejected casing
 function FX.attack2GunMuzzle(owner, origin, direction, palette, big)
 	local accent = FX.accent()
 	local rng = FX.rng
@@ -5770,7 +5859,6 @@ function FX.attack2GunImpact(owner, position, direction, palette, big)
 	end
 end
 
--- shooter side: crimson sigil under the clone, rim light, drifting embers, hot muzzle
 function FX.attack2CloneAura(stage, clone, cloneRoot, basePosition, gunModel, duration)
 	local palette = VFX.palette
 	local accent = FX.accent()
@@ -5830,7 +5918,6 @@ function FX.attack2CloneAura(stage, clone, cloneRoot, basePosition, gunModel, du
 	end)
 end
 
--- target side build up: solar core, corona, orbit ribbons, prominences, closing cage
 function FX.attack2Pressure(stage, targetRoot, duration, screen, a2screen)
 	if not (targetRoot and targetRoot.Parent) then
 		return
@@ -5867,7 +5954,6 @@ function FX.attack2Pressure(stage, targetRoot, duration, screen, a2screen)
 	light.Shadows = false
 	light.Parent = core
 
-	-- ribbons orbiting on tilted planes
 	local orbiters = {}
 	for index = 1, 4 do
 		local head = FX.part(stage, Enum.PartType.Ball, palette.hot, 0, Vector3.one * 0.38, CFrame.new(lastPosition))
@@ -5883,7 +5969,6 @@ function FX.attack2Pressure(stage, targetRoot, duration, screen, a2screen)
 		}
 	end
 
-	-- solar prominences: arched beams that flick in and out around the core
 	local loops = {}
 	for index = 1, 5 do
 		local nodeA, attachmentA = FX.node(stage)
@@ -5897,7 +5982,6 @@ function FX.attack2Pressure(stage, targetRoot, duration, screen, a2screen)
 		loops[index] = { nodeA = nodeA, nodeB = nodeB, beam = beam, born = -1, life = 0.2, u = Vector3.yAxis, v = Vector3.xAxis, bulge = 3 }
 	end
 
-	-- closing vortex cage
 	local cage = {}
 	for index = 1, 6 do
 		local footPart, footAttachment = FX.node(stage)
@@ -5914,7 +5998,6 @@ function FX.attack2Pressure(stage, targetRoot, duration, screen, a2screen)
 		cage[index] = { foot = footPart, apex = apexPart, beam = beam }
 	end
 
-	-- embers rising off the floor
 	local emberPart = FX.part(stage, Enum.PartType.Block, palette.hot, 1, Vector3.new(7, 0.2, 7), floorFrame)
 	local embers = Instance.new("ParticleEmitter")
 	embers.Rate = 55
@@ -5961,7 +6044,6 @@ function FX.attack2Pressure(stage, targetRoot, duration, screen, a2screen)
 		local pulse = 0.5 + 0.5 * math.sin(elapsed * (10 + 14 * alpha))
 		local centerFrame = CFrame.new(lastPosition)
 
-		-- core + force field shell
 		local coreSize = (1 + 3.4 * alpha ^ 1.4) * (1 + 0.1 * math.sin(elapsed * 53) + 0.06 * math.sin(elapsed * 89))
 		core.Size = Vector3.one * coreSize
 		core.CFrame = centerFrame
@@ -5972,7 +6054,6 @@ function FX.attack2Pressure(stage, targetRoot, duration, screen, a2screen)
 
 		corona.update(lastPosition, elapsed, alpha)
 
-		-- orbit ribbons
 		for _, orbiter in ipairs(orbiters) do
 			local angle = orbiter.phase + orbiter.speed * elapsed
 			local radius = orbiter.radius * (1 - 0.25 * alpha) * (1 + 0.1 * math.sin(elapsed * 7 + orbiter.phase))
@@ -5981,7 +6062,6 @@ function FX.attack2Pressure(stage, targetRoot, duration, screen, a2screen)
 			orbiter.trail.Enabled = true
 		end
 
-		-- prominences
 		for _, loop in ipairs(loops) do
 			if elapsed >= loop.born + loop.life then
 				loop.born = elapsed + FX.rng:NextNumber(0, 0.08)
@@ -6012,7 +6092,6 @@ function FX.attack2Pressure(stage, targetRoot, duration, screen, a2screen)
 			end
 		end
 
-		-- vortex cage
 		local cageVisible = math.clamp(elapsed / 0.2, 0, 1) * (0.85 + 0.15 * pulse)
 		local floorY = groundFrame.Position.Y
 		for index, strand in ipairs(cage) do
@@ -6030,11 +6109,9 @@ function FX.attack2Pressure(stage, targetRoot, duration, screen, a2screen)
 			strand.beam.Width1 = 0.07 * cageVisible
 		end
 
-		-- target mark pulse
 		highlight.FillTransparency = 0.8 - 0.3 * pulse * (0.4 + alpha)
 		highlight.OutlineColor = palette.bright:Lerp(palette.hot, pulse)
 
-		-- stars + sparks + floor beat rings
 		if elapsed >= nextStar then
 			nextStar = elapsed + 0.11
 			FX.star(stage, lastPosition, 6 + 12 * alpha, 0.16, palette.bright)
@@ -6102,7 +6179,6 @@ function FX.attack2Pressure(stage, targetRoot, duration, screen, a2screen)
 	return { sigil = sigil }
 end
 
--- the detonation: lens star, solar flares, light column, climbing rings, floor fissures
 function FX.attack2Finale(stage, targetRoot, screen, handle, a2screen)
 	if not (stage.Parent and targetRoot and targetRoot.Parent) then
 		return
@@ -6117,7 +6193,6 @@ function FX.attack2Finale(stage, targetRoot, screen, handle, a2screen)
 		handle.sigil.burstAt = os.clock()
 	end
 
-	-- instant flash: stars, white ball, crimson ball, force field shock sphere
 	FX.star(stage, position, 46, 0.5, Color3.new(1, 1, 1))
 	FX.star(stage, position, 26, 0.36, palette.bright)
 	local whiteBall = FX.part(stage, Enum.PartType.Ball, Color3.new(1, 1, 1), 0, Vector3.one * 3, CFrame.new(position))
@@ -6136,7 +6211,6 @@ function FX.attack2Finale(stage, targetRoot, screen, handle, a2screen)
 	light.Parent = whiteBall
 	FX.tween(light, 0.8, { Brightness = 0 })
 
-	-- solar flares: tapered spikes thrown out in every direction
 	local flareCenter, flareCenterAttachment = FX.node(stage)
 	flareCenter.Position = position
 	local flares = {}
@@ -6173,7 +6247,6 @@ function FX.attack2Finale(stage, targetRoot, screen, handle, a2screen)
 		end
 	end)
 
-	-- light column
 	local columnHeight = 130
 	local columnFrame = CFrame.new(position + Vector3.new(0, columnHeight / 2 - 4, 0)) * CFrame.Angles(0, 0, math.pi / 2)
 	local column = FX.part(stage, Enum.PartType.Cylinder, palette.bright, 0.15, Vector3.new(columnHeight, 9, 9), columnFrame)
@@ -6181,7 +6254,6 @@ function FX.attack2Finale(stage, targetRoot, screen, handle, a2screen)
 	local columnCore = FX.part(stage, Enum.PartType.Cylinder, palette.hot, 0, Vector3.new(columnHeight, 3.2, 3.2), columnFrame)
 	FX.tween(columnCore, 0.9, { Size = Vector3.new(columnHeight, 0.08, 0.08), Transparency = 1 }, Enum.EasingStyle.Quart)
 
-	-- rings climbing the column
 	for step = 0, 6 do
 		task.delay(step * 0.035, function()
 			if not stage.Parent then
@@ -6199,13 +6271,11 @@ function FX.attack2Finale(stage, targetRoot, screen, handle, a2screen)
 		end)
 	end
 
-	-- floor: dashed shock waves + fissures
 	FX.dashRing(stage, floorFrame, { count = 52, color = palette.red, startRadius = 2, endRadius = 46, duration = 0.75, thickness = 0.9, spin = 2.2, fill = 0.62 })
 	FX.dashRing(stage, floorFrame, { count = 40, color = palette.hot, startRadius = 1.5, endRadius = 30, duration = 0.5, thickness = 0.55, spin = -2.6, fill = 0.55 })
 	FX.dashRing(stage, floorFrame, { count = 30, color = accent, startRadius = 1, endRadius = 18, duration = 0.38, thickness = 0.4, spin = 3.1, fill = 0.5 })
 	FX.groundCracks(stage, floorFrame, 11, 16, 34)
 
-	-- sparks, embers, smoke
 	FX.sparkField(stage, position, {
 		count = 70,
 		speedMin = 45,
@@ -6820,15 +6890,7 @@ if player.Character then
 end
 player.CharacterAdded:Connect(hookCharacter)
 
--- ============================================================================
--- DRONE SPAWN : warp-in intro, plays once when the script first runs
--- gyroscope rings collapse onto a charging core -> ignition burst -> the drone
--- materialises (scale + spin + rise) -> its lights stutter on -> the red eye wakes
--- every tunable is a fixed value in SPAWN
--- ============================================================================
-
 local SPAWN = {
-	-- timeline (seconds)
 	startDelay = 0.45,
 	respawnDelay = 4,
 	stagger = 0.4,
@@ -6836,7 +6898,6 @@ local SPAWN = {
 	materialize = 0.95,
 	stageLife = 4.5,
 
-	-- drone motion while it materialises
 	startScale = 0.1,
 	overshoot = 1.9,
 	spin = math.rad(900),
@@ -6845,7 +6906,6 @@ local SPAWN = {
 	settleKick = 0.5,
 	settleKickAt = 0.75,
 
-	-- palette
 	hot = Color3.fromRGB(236, 252, 255),
 	bright = Color3.fromRGB(120, 240, 238),
 	cyan = Color3.fromRGB(81, 221, 222),
@@ -6854,7 +6914,6 @@ local SPAWN = {
 	eyeDeep = Color3.fromRGB(150, 24, 30),
 	eyeFlash = Color3.fromRGB(255, 244, 232),
 
-	-- charge
 	coreSize = 1.5,
 	gatherSize = 12,
 	gatherRate = 260,
@@ -6871,7 +6930,6 @@ local SPAWN = {
 	boltStart = 0.45,
 	boltReach = 3.6,
 
-	-- ignition
 	flareSize = 5,
 	flashRange = 32,
 	flashTime = 0.7,
@@ -6886,12 +6944,10 @@ local SPAWN = {
 	shakePower = 0.95,
 	sound = "",
 
-	-- lightning bolt shape
 	boltSegments = 6,
 	boltJag = 0.9,
 	boltLife = 0.16,
 
-	-- boot up (seconds after ignition)
 	lightNames = { "EyeGlow", "EyeCore", "BlueLight", "BlueLightCore", "TailLight" },
 	eyeWindows = { { 0.2, 0.27 }, { 0.33, 0.37 }, { 0.43, 99 } },
 	eyeWake = 0.43,
@@ -6906,7 +6962,6 @@ function SPAWN.easeOutBack(alpha)
 	return 1 + c3 * (alpha - 1) ^ 3 + c1 * (alpha - 1) ^ 2
 end
 
--- soft four point lens flare in the spawn colours (FX.star fades to the red attack palette)
 function SPAWN.flare(stage, position, size, life, color, endColor)
 	local node = FX.node(stage)
 	node.CFrame = CFrame.new(position)
@@ -6939,7 +6994,6 @@ function SPAWN.flare(stage, position, size, life, color, endColor)
 	Debris:AddItem(node, life + 0.25)
 end
 
--- one jagged lightning bolt that snaps out and fades
 function SPAWN.bolt(stage, startPoint, endPoint)
 	local delta = endPoint - startPoint
 	if delta.Magnitude < 0.1 then
@@ -6970,7 +7024,6 @@ function SPAWN.bolt(stage, startPoint, endPoint)
 	end
 end
 
--- the neon lights on the drone (eye, status dots, tail) go dark until the boot sequence lights them
 function SPAWN.collectLights(rig)
 	local lights = {}
 	local details = rig.model:FindFirstChild("Details")
@@ -6986,7 +7039,6 @@ function SPAWN.collectLights(rig)
 	return lights
 end
 
--- extra drone motion while materialising: scale pop with overshoot, decaying spin, rise, shake
 function SPAWN.pose(rig, pose, now)
 	local spawn = rig.spawn
 	if not spawn or spawn.done or not spawn.materializeAt then
@@ -6998,7 +7050,10 @@ function SPAWN.pose(rig, pose, now)
 	end
 	local alpha = math.clamp(age / SPAWN.materialize, 0, 1)
 	local scale = SPAWN.startScale + (1 - SPAWN.startScale) * SPAWN.easeOutBack(alpha)
-	pcall(rig.model.ScaleTo, rig.model, scale)
+	if alpha >= 1 or not rig.lastScale or math.abs(scale - rig.lastScale) >= 0.02 then
+		rig.lastScale = scale
+		pcall(rig.model.ScaleTo, rig.model, scale)
+	end
 
 	local remaining = 1 - alpha
 	local spin = SPAWN.spin * remaining ^ 3 * rig.side
@@ -7012,7 +7067,6 @@ end
 function SPAWN.play(rig, index)
 	local spawn = rig.spawn
 	task.wait(spawn.delay + (index - 1) * SPAWN.stagger)
-	-- the player died or respawned during the wait: this intro is void
 	if rig.spawn ~= spawn then
 		return
 	end
@@ -7031,11 +7085,9 @@ function SPAWN.play(rig, index)
 		return (FX.floorFrameAt(getFrame().Position, ignore, 0.15))
 	end
 
-	-- the drone stays hidden and tiny until ignition, with its lights dark
 	pcall(rig.model.ScaleTo, rig.model, SPAWN.startScale)
 	spawn.lights = SPAWN.collectLights(rig)
 
-	-- charge: core + halo + aura, inward gather, three-axis gyroscope rings, floor circle
 	local startFrame = getFrame()
 	local ball = Enum.PartType.Ball
 	local core = FX.part(stage, ball, SPAWN.hot, 0, Vector3.one * 0.1, startFrame)
@@ -7109,7 +7161,6 @@ function SPAWN.play(rig, index)
 		gatherPart.CFrame = centerFrame
 		gather.Rate = SPAWN.gatherRate * (0.25 + 0.75 * swell)
 
-		-- rings fade in, then collapse onto the core faster and faster
 		local pull = alpha ^ 2.2
 		local appear = math.clamp(alpha / 0.18, 0, 1)
 		for _, gate in ipairs(gates) do
@@ -7118,7 +7169,6 @@ function SPAWN.play(rig, index)
 			FX.setRing(gate.ring, frame * gate.tilt, radius, thickness, 1 - 0.92 * appear, elapsed * SPAWN.gateSpin * gate.spin)
 		end
 
-		-- summoning circle burns onto the floor under the drone
 		local grow = 1 - (1 - math.clamp(alpha / 0.4, 0, 1)) ^ 3
 		if grow > 0.01 then
 			local floorFrame = getFloorFrame()
@@ -7126,7 +7176,6 @@ function SPAWN.play(rig, index)
 			FX.setRing(floorInner, floorFrame, SPAWN.floorRadius * grow * 0.62, 0.1, 1 - 0.8 * appear, -elapsed * 3.1)
 		end
 
-		-- lightning starts crackling off the core once it is swelling
 		if elapsed >= SPAWN.boltStart and elapsed - lastBolt >= SPAWN.boltEvery then
 			lastBolt = elapsed
 			SPAWN.bolt(stage, center, center + FX.randomUnit() * SPAWN.boltReach * (0.5 + 0.8 * swell))
@@ -7142,7 +7191,6 @@ function SPAWN.play(rig, index)
 		return
 	end
 
-	-- ignition: the charge blooms into the burst, the drone appears
 	local frame = getFrame()
 	local center = frame.Position
 	local floorFrame = getFloorFrame()
@@ -7173,14 +7221,12 @@ function SPAWN.play(rig, index)
 	SPAWN.flare(stage, center, 10, 0.85, SPAWN.cyan)
 	pcall(FX.m1Shake, SPAWN.shakeTime, rig.side, SPAWN.shakePower)
 
-	-- column of light dropping through the drone, collapsing to a thread
 	local pillarFrame = CFrame.new(center) * CFrame.Angles(0, 0, math.pi / 2)
 	local pillar = FX.part(stage, Enum.PartType.Cylinder, SPAWN.hot, 0.05, Vector3.new(SPAWN.pillarHeight, SPAWN.pillarWidth, SPAWN.pillarWidth), pillarFrame)
 	local pillarGlow = FX.part(stage, Enum.PartType.Cylinder, SPAWN.cyan, 0.55, Vector3.new(SPAWN.pillarHeight, SPAWN.pillarWidth * 2.4, SPAWN.pillarWidth * 2.4), pillarFrame)
 	FX.tween(pillar, SPAWN.pillarTime, { Size = Vector3.new(SPAWN.pillarHeight, 0.05, 0.05), Transparency = 1 })
 	FX.tween(pillarGlow, SPAWN.pillarTime * 1.3, { Size = Vector3.new(SPAWN.pillarHeight, 0.1, 0.1), Transparency = 1 })
 
-	-- shockwaves: front plane, horizontal plane, floor
 	FX.shockRing(stage, frame, {
 		startRadius = 0.6,
 		endRadius = SPAWN.ringRadius,
@@ -7220,7 +7266,6 @@ function SPAWN.play(rig, index)
 		spin = 2.5,
 	})
 
-	-- particle bursts
 	local particleColor = ColorSequence.new({
 		ColorSequenceKeypoint.new(0, SPAWN.hot),
 		ColorSequenceKeypoint.new(0.4, SPAWN.bright),
@@ -7248,7 +7293,6 @@ function SPAWN.play(rig, index)
 		SPAWN.bolt(stage, center, center + FX.randomUnit() * FX.rng:NextNumber(4, 8))
 	end
 
-	-- boot up: lights stutter on (white-hot, settling to their own colours), then the red eye wakes
 	local lights = spawn.lights
 	FX.run(stage, SPAWN.materialize + 0.2, function(_, elapsed)
 		local lit = false
@@ -7288,7 +7332,6 @@ function SPAWN.play(rig, index)
 		})
 	end)
 
-	-- a small magnetic settle as it locks into formation
 	task.delay(SPAWN.settleKickAt, function()
 		if rig.spawn ~= spawn then
 			return
@@ -7307,11 +7350,9 @@ function SPAWN.start(rig, index, delay)
 		if not ok then
 			warn("[DroneSpawn] error:", err)
 		end
-		-- a death or respawn replaced this intro while it ran: the new state owns the drone now
 		if rig.spawn ~= spawn then
 			return
 		end
-		-- whatever happened above, the drone ends up visible, full size, lights restored
 		pcall(rig.model.ScaleTo, rig.model, 1)
 		for _, entry in ipairs(spawn.lights or {}) do
 			entry.part.Transparency = entry.transparency
@@ -7324,7 +7365,6 @@ function SPAWN.start(rig, index, delay)
 	end)
 end
 
--- cancels whatever intro is running and takes the drone out of the world (lights put back first)
 function SPAWN.clear(rig)
 	local old = rig.spawn
 	if old then
@@ -7338,10 +7378,10 @@ function SPAWN.clear(rig)
 	end
 	rig.m1Aim = nil
 	rig.m1Kick = nil
+	rig.lastScale = nil
 	rig.model.Parent = nil
 end
 
--- death: the drones vanish with you and stay hidden (the placeholder keeps the follow loop from starting an intro)
 function SPAWN.hide()
 	for _, rig in ipairs(rigs) do
 		if rig.spawn then
@@ -7351,7 +7391,6 @@ function SPAWN.hide()
 	end
 end
 
--- respawn: the drones stay gone for SPAWN.respawnDelay, then the full warp-in plays again
 function SPAWN.respawn()
 	for index, rig in ipairs(rigs) do
 		if rig.spawn then
