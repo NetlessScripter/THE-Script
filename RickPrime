@@ -156,10 +156,10 @@ local VFX = {
 			tint = Color3.fromRGB(214, 228, 255),
 		},
 
-	streakCount = 42,
-	moteCount = 22,
+	streakCount = 24,
+	moteCount = 12,
 	ringCount = 3,
-	ringSegments = 28,
+	ringSegments = 20,
 	ringLife = 0.3,
 	orbiterCount = 3,
 	chargeRadius = 6.5,
@@ -186,7 +186,7 @@ local VFX = {
 	impactFov = 7,
 
 	cometLength = 11,
-	speedLineCount = 22,
+	speedLineCount = 14,
 
 	sounds = {
 		charge = "",
@@ -2274,6 +2274,7 @@ local function elecBolt(parent, p0, p1, thickness, life, segments, jag, flat, di
 		points[#points + 1] = p0 + delta * alpha + offset
 	end
 	points[#points + 1] = p1
+	local created = {}
 	for index = 1, #points - 1 do
 		local a, b = points[index], points[index + 1]
 		local length = (b - a).Magnitude
@@ -2283,11 +2284,16 @@ local function elecBolt(parent, p0, p1, thickness, life, segments, jag, flat, di
 			local core = FX.part(parent, Enum.PartType.Block, dim and ELEC.cyan or ELEC.white, dim and 0.3 or 0, Vector3.new(thickness * 0.4, thickness * 0.4, length + thickness * 0.6), cframe)
 			FX.tween(body, life, { Transparency = 1, Size = Vector3.new(thickness * 0.2, thickness * 0.2, length) })
 			FX.tween(core, life * 0.8, { Transparency = 1 })
-			task.delay(life + 0.05, function()
-				body:Destroy()
-				core:Destroy()
-			end)
+			created[#created + 1] = body
+			created[#created + 1] = core
 		end
+	end
+	if #created > 0 then
+		task.delay(life + 0.05, function()
+			for _, part in ipairs(created) do
+				part:Destroy()
+			end
+		end)
 	end
 end
 
@@ -2619,6 +2625,15 @@ end
 
 local keyPressWarned = false
 local function pressKeyOne()
+	local vimOk, vim = pcall(game.GetService, game, "VirtualInputManager")
+	if vimOk and vim then
+		local downOk = pcall(vim.SendKeyEvent, vim, true, Enum.KeyCode.One, false, game)
+		task.wait(KEYPRESS_HOLD_TIME)
+		pcall(vim.SendKeyEvent, vim, false, Enum.KeyCode.One, false, game)
+		if downOk then
+			return
+		end
+	end
 	if type(keypress) ~= "function" or type(keyrelease) ~= "function" then
 		if not keyPressWarned then
 			keyPressWarned = true
@@ -2686,6 +2701,7 @@ local function runAttack3Inner(character, animator, onDone)
 	local hitTarget
 	local stopFollow
 	local hitboxConnection
+	local attack3Done = false
 	local function scanHitbox()
 		if not hitbox.Parent or not root.Parent then
 			return
@@ -2839,7 +2855,7 @@ local function runAttack3Inner(character, animator, onDone)
 	local nextArc, nextZap = 0, 0
 	local streaks = {}
 	local streakDebt = 0
-	local HELIX_POINTS = 8
+	local HELIX_POINTS = 4
 	local helixParts = { {}, {} }
 	for strand = 1, 2 do
 		for index = 1, HELIX_POINTS do
@@ -2854,8 +2870,8 @@ local function runAttack3Inner(character, animator, onDone)
 	local floorPos = floorHit and (floorHit.Position + Vector3.new(0, 0.2, 0)) or (root.Position - Vector3.new(0, 2.8, 0))
 	if floorHit then
 		local floorFrame = FX.facing(floorHit.Position + floorHit.Normal * 0.15, floorHit.Normal)
-		FX.shockRing(fxFolder, floorFrame, { startRadius = 10, endRadius = 1, duration = ATTACK3_WINDUP + 0.05, thickness = 0.2, color = ELEC.blue, segments = 44, easeIn = true, startTransparency = 0.45 })
-		FX.shockRing(fxFolder, floorFrame, { startRadius = 6, endRadius = 0.6, duration = ATTACK3_WINDUP, thickness = 0.14, color = ELEC.cyan, segments = 36, easeIn = true, startTransparency = 0.55 })
+		FX.shockRing(fxFolder, floorFrame, { startRadius = 10, endRadius = 1, duration = ATTACK3_WINDUP + 0.05, thickness = 0.2, color = ELEC.blue, segments = 20, easeIn = true, startTransparency = 0.45 })
+		FX.shockRing(fxFolder, floorFrame, { startRadius = 6, endRadius = 0.6, duration = ATTACK3_WINDUP, thickness = 0.14, color = ELEC.cyan, segments = 16, easeIn = true, startTransparency = 0.55 })
 	end
 	FX.sound(ATTACK3_SOUNDS.charge, root)
 
@@ -2926,24 +2942,19 @@ local function runAttack3Inner(character, animator, onDone)
 			table.insert(beams, { tail = tailBeam, head = headBeam, scale = layer.scale })
 		end
 
-		for _ = 1, 4 do
+		for _ = 1, 2 do
 			local offset = right * rng:NextNumber(-1.2, 1.2) + up * rng:NextNumber(-0.8, 1.2)
-			elecBolt(fxFolder, origin + offset * 0.3, origin + offset + dir * length * rng:NextNumber(0.55, 1), 0.34, 0.24, 14, 1.3)
-		end
-		for _ = 1, 8 do
-			local p = origin + dir * length * rng:NextNumber(0.05, 0.85)
-			local q = p + right * rng:NextNumber(-6, 6) + up * rng:NextNumber(-3, 4) + dir * rng:NextNumber(0, 4)
-			elecBolt(fxFolder, p, q, 0.2, 0.16, 6, 0.9)
+			elecBolt(fxFolder, origin + offset * 0.3, origin + offset + dir * length * rng:NextNumber(0.55, 1), 0.34, 0.24, 6, 1.3)
 		end
 
-		for _ = 1, 5 do
+		for _ = 1, 2 do
 			local height = rng:NextNumber(12, 24)
 			local base = origin + right * rng:NextNumber(-1.8, 1.8) + dir * rng:NextNumber(-0.5, 5)
 			local streak = FX.part(fxFolder, block, ELEC.white, 0.05, Vector3.new(0.14, height, 0.14), CFrame.new(base.X, floorPos.Y + height / 2, base.Z))
 			FX.tween(streak, rng:NextNumber(0.18, 0.3), { Transparency = 1, Size = Vector3.new(0.02, height * 1.2, 0.02) })
 		end
 
-		for _ = 1, 5 do
+		for _ = 1, 2 do
 			local _, aAtt = FX.node(fxFolder)
 			local _, bAtt = FX.node(fxFolder)
 			local start = origin + right * rng:NextNumber(-3, 3) + up * rng:NextNumber(-1.5, 2) + dir * rng:NextNumber(0, 4)
@@ -2977,9 +2988,9 @@ local function runAttack3Inner(character, animator, onDone)
 				set.head.Width0 = width * set.scale
 			end
 
-			if t < 0.5 and t >= nextBolt then
-				nextBolt = t + 0.04
-				for _ = 1, 3 do
+			if t < 0.3 and t >= nextBolt then
+				nextBolt = t + 0.15
+				for _ = 1, 1 do
 					local p = tail:Lerp(head, rng:NextNumber(0.02, 0.9)) + right * rng:NextNumber(-2, 2) + up * rng:NextNumber(-1.5, 1.5)
 					local q = p + dir * rng:NextNumber(6, 16) + right * rng:NextNumber(-2.5, 2.5) + up * rng:NextNumber(-2, 2)
 					elecBolt(fxFolder, p, q, rng:NextNumber(0.18, 0.34), rng:NextNumber(0.12, 0.2), 6, 0.9)
@@ -3054,10 +3065,23 @@ local function runAttack3Inner(character, animator, onDone)
 			local victimRoot = hitTarget
 			print("[Attack3] hit follow-up scheduled (dodge behind him + press 1) in", ATTACK3_POST_IMPACT_DELAY, "s")
 			task.delay(ATTACK3_POST_IMPACT_DELAY, function()
-				if dodgeBehindTarget(character, victimRoot) then
+				local followOk, followErr = pcall(function()
+					local waitStart = os.clock()
+					while not attack3Done and os.clock() - waitStart < 3 do
+						task.wait()
+					end
+					task.wait(0.1)
+					print("[Attack3] follow-up 1/2: dodge")
+					if not dodgeBehindTarget(character, victimRoot) then
+						warn("[Attack3] hit follow-up cancelled: dodge refused (you or the target is gone / dead)")
+						return
+					end
+					print("[Attack3] follow-up 2/2: pressing 1")
 					pressKeyOne()
-				else
-					warn("[Attack3] hit follow-up cancelled: dodge refused (you or the target is gone / dead)")
+					print("[Attack3] follow-up done")
+				end)
+				if not followOk then
+					warn("[Attack3] follow-up error:", followErr)
 				end
 			end)
 		end
@@ -3069,6 +3093,7 @@ local function runAttack3Inner(character, animator, onDone)
 			return
 		end
 		finished = true
+		attack3Done = true
 		stopHitbox()
 		if stopFollow then
 			stopFollow()
@@ -3135,7 +3160,7 @@ local function runAttack3Inner(character, animator, onDone)
 				end
 			end
 
-			streakDebt = streakDebt + 0.12 + 1.1 * windup ^ 1.5
+			streakDebt = streakDebt + 0.04 + 0.35 * windup ^ 1.5
 			while streakDebt >= 1 do
 				streakDebt = streakDebt - 1
 				local streak = FX.part(fxFolder, block, rng:NextNumber() < 0.6 and ELEC.blue or ELEC.cyan, 0.4, Vector3.new(0.08, 0.08, 1), CFrame.new(foot))
@@ -3149,24 +3174,12 @@ local function runAttack3Inner(character, animator, onDone)
 			end
 
 			if elapsed >= nextArc then
-				nextArc = elapsed + 0.09 - 0.05 * windup
+				nextArc = elapsed + 0.2
 				if rng:NextNumber() < 0.25 + 0.75 * windup then
 					elecBolt(fxFolder, kick.part.Position + randomUnit() * 0.3, foot + randomUnit() * 0.3, 0.07, 0.1, 5, 0.35, nil, true)
 				end
 				if rng:NextNumber() < windup then
 					elecBolt(fxFolder, foot, foot + randomUnit() * rng:NextNumber(1.5, 2.2 + 1.8 * windup), 0.06, 0.09, 4, 0.45, nil, true)
-				end
-				if rng:NextNumber() < 0.6 * windup then
-					elecBolt(fxFolder, root.Position + randomUnit() * 0.8, root.Position + randomUnit() * 2.5, 0.05, 0.09, 4, 0.4, nil, true)
-				end
-				if rng:NextNumber() < 0.35 + 0.4 * windup then
-					local angle = rng:NextNumber(0, math.pi * 2)
-					local radial = Vector3.new(math.cos(angle), 0, math.sin(angle))
-					local from = floorPos + radial * rng:NextNumber(0.5, 1.5)
-					elecBolt(fxFolder, from, from + radial * rng:NextNumber(2.5, 4 + 2 * windup), 0.08, 0.12, 6, 0.6, true, true)
-				end
-				if windup > 0.5 and rng:NextNumber() < 0.45 then
-					elecBolt(fxFolder, Vector3.new(foot.X, floorPos.Y, foot.Z), foot, 0.07, 0.1, 6, 0.4, nil, true)
 				end
 			end
 
@@ -3194,13 +3207,10 @@ local function runAttack3Inner(character, animator, onDone)
 			end
 
 			if zapRoot and zapRoot.Parent and age < 0.6 and elapsed >= nextZap then
-				nextZap = elapsed + 0.05
+				nextZap = elapsed + 0.15
 				local center = zapRoot.Position
 				local radius = 1 + 2 * (1 - age / 0.6)
 				elecBolt(fxFolder, center + randomUnit() * radius, center + randomUnit() * radius, 0.18, 0.12, 5, 0.7)
-				if rng:NextNumber() < 0.5 then
-					elecBolt(fxFolder, center, center + randomUnit() * rng:NextNumber(3, 7), 0.16, 0.12, 5, 0.9)
-				end
 			end
 
 			if slashStep and not slashStep(os.clock() - slashBorn) then
@@ -4914,9 +4924,9 @@ end
 local ATTACK2_CHARGE_TIME = 0.2
 local ATTACK2_FIRE_START = 0.2
 local ATTACK2_FIRE_END = 1.7
-local ATTACK2_SHOT_INTERVAL = 0.05
+local ATTACK2_SHOT_INTERVAL = 0.1
 local ATTACK2_STAGE_LIFETIME = 4.4
-local ATTACK2_DRONE_BURST = 2
+local ATTACK2_DRONE_BURST = 1
 local ATTACK2_FINALE_LEAD = 0.14
 local ATTACK2_FINALE_BACK = 2.4
 local ATTACK2_FINALE_FOV = 14
@@ -6347,7 +6357,7 @@ local ATTACK2_GUN_KICK_SCALE = 1.1
 local ATTACK2_CLONE_LINGER = 0.6
 local ATTACK2_GUN_FIRE_START = ATTACK2_FIRE_START
 local ATTACK2_GUN_FIRE_END = ATTACK2_FIRE_END - 0.1
-local ATTACK2_GUN_SHOT_INTERVAL = 0.02
+local ATTACK2_GUN_SHOT_INTERVAL = 0.08
 local ATTACK2_GUN_SPREAD = 5.5
 local ATTACK2_GUN_BEAM = { widthScale = 1.0, travelTime = 0.04, holdTime = 0.06, fadeTime = 0.12 }
 
