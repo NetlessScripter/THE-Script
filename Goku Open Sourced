@@ -1,5 +1,3 @@
--- every remote script runs in its own thread so one that waits (like the
--- event cutscene) can never hold up the rest of this file
 task.spawn(function()
     local ok, err = pcall(function()
         loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/Leap%26UI"))()
@@ -226,17 +224,8 @@ local rootPart       = character:WaitForChild("HumanoidRootPart")
 local headPart       = character:WaitForChild("Head")
 local hotbar         = localPlayer.PlayerGui:WaitForChild("Hotbar"):WaitForChild("Backpack"):WaitForChild("Hotbar")
 
--- ===== Respawn support ====================================================
--- Everything in this file used to be wired to the first character only, so it
--- all stopped once you died. Now the character variables above are refreshed
--- every time a new character spawns, and every piece of code that attaches
--- itself to the character (event listeners, hair, clothing, HUD styling...) is
--- registered through CharacterHooks.Add: it runs once right away and again on
--- each respawn. (One table = one local, the file is close to Luau's limit.)
 local CharacterHooks = { list = {}, hudToken = 0 }
 
--- Walks PlayerGui down to the hotbar without yielding; nil while the game is
--- still rebuilding its HUD after a respawn.
 function CharacterHooks.FindHotbar()
     local playerGui = localPlayer:FindFirstChild("PlayerGui")
     local hudRoot   = playerGui and playerGui:FindFirstChild("Hotbar")
@@ -251,7 +240,6 @@ function CharacterHooks.Run(hook)
     end
 end
 
--- Runs `hook` now and again for every new character.
 function CharacterHooks.Add(hook)
     table.insert(CharacterHooks.list, hook)
     CharacterHooks.Run(hook)
@@ -274,7 +262,7 @@ localPlayer.CharacterAdded:Connect(function(newCharacter)
     local newRoot     = newCharacter:WaitForChild("HumanoidRootPart", 15)
     local newHead     = newCharacter:WaitForChild("Head", 15)
     if not (newHumanoid and newRoot and newHead) then return end
-    if localPlayer.Character ~= newCharacter then return end -- already replaced by an even newer one
+    if localPlayer.Character ~= newCharacter then return end
 
     character = newCharacter
     humanoid  = newHumanoid
@@ -292,14 +280,11 @@ end)
 local marketShirtId  = 102058923729170
 local marketPantsId  = 18456843948
 
--- Clothing combos (DLC tab > Clothing). Each outfit is a shirt + pants asset id;
--- a combo is any outfit's shirt paired with any outfit's pants. The saved combo
--- is stored by outfit name in SaveFile and applied the next time the script runs.
 local ClothingSystem = {
     SaveFile     = "GokuClothingCombo.json",
-    PreviewModel = nil, -- the viewport copy of the character, set by the panel while its Clothing window is open
+    PreviewModel = nil,
     Outfits = {
-        { name = "Goku",       shirt = 102058923729170, pants = 18456843948 }, -- the default clothing (same as marketShirtId / marketPantsId)
+        { name = "Goku",       shirt = 102058923729170, pants = 18456843948 },
         { name = "Vegeta",     shirt = 12856134008,    pants = 12984016931 },
         { name = "Trunks",     shirt = 74227521106166, pants = 89122850846001 },
         { name = "Gohan",      shirt = 16529330892,    pants = 88568383176752 },
@@ -334,8 +319,6 @@ do
         return nil
     end
 
-    -- Returns the saved shirt outfit index and pants outfit index, or nil when
-    -- nothing valid is saved.
     function ClothingSystem.ReadSaved()
         if not isfile(ClothingSystem.SaveFile) then return nil end
 
@@ -352,7 +335,6 @@ do
         return nil
     end
 
-    -- Writes the combo (by outfit name). Returns true when the file was written.
     function ClothingSystem.WriteSaved(shirtIndex, pantsIndex)
         local writeOk, writeError = pcall(function()
             writefile(ClothingSystem.SaveFile, HttpService:JSONEncode({
@@ -366,8 +348,6 @@ do
         return writeOk
     end
 
-    -- Same lookup the startup clothing uses: the asset id of a Shirt / Pants item
-    -- is turned into the texture it points at (cached, so picking it again is instant).
     local function ResolveTemplate(assetId, className)
         local cacheKey = className .. assetId
         if templateCache[cacheKey] then
@@ -388,7 +368,6 @@ do
             end
         end
 
-        -- Lookup failed: use the id directly (not cached, so it retries next time).
         warn("[Clothing] Couldn't look up " .. className .. " " .. tostring(assetId) .. ", using the id directly")
         return "rbxassetid://" .. assetId
     end
@@ -408,9 +387,6 @@ do
         end
     end
 
-    -- Future Gohan lost his left arm: while his shirt is worn, that arm is made
-    -- completely invisible (real character and the viewport copies). Any other shirt
-    -- brings the arm back to the transparency it had before.
     ClothingSystem.MissingArmShirtId = 14832093352
     ClothingSystem.MissingArmParts   = { "LeftUpperArm", "LeftLowerArm", "LeftHand", "Left Arm" }
     ClothingSystem.MissingArmGuards  = setmetatable({}, { __mode = "k" })
@@ -429,7 +405,6 @@ do
                 if hidden then
                     armPart:SetAttribute("ArmHidden", true)
                     armPart.Transparency = 1
-                    -- if anything else tries to show the arm again, put it back to invisible
                     if not guards[armPart] then
                         guards[armPart] = armPart:GetPropertyChangedSignal("Transparency"):Connect(function()
                             if armPart:GetAttribute("ArmHidden") and armPart.Transparency ~= 1 then
@@ -449,14 +424,10 @@ do
         end
     end
 
-    -- Puts one shirt / pants on the real character and on the viewport copy (when
-    -- the Clothing window is open). The lookup yields, so it runs in its own thread;
-    -- a newer pick of the same kind cancels an older one that is still looking up.
     function ClothingSystem.Equip(className, assetId)
         equipToken[className] = equipToken[className] + 1
         local myToken = equipToken[className]
 
-        -- remembered so a respawn can put the same shirt / pants back on
         ClothingSystem.Current = ClothingSystem.Current or {}
         ClothingSystem.Current[className] = assetId
 
@@ -475,7 +446,6 @@ do
         end)
     end
 
-    -- Wears the saved combo, if there is one (called after the default clothing at startup).
     function ClothingSystem.ApplySaved()
         local shirtIndex, pantsIndex = ClothingSystem.ReadSaved()
         if not shirtIndex then return end
@@ -518,15 +488,6 @@ local HairSystem = {
         SSJ  = Color3.fromRGB(255, 255, 150),
         SSJB = Color3.fromRGB(100, 180, 255),
     },
-    -- Colour choices shared by the "Base Hair color" and "Ultimate Color" dropdowns
-    -- (Hair window). Every one is a very bright version of a hair colour Goku really
-    -- has in a transformation (SSJ gold, SSG red, SSB blue, UI silver, Ultra Ego
-    -- purple) plus the pink of Goku Black's Super Saiyan Rose and Broly's bright green.
-    --   Base Hair color = the hair + spotlight colour whenever we are NOT SSJB.
-    --   Ultimate Color  = the SSJB hair + spotlight colour AND the colour of the SSJB
-    --                     trigger / Spirit Bomb effects (energy explosion, aura, burst).
-    -- color = hair, light = spotlight, burst = the hair-change bubble, vfx = the
-    -- energy explosion colour. aura / auraLight / death are filled in below.
     ColorOptions = {
         { name = "Super Saiyan",   color = Color3.fromRGB(255, 221, 51),  light = Color3.fromRGB(255, 255, 150),
           burst = Color3.fromRGB(255, 235, 50),  vfx = Color3.new(1.0, 0.85, 0.15) },
@@ -534,7 +495,6 @@ local HairSystem = {
           burst = Color3.fromRGB(255, 70, 90),   vfx = Color3.new(1.0, 0.15, 0.25) },
         { name = "SS Blue",        color = Color3.fromRGB(0, 190, 255),   light = Color3.fromRGB(100, 180, 255),
           burst = Color3.fromRGB(0, 230, 255),   vfx = Color3.new(0.05, 0.45, 1.0),
-          -- the original SSJB effect colours, so the default look stays exactly as it was
           aura = { Color3.new(0.0, 0.2, 0.85), Color3.new(0.05, 0.45, 1.0), Color3.new(0.2, 0.7, 1.0), Color3.new(0.6, 0.9, 1.0) },
           auraLight = Color3.new(0.1, 0.55, 1.0), death = Color3.new(0.25, 0.75, 1.0) },
         { name = "Ultra Instinct", color = Color3.fromRGB(255, 255, 255), light = Color3.fromRGB(255, 255, 255),
@@ -545,7 +505,6 @@ local HairSystem = {
           burst = Color3.fromRGB(255, 110, 190), vfx = Color3.new(1.0, 0.3, 0.65) },
         { name = "Black",          color = Color3.fromRGB(10, 10, 10),    light = Color3.fromRGB(255, 255, 255),
           burst = Color3.fromRGB(20, 20, 20),    vfx = Color3.new(0.08, 0.08, 0.08),
-          -- black gives off no light of its own, so every spotlight for it is white
           auraLight = Color3.new(1, 1, 1) },
         { name = "Broly",          color = Color3.fromRGB(90, 255, 60),   light = Color3.fromRGB(160, 255, 130),
           burst = Color3.fromRGB(120, 255, 90),  vfx = Color3.new(0.3, 1.0, 0.2) },
@@ -559,7 +518,6 @@ local HairSystem = {
     RestoreDefaultHair = nil,
 }
 
--- fill in the effect colours an option does not spell out (derived from its vfx colour)
 do
     local white = Color3.new(1, 1, 1)
     local black = Color3.new(0, 0, 0)
@@ -575,8 +533,6 @@ do
     local equipToken    = 0
     local formTweenInfo = TweenInfo.new(0.4, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
 
-    -- Where each hair stands: "loading", "ready" or "failed" (nil = not asked for yet).
-    -- The Hair window reads this to show "..." / "(failed)" next to a pick.
     local templateStatus = {}
     HairSystem.TemplateStatus = templateStatus
 
@@ -587,15 +543,11 @@ do
         return "rbxassetid://" .. tostring(numericId)
     end
 
-    -- The hair ids are mesh ids, so there is nothing to GetObjects: a SpecialMesh with
-    -- the id in MeshId is enough. This only asks Roblox to download the mesh and reports
-    -- whether it arrived, so a bad id shows "(failed)" in the Hair window.
     local function LoadHairTemplate(hairName)
         if templateStatus[hairName] == "ready" then
             return true
         end
 
-        -- Another thread (the startup preload) is already fetching this hair: wait for it.
         if templateStatus[hairName] == "loading" then
             local waitedSeconds = 0
             while templateStatus[hairName] == "loading" and waitedSeconds < 30 do
@@ -620,7 +572,6 @@ do
         probeMesh:Destroy()
 
         if not preloadOk or fetchStatus ~= Enum.AssetFetchStatus.Success then
-            -- "failed" is not final: picking the hair again tries it again.
             templateStatus[hairName] = "failed"
             warn("[Hair] Couldn't load " .. hairName .. " (" .. HairOffsets[hairName].AssetId .. "): "
                 .. tostring(preloadOk and fetchStatus or preloadError))
@@ -631,8 +582,6 @@ do
         return true
     end
 
-    -- Downloads every hair mesh now, in the background, so picking one is instant and a
-    -- hair that can't load is reported at startup instead of on a pick.
     function HairSystem.Preload()
         local hairCount    = #HairSystem.HairNames
         local pendingCount = hairCount
@@ -766,7 +715,6 @@ do
         return FindColorOption(HairSystem.UltimateColorName)
     end
 
-    -- The aura particle colour of an option as a ColorSequence.
     function HairSystem.AuraSequence(option)
         return ColorSequence.new({
             ColorSequenceKeypoint.new(0,   option.aura[1]),
@@ -776,19 +724,12 @@ do
         })
     end
 
-    -- The normal hair (not a custom one) carries its own spotlight; keep it in step
-    -- with the form that is on right now (SSJ = Base Hair color, SSJB = Ultimate Color).
-    -- Recolors the normal hair (GokuSSJHair) to the picked Base Hair color / Ultimate
-    -- Color. The normal hair is a clone of the game's own mesh, so it is never touched
-    -- by ApplyFormLook (that only handles custom hairs). The original colour of each
-    -- part is remembered in an attribute so picking the default colour puts it back.
     function HairSystem.RecolorDefaultHair()
         local form = HairSystem.CurrentForm
         if form ~= "SSJ" and form ~= "SSJB" then return end
         local defaultHair = character and character:FindFirstChild("GokuSSJHair")
         if not defaultHair then return end
 
-        -- the colours the game's own hair already has: no recolor needed for those
         local isOriginalLook
         if form == "SSJ" then
             isOriginalLook = HairSystem.BaseColorName == "Super Saiyan"
@@ -824,8 +765,6 @@ do
         end
     end
 
-    -- Picks the Base Hair color (hair + spotlight when we are not SSJB) by option name.
-    -- Returns true when the name is valid.
     function HairSystem.SetBaseColor(optionName)
         local option = FindColorOption(optionName)
         if not option then return false end
@@ -839,7 +778,6 @@ do
         return true
     end
 
-    -- Picks the Ultimate Color (SSJB hair + spotlight, and the SSJB effect colours).
     function HairSystem.SetUltimateColor(optionName)
         local option = FindColorOption(optionName)
         if not option then return false end
@@ -853,8 +791,6 @@ do
         return true
     end
 
-    -- The colour M1 punch visuals take: the Ultimate Color while we are SSJB, otherwise
-    -- the Base Hair color (the same colour the hair has right now).
     function HairSystem.GetPunchColor()
         if HairSystem.CurrentForm == "SSJB" then
             return HairSystem.Colors.SSJB
@@ -862,7 +798,6 @@ do
         return HairSystem.Colors.SSJ
     end
 
-    -- Recolours a cloned effect (particles, beams, trails, lights) to the punch colour.
     function HairSystem.TintPunchEffect(container)
         local punchColor = HairSystem.GetPunchColor()
         local punchSequence = ColorSequence.new(punchColor)
@@ -888,13 +823,12 @@ do
 
         task.spawn(function()
             if not LoadHairTemplate(hairName) then
-                -- the load already warned why; refresh the window so it shows "(failed)"
                 if equipToken == myToken and HairSystem.OnChanged then
                     HairSystem.OnChanged()
                 end
                 return
             end
-            if equipToken ~= myToken then return end -- a newer pick replaced this one
+            if equipToken ~= myToken then return end
 
             local previousModel = HairSystem.Model
             local buildOk, builtModel = pcall(BuildHairModel, hairName)
@@ -903,7 +837,7 @@ do
                 builtModel = nil
             end
             if not builtModel then
-                templateStatus[hairName] = "failed" -- picking it again retries the build
+                templateStatus[hairName] = "failed"
                 if equipToken == myToken and HairSystem.OnChanged then
                     HairSystem.OnChanged()
                 end
@@ -946,11 +880,8 @@ do
         end
     end
 
-    -- Saved hair (DLC tab > Hair > Save). The hair is stored by name in SaveFile;
-    -- "Default" means no custom hair (the normal form hair stays on).
     local HttpService = game:GetService("HttpService")
 
-    -- Returns the saved hair name, or nil when nothing valid is saved or Default was saved.
     function HairSystem.ReadSaved()
         if not isfile(HairSystem.SaveFile) then return nil end
 
@@ -965,7 +896,6 @@ do
         return nil
     end
 
-    -- Returns the saved Base Hair color name and Ultimate Color name (each nil when none is saved).
     function HairSystem.ReadSavedColors()
         if not isfile(HairSystem.SaveFile) then return nil, nil end
 
@@ -979,7 +909,6 @@ do
         return savedBase, savedUltimate
     end
 
-    -- Writes the hair by name (nil = Default) and both colours. Returns true when the file was written.
     function HairSystem.WriteSaved(hairName)
         local writeOk, writeError = pcall(function()
             writefile(HairSystem.SaveFile, HttpService:JSONEncode({
@@ -994,7 +923,6 @@ do
         return writeOk
     end
 
-    -- Wears the saved hair, if there is one (called after the default hair exists at startup).
     function HairSystem.ApplySaved()
         local savedBaseColor, savedUltimateColor = HairSystem.ReadSavedColors()
         if savedBaseColor then
@@ -1011,7 +939,6 @@ do
     end
 end
 
--- download every hair mesh now, in the background (see HairSystem.Preload)
 task.spawn(HairSystem.Preload)
 
 local function PlayAnimation(id, startPos, stopDelay, speed)
@@ -1189,19 +1116,11 @@ local maxPrematureEndRetries = 3
 local LucySongCap            = 66
 local LucyFadeOutStart       = 60
 
--- Song speed. The speed range is fixed: nothing can go below 0.4x or above 2.4x
--- (SetMusicSpeed clamps to these, and so do the panel's slider ends).
 local musicSpeedMinimum      = 0.4
 local musicSpeedMaximum      = 2.4
 local musicSpeedStep         = 0.05
 local musicPlaybackSpeed     = 1
 
--- Song reverb (ReverbSoundEffect). Every preset has fixed values: DecayTime is
--- how many seconds the echoes take to fade (0.1 - 20), Density and Diffusion
--- are 0 - 1. "Off" has no effect at all. The Reverb Mix slider only sets how
--- loud the reverb is: WetLevel runs from -30 dB (quietest) to 0 dB (loudest),
--- and exactly 0% mix is -80 dB (silent). The original song is kept at 0 dB so
--- turning reverb on never makes the song quieter.
 local musicReverbPresets = {
     { name = "Off" },
     { name = "Room",      decayTime = 0.8,  density = 0.7, diffusion = 0.6 },
@@ -1210,7 +1129,7 @@ local musicReverbPresets = {
     { name = "Cavern",    decayTime = 12,   density = 0.4, diffusion = 0.3 },
 }
 local musicReverbOffIndex      = 1
-local musicReverbDefaultIndex  = 3   -- "Hall": what turns on when Reverb Mix is raised while Off
+local musicReverbDefaultIndex  = 3
 local musicReverbPresetIndex   = musicReverbOffIndex
 local musicReverbMix           = 0.5
 local musicReverbMixStep       = 0.05
@@ -1244,8 +1163,6 @@ local musicSongs = {
     { name = "I can't handle change - ROAR", file = "ICantHandleChange.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/I%20can%27t%20handle%20change%20-%20ROAR.mp3" },
 }
 
--- Dragon Ball music pack (DLC). Downloaded on demand from the panel's DLC tab.
--- While it is the active pack, the shuffle draws from this list only.
 local dbSongs = {
     { name = "Super Saiyan", file = "DBPack_SuperSaiyan.mp3", url = "https://raw.githubusercontent.com/ChosenSkibidi/DBSZ-Songs/refs/heads/main/DBZ%20Goku%20Super%20Saiyan%20Theme.mp3" },
     { name = "Sparking Battle", file = "DBPack_SparkingBattle.mp3", url = "https://raw.githubusercontent.com/ChosenSkibidi/DBSZ-Songs/refs/heads/main/DRAGON%20BALL%20Sparking!%20ZERO%20BGM%20%20OST%20(HQ)%20-%20DRAGON%20BALL%20Sparking!%20ZERO%20(Battle%20Version).mp3" },
@@ -1268,11 +1185,8 @@ local function DownloadSongFile(url, filename)
     end
 end
 
--- Install record. Every install writes this JSON file:
---   { "count": <how many pack songs are installed>, "installed": [ <their names> ] }
 local dbPackManifestFile = "DBMusicPack.json"
 
--- Returns the recorded names as a set. A missing or unreadable file = nothing recorded.
 local function ReadDbPackManifest()
     local recorded = {}
     if not isfile(dbPackManifestFile) then return recorded end
@@ -1288,8 +1202,6 @@ local function ReadDbPackManifest()
     return recorded
 end
 
--- Adds one song to the record and rewrites the JSON (count + names, in pack order).
--- Names whose file has since gone missing are dropped so the record stays truthful.
 local function RecordDbPackSongInstalled(songName)
     local recorded = ReadDbPackManifest()
     recorded[songName] = true
@@ -1307,9 +1219,6 @@ local function RecordDbPackSongInstalled(songName)
     }))
 end
 
--- Checks the script's pack list against the record. Returns the names that are
--- installed and the songs that still need installing (new songs added to the
--- script, or ones whose file is gone).
 local function GetDbPackStatus()
     local recorded = ReadDbPackManifest()
     local installedNames = {}
@@ -1324,8 +1233,6 @@ local function GetDbPackStatus()
     return installedNames, missingSongs
 end
 
--- Downloads one pack song and checks the file is real (a failed download can
--- leave a tiny error page behind - that gets deleted so it can't pass as installed).
 local function InstallDbPackSong(song)
     DownloadSongFile(song.url, song.file)
     local readOk, contents = pcall(readfile, song.file)
@@ -1367,42 +1274,24 @@ local prematureEndRetryCount = 0
 local currentFadeInTween      = nil
 local playbackGeneration     = 0
 
--- Which pack the shuffle draws from: "Regular" (musicSongs) or "DB" (dbSongs).
--- Only one is ever active; picking a song from the other pack's dropdown
--- switches it on and this one off.
 local activePack = "Regular"
 
--- ===== Tournament of Power event hook =====================================
--- Kept in ONE table (not many locals) because this file is close to Luau's
--- local-variable limit. The trigger is the same condition the event script
--- waits for: this user saying this exact line in chat. When it fires, the
--- current song fades out, the event songs take over (and can't be changed),
--- and teleporting is locked for a cooldown.
 local EventMode = {
     userId           = 8029999470,
     phrase           = "Okay, Beginning now.",
-    fadeTime         = 0.7,   -- seconds the current song takes to fade out
-    teleportCooldown = 15,    -- seconds teleporting is locked once the event begins
-    -- The first two songs always play in this order: { pack, name }. A song whose
-    -- pack isn't installed (Super Saiyan Blue without the DLC) is skipped, and
-    -- nothing is ever downloaded for the event.
+    fadeTime         = 0.7,
+    teleportCooldown = 15,
     openingSongs     = { { "DB", "Super Saiyan Blue" }, { "Regular", "where am i supposed to go" } },
-    -- After those, the shuffle runs forever. DLC installed: the best DLC songs
-    -- (only installed ones) plus the regular songs below. DLC not installed: the
-    -- regular songs only.
     dbSongPool       = { "Super Saiyan Blue", "Fighting Spirit", "Sparking Battle", "Final Battle", "Vegito Vs Zamasu", "Trouble Erupts" },
     regularSongPool  = { "where am i supposed to go", "Kanye West - Flashing Lights", "yves tumor - limerence", "oblivion", "do i clench my fists?" },
-    opening          = {},        -- the openingSongs that can actually play, set when the event begins
-    pool             = {},        -- { pack, name } entries the shuffle draws from, set when the event begins
-    lastPick         = nil,       -- the last { pack, name } played (so the shuffle never repeats it)
-    active           = false,     -- true from the moment the event begins
-    teleportReadyAt  = 0,         -- os.clock() time teleporting becomes available again
+    opening          = {},
+    pool             = {},
+    lastPick         = nil,
+    active           = false,
+    teleportReadyAt  = 0,
     songsStarted     = 0,
 }
 
--- Plays the opening songs in order, then shuffles the pool forever (never the
--- same song twice in a row). Songs can come from either pack, so this also
--- switches activePack to the pack the song lives in before returning its index.
 function EventMode.PickNextSongIndex()
     EventMode.songsStarted = EventMode.songsStarted + 1
 
@@ -1437,7 +1326,6 @@ end
 local function FindSongIndexByName(name)
     local songs = GetSongsForPack(activePack)
     local wanted = name:lower():gsub("^%s+", ""):gsub("%s+$", "")
-    -- 1) exact name, 2) exact file name (with or without .mp3), 3) name contains the text
     for i, song in ipairs(songs) do
         if song.name:lower() == wanted then
             return i
@@ -1467,8 +1355,6 @@ local function PickNextSongIndex()
     return index
 end
 
--- Song speed. PlaybackSpeed changes speed and pitch together (like a record):
--- slower is lower, faster is higher.
 local function ApplyMusicSpeedToSound(sound)
     sound.PlaybackSpeed = musicPlaybackSpeed
 end
@@ -1483,9 +1369,6 @@ local function SetMusicSpeed(newSpeed)
     end
 end
 
--- Song reverb. Every music Sound gets one ReverbSoundEffect, created the first
--- time reverb is needed on it and switched off (not destroyed) when the preset
--- is "Off". Each new song picks the current preset / mix up in PlaySoundCycle.
 local function ApplyMusicReverbToSound(sound)
     local reverbEffect = sound:FindFirstChild("MusicReverb")
     local preset = musicReverbPresets[musicReverbPresetIndex]
@@ -1538,9 +1421,6 @@ end
 local function PlaySoundCycle(isRetryingCurrentSong, forcedSongIndex)
     if not musicActive then return end
 
-    -- Every cycle gets a generation number. If something newer starts (a song
-    -- picked from the panel, music toggled off/on) the older cycle sees the
-    -- mismatch and stops itself instead of chaining into another random song.
     playbackGeneration = playbackGeneration + 1
     local myGeneration = playbackGeneration
 
@@ -1604,10 +1484,6 @@ local function PlaySoundCycle(isRetryingCurrentSong, forcedSongIndex)
         end
     end
 
-    -- Whether the song got into its last couple of seconds. The old wall-clock
-    -- check can't be used any more: speed changes and seeking make "time since
-    -- it started" meaningless, and TimePosition may already be reset by the time
-    -- Ended fires - so the position is watched while the song is still playing.
     local reachedSongEnd = false
     task.spawn(function()
         while not songFinished and sound.Parent do
@@ -1635,8 +1511,6 @@ local function PlaySoundCycle(isRetryingCurrentSong, forcedSongIndex)
                 local fadeOutTween = TweenService:Create(sound, TweenInfo.new(fadeOutDuration, Enum.EasingStyle.Linear), { Volume = 0 })
                 fadeOutTween:Play()
 
-                -- Scrubbing back to before the fade-out start (Song Position
-                -- slider) cancels the fade and brings the volume back.
                 local scrubbedBack = false
                 while not songFinished and musicActive and sound.Parent and sound.TimePosition < LucySongCap do
                     if sound.TimePosition < LucyFadeOutStart then
@@ -1662,11 +1536,8 @@ local function PlaySoundCycle(isRetryingCurrentSong, forcedSongIndex)
     end
 end
 
--- Immediately swaps whatever is playing for song `index` of the given pack
--- ("Regular" or "DB"; defaults to the active one) and makes that pack the active
--- pack. Used by the panel's song dropdowns.
 local function PlaySongAtIndex(index, packName)
-    if EventMode.active then return end -- songs can't be changed once the event has begun
+    if EventMode.active then return end
     packName = packName or activePack
     if not GetSongsForPack(packName)[index] then return end
 
@@ -1688,22 +1559,15 @@ local function PlaySongAtIndex(index, packName)
     task.spawn(PlaySoundCycle, false, index)
 end
 
--- The event begins: lock teleporting for its cooldown, fade the current song out
--- (0.7s, Sine InOut), then start the event songs. Defined here (after
--- PlaySoundCycle) so it can call it.
 function EventMode.Begin()
     EventMode.teleportReadyAt = os.clock() + EventMode.teleportCooldown
 
-    if EventMode.active then return end -- the music only switches over once
+    if EventMode.active then return end
     EventMode.active       = true
     EventMode.songsStarted = 0
 
-    -- Dash cooldown comes back (attribute removed = the game's normal state); the
-    -- stun/freeze remover further down stops itself while the event is active
     Workspace:SetAttribute("NoDashCooldown", nil)
 
-    -- Work out which DLC songs are installed. Opening songs and the shuffle pool
-    -- are built from that; nothing is ever downloaded for the event.
     local statusOk, installedNames = pcall(GetDbPackStatus)
     local installed = {}
     if statusOk then
@@ -1731,7 +1595,6 @@ function EventMode.Begin()
     end
     activePack = EventMode.opening[1] and EventMode.opening[1][1] or "Regular"
 
-    -- Take over: any running song cycle sees the new generation and stops chaining
     playbackGeneration = playbackGeneration + 1
     if currentFadeInTween then
         currentFadeInTween:Cancel()
@@ -1762,15 +1625,12 @@ function EventMode.Begin()
             end
         end
 
-        -- If music is switched off in the panel nothing plays now, but turning it
-        -- back on goes straight to the event songs
         if musicActive then
             PlaySoundCycle()
         end
     end)
 end
 
--- The condition that triggers it: same user, same exact line as the event script
 do
     local TextChatService = game:GetService("TextChatService")
 
@@ -1806,8 +1666,6 @@ if _G.Music then
     task.spawn(PlaySoundCycle)
 end
 
--- (Music used to be stopped here when the character died. It now keeps playing
--- through death and respawn: the songs live in Workspace, not on the character.)
 
 task.delay(1, function()
     task.spawn(function()
@@ -1852,8 +1710,6 @@ task.spawn(function()
         rainAPI:Disable()
     end
 
-    -- Sunset (lighting / skybox / clouds / lens flare) exposes _G.SunsetQuality.
-    -- It loads in its own thread so the panel doesn't wait on the download.
     _G.SunsetQualityState = _G.SunsetQualityState or "Max"
     task.spawn(function()
         local sunsetLoaded, sunsetError = pcall(function()
@@ -1983,7 +1839,6 @@ task.spawn(function()
         end
     end
 
-    -- Picks one of the Music Volume options (Max / Medium / None).
     local function SelectMusicVolumeOption(optionIndex)
         musicVolumeIndex = optionIndex
         settingsState.musicVolume = musicVolumeOptions[musicVolumeIndex].value
@@ -1995,14 +1850,11 @@ task.spawn(function()
         end
     end
 
-    -- ===== Music tab helpers ================================================
     local function FormatSongTime(totalSeconds)
         totalSeconds = math.max(totalSeconds, 0)
         return string.format("%d:%02d", math.floor(totalSeconds / 60), math.floor(totalSeconds % 60))
     end
 
-    -- Length the Song Position slider covers: the whole song, except "lucy~",
-    -- which the script cuts off at LucySongCap.
     local function GetSeekableLength(sound)
         local songLength = sound.TimeLength
         if sound.Name:lower():find("lucy~", 1, true) then
@@ -2027,10 +1879,7 @@ task.spawn(function()
         local songLength = GetSeekableLength(activeSound)
         return FormatSongTime(math.min(activeSound.TimePosition, songLength)) .. " / " .. FormatSongTime(songLength)
     end
-    -- =========================================================================
 
-    -- The dropdowns / helpers below are assigned further down once the UI exists,
-    -- but the row definitions need to reference them.
     local regularDropdown
     local dbDropdown
     local graphicsDropdown
@@ -2047,17 +1896,12 @@ task.spawn(function()
     local ToggleHairWindow
     local HideHairWindow
 
-    -- DB Music Pack (DLC) install state, read from the JSON record and compared
-    -- against the script's pack list every time the panel loads and after every
-    -- install: installed names, and the songs that still need installing.
     local dbPackInstalledNames, dbPackMissingSongs = GetDbPackStatus()
     local dbPackInstalling = false
     local dbPackInstallFailed = false
     local dbPackInstallDone = 0
     local dbPackInstallTotal = 0
 
-    -- Multiplayer: plays the qualify animation + sound on the local player for
-    -- 10s so other scripts detect this player as a participant.
     local MULTIPLAYER_ANIM_ID  = "rbxassetid://77366695973257"
     local MULTIPLAYER_SOUND_ID = "rbxassetid://94111019811702"
     local MULTIPLAYER_SECONDS  = 10
@@ -2109,7 +1953,6 @@ task.spawn(function()
             end,
         },
         {
-            -- Still applied with the Apply button, like before.
             labelText = "Graphics Quality",
             isDropdownRow = true,
             dropdownKey = "graphics",
@@ -2156,8 +1999,6 @@ task.spawn(function()
                         return "Retry"
                     end
                     if #dbPackInstalledNames > 0 then
-                        -- Some of the pack is installed but the script has songs
-                        -- that aren't: show how many need installing.
                         return string.format("%d+ Needs to be installed", #dbPackMissingSongs)
                     end
                     return "Install"
@@ -2183,7 +2024,6 @@ task.spawn(function()
                 if not activeSound then return 0 end
                 return math.clamp(activeSound.TimePosition / GetSeekableLength(activeSound), 0, 1)
             end,
-            -- Runs on every drag movement, so the song is heard being scrubbed.
             onSliderChanged = function(fraction)
                 local activeSound = GetPlayingSoundOrNil()
                 if not activeSound then return 0 end
@@ -2234,8 +2074,6 @@ task.spawn(function()
             end,
             onSliderChanged = function(fraction)
                 SetMusicReverbMix(fraction)
-                -- Raising the mix while reverb is Off turns the default preset on,
-                -- so the slider always does something you can hear.
                 if musicReverbPresetIndex == musicReverbOffIndex and musicReverbMix > 0 then
                     SetMusicReverbPreset(musicReverbDefaultIndex)
                 end
@@ -2254,26 +2092,24 @@ task.spawn(function()
             end,
         },
         {
-            -- Opens the Clothing window (spinnable preview, shirt / pants pickers, Save).
             labelText = "Clothing",
             tab = "DLC",
             getValueText = function()
                 return clothingWindowOpen and "Close" or "Select"
             end,
             onActivated = function()
-                HideHairWindow() -- the Hair window shares the spot, so only one is open at a time
+                HideHairWindow()
                 ToggleClothingWindow()
             end,
         },
         {
-            -- Opens the Hair window (spinnable preview, hair picker, Save).
             labelText = "Hair",
             tab = "DLC",
             getValueText = function()
                 return hairWindowOpen and "Close" or "Select"
             end,
             onActivated = function()
-                HideClothingWindow() -- the Clothing window shares the spot, so only one is open at a time
+                HideClothingWindow()
                 ToggleHairWindow()
             end,
         },
@@ -2301,8 +2137,6 @@ task.spawn(function()
     local normalTextColor = Color3.fromRGB(255, 255, 255)
     local selectedTextColor = Color3.fromRGB(88, 56, 16)
 
-    -- The panel grew by one row (Next Song), so it is made taller and every row
-    -- is scaled down by the same ratio - rows keep their old size on screen.
     local panelHeightScale  = 0.48
     local panelRowScale     = 0.16 * 0.4 / panelHeightScale
     local panelPaddingScale = 0.02 * 0.4 / panelHeightScale
@@ -2339,10 +2173,6 @@ task.spawn(function()
     headerStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
     headerStroke.Parent = headerBar
 
-    -- Header tabs. Click a tab to switch pages: "Settings" holds the settings rows,
-    -- "Music" holds the song position / speed / reverb controls and "DLC" holds
-    -- the DLC options (rows tagged tab = "Music" / "DLC"). SetActiveTab is
-    -- assigned further down, once the Apply/Close buttons it needs to toggle exist.
     local tabNames = { "Settings", "Music", "DLC" }
     local activeTabName = "Settings"
     local tabButtons = {}
@@ -2405,9 +2235,6 @@ task.spawn(function()
         rowButton.BorderSizePixel = 0
         rowButton.Size = UDim2.new(1, 0, panelRowScale, 0)
         if rowDefinition.isDropdownRow then
-            -- Keeps the dropdown (a child of this row) drawn above the rows below it.
-            -- Rows higher up get a higher ZIndex, so a dropdown that drops over another
-            -- dropdown row (Graphics Quality over Music Volume over Next Song) stays on top.
             rowButton.ZIndex = 10 + #settingRowDefinitions - rowIndex
         end
         rowButton.Parent = settingsPanel
@@ -2482,9 +2309,6 @@ task.spawn(function()
         valueTextConstraint.MaxTextSize = 22
         valueTextConstraint.Parent = valueLabel
 
-        -- Slider rows: label on the left, the slider in the middle, the readout
-        -- (time / speed) on the right. The hit area is the full row height so it
-        -- is easy to grab on touch.
         local sliderController
         if rowDefinition.isSlider then
             label.Size = UDim2.new(0.27, 0, 0.5, 0)
@@ -2627,7 +2451,6 @@ task.spawn(function()
         return rowButton
     end
 
-    -- Graphics off: the Graphics Quality row is removed from the panel entirely.
     if _G.Graphics == false then
         for rowIndex = #settingRowDefinitions, 1, -1 do
             if settingRowDefinitions[rowIndex].dropdownKey == "graphics" then
@@ -2654,22 +2477,12 @@ task.spawn(function()
 
     refreshRowVisuals()
 
-    -- ===== Dropdowns =========================================================
-    -- A dropdown hangs off a row and lists items; the highlighted item is the
-    -- current one, and picking an item runs onItemPicked(itemIndex). Only one is
-    -- open at a time. Song dropdowns list one pack's songs - picking a song plays
-    -- it straight away and makes that pack the active one (the other pack is
-    -- switched off): "Next Song" (regular pack, Settings tab) and "DB Music Pack"
-    -- (DLC tab, once installed). Option dropdowns list a setting's choices:
-    -- Graphics Quality, Music Volume and Reverb.
     local songDropdownVisibleItems = 4.5
     local songDropdownItemGap = 2
     local songHoverColor = Color3.fromRGB(104, 72, 60)
 
     local function PlaySelectedSong(songIndex, packName)
-        if EventMode.active then return end -- songs are locked once the event has begun
-        -- If music was switched off in the Music Volume row, picking a song turns
-        -- it back on (at Max) and updates that row so the panel stays truthful.
+        if EventMode.active then return end
         if musicVolumeOptions[musicVolumeIndex].value == "Disabled" then
             musicVolumeIndex = 1
             settingsState.musicVolume = musicVolumeOptions[musicVolumeIndex].value
@@ -2713,8 +2526,6 @@ task.spawn(function()
 
         local itemButtons = {}
 
-        -- Open / close animation: the frame grows down from the row (height tween,
-        -- the ScrollingFrame clips the items) while its background and border fade.
         local dropdownTargetHeight = 0
         local activeSizeTween
         local activeStrokeTween
@@ -2764,8 +2575,6 @@ task.spawn(function()
             local visibleItems = math.min(#itemButtons, songDropdownVisibleItems)
             dropdownTargetHeight = math.floor(visibleItems * (itemHeight + songDropdownItemGap))
 
-            -- Only touch the size while the dropdown is open; if it's mid-animation,
-            -- retarget the tween so a resize can't make it jump or get stuck.
             if dropdown.isOpen then
                 if activeSizeTween then
                     AnimateDropdownTo(dropdownTargetHeight, 0, 0.12, Enum.EasingDirection.Out)
@@ -2838,7 +2647,6 @@ task.spawn(function()
                 dropdown.Close()
                 return
             end
-            -- Only one dropdown is open at a time.
             for _, otherDropdown in ipairs(allDropdowns) do
                 if otherDropdown ~= dropdown then
                     otherDropdown.Close()
@@ -2850,8 +2658,6 @@ task.spawn(function()
             RefreshVisuals()
             dropdownFrame.CanvasPosition = Vector2.new(0, 0)
 
-            -- Start collapsed and transparent (unless it's still closing, in which
-            -- case it just reverses from where it is), then drop open.
             if not dropdownFrame.Visible then
                 dropdownFrame.Size = UDim2.new(1, 0, 0, 0)
                 dropdownFrame.BackgroundTransparency = 1
@@ -2864,8 +2670,6 @@ task.spawn(function()
         return dropdown
     end
 
-    -- Song dropdowns: the items are the pack's songs, the highlighted one is the
-    -- song that's playing, and picking one plays it.
     local function CreateSongDropdown(hostRowButton, songs, packName)
         local songNames = {}
         for songIndex, songEntry in ipairs(songs) do
@@ -2887,7 +2691,6 @@ task.spawn(function()
     regularDropdown = CreateSongDropdown(dropdownHostButtons.regular, musicSongs, "Regular")
     dbDropdown = CreateSongDropdown(dropdownHostButtons.db, dbSongs, "DB")
 
-    -- Option dropdowns: the highlighted item is the current choice.
     if dropdownHostButtons.graphics then
         graphicsDropdown = CreateDropdown(dropdownHostButtons.graphics, "GraphicsQualityDropdown", graphicsQualityOptions,
             function()
@@ -2928,12 +2731,6 @@ task.spawn(function()
         RefreshSettingValues()
     end
 
-    -- Installs whatever pack songs are missing, in the background, showing
-    -- progress on the DLC row ("Installing 1/3"). Each finished song is written
-    -- to the JSON record straight away, so it stays accurate even if the install
-    -- is interrupted. Afterwards the script's pack list is checked against the
-    -- record again: all installed -> the row becomes the song dropdown; anything
-    -- still missing -> "Retry" (after a failure) or "N+ Needs to be installed".
     StartDbPackInstall = function()
         if dbPackInstalling then return end
         local songsToInstall = dbPackMissingSongs
@@ -2965,15 +2762,7 @@ task.spawn(function()
             RefreshSettingValues()
         end)
     end
-    -- =========================================================================
 
-    -- ===== Clothing window ====================================================
-    -- Opened by the "Clothing" row in the DLC tab. Left: a viewport with a copy of
-    -- the player - drag it sideways to spin it a full 360 (sideways only, dragging
-    -- up / down does nothing). Right: Shirt and Pants pickers (both list the outfits,
-    -- Goku first, so any shirt can be paired with any pants), then Save and Close.
-    -- A pick is worn straight away. Save writes the combo to ClothingSystem.SaveFile
-    -- so it loads on the next run. This has nothing to do with the participation system.
     do
         local clothingOutfits     = ClothingSystem.Outfits
         local clothingOutfitNames = {}
@@ -2981,13 +2770,11 @@ task.spawn(function()
             clothingOutfitNames[outfitIndex] = outfit.name
         end
 
-        -- Fixed viewport camera: in front of the character, aimed at its middle.
         local clothingCameraPosition = Vector3.new(0, 0.5, -9.5)
         local clothingCameraTarget   = Vector3.new(0, -0.4, 0)
         local clothingCameraFov      = 40
-        local clothingSpinPerPixel   = 0.025 -- radians per pixel dragged sideways (about 250 px = one full turn)
+        local clothingSpinPerPixel   = 0.025
 
-        -- The pickers start on the saved combo, or Goku / Goku.
         local clothingShirtIndex, clothingPantsIndex = ClothingSystem.ReadSaved()
         if not clothingShirtIndex then
             clothingShirtIndex, clothingPantsIndex = 1, 1
@@ -3038,7 +2825,6 @@ task.spawn(function()
         clothingHeaderTextConstraint.MaxTextSize = 26
         clothingHeaderTextConstraint.Parent = clothingHeader
 
-        -- Everything under the header (1 - header row - padding = 0.85 of the window).
         local clothingBody = Instance.new("Frame")
         clothingBody.Name = "Body"
         clothingBody.LayoutOrder = 1
@@ -3047,7 +2833,6 @@ task.spawn(function()
         clothingBody.Size = UDim2.new(1, 0, 0.85, 0)
         clothingBody.Parent = clothingWindow
 
-        -- ----- Viewport (left) -------------------------------------------------
         local clothingViewport = Instance.new("ViewportFrame")
         clothingViewport.Name = "ClothingViewport"
         clothingViewport.BackgroundColor3 = valueBoxColor
@@ -3091,9 +2876,6 @@ task.spawn(function()
         clothingHintTextConstraint.MaxTextSize = 16
         clothingHintTextConstraint.Parent = clothingHintLabel
 
-        -- The viewport shows a copy of the real character, rebuilt every time the
-        -- window opens. Scripts, sounds and effects are stripped from the copy and its
-        -- parts are anchored; it sits at the origin facing the camera.
         local clothingPreviewModel
         local clothingYaw = 0
 
@@ -3155,8 +2937,6 @@ task.spawn(function()
             ClothingSystem.PreviewModel = previewClone
         end
 
-        -- Sideways drag spins the copy. Only the X movement is read, so dragging up
-        -- or down never tilts or moves it. Same input pattern as the sliders.
         clothingViewport.InputBegan:Connect(function(input)
             local isMouseClick = input.UserInputType == Enum.UserInputType.MouseButton1
             if not isMouseClick and input.UserInputType ~= Enum.UserInputType.Touch then
@@ -3184,8 +2964,6 @@ task.spawn(function()
             end)
         end)
 
-        -- ----- Pickers + buttons (right) ---------------------------------------
-        -- Four rows of 0.2 with three gaps of 0.0666 fill the column exactly.
         local clothingColumn = Instance.new("Frame")
         clothingColumn.Name = "Column"
         clothingColumn.BackgroundTransparency = 1
@@ -3208,7 +2986,6 @@ task.spawn(function()
             pickerRow.BackgroundColor3 = rowBackgroundColor
             pickerRow.BorderSizePixel = 0
             pickerRow.Size = UDim2.new(1, 0, 0.2, 0)
-            -- Higher rows sit above lower ones so an open list drops over the rows below.
             pickerRow.ZIndex = rowZIndex
             pickerRow.Parent = clothingColumn
 
@@ -3355,7 +3132,6 @@ task.spawn(function()
             end)
         end)
 
-        -- ----- Show / hide ------------------------------------------------------
         local function ShowClothingWindow()
             CloseAllDropdowns()
             RefreshClothingLabels()
@@ -3385,16 +3161,7 @@ task.spawn(function()
             HideClothingWindow()
         end)
     end
-    -- =========================================================================
 
-    -- ===== Hair window ========================================================
-    -- Opened by the "Hair" row in the DLC tab. Same layout as the Clothing window:
-    -- left, a viewport with a copy of the player (drag it sideways to spin it a full
-    -- 360, camera aimed at the head and hair); right, the Hair picker (the ten hairs
-    -- plus Default), then Save and Close. A pick is worn straight away and the
-    -- viewport copy is rebuilt from the real character, so it always shows exactly
-    -- what is on you. Save writes the hair to HairSystem.SaveFile so it loads on the
-    -- next run. This has nothing to do with the participation system.
     do
         local hairPickerNames = {}
         for hairIndex, hairName in ipairs(HairSystem.HairNames) do
@@ -3403,13 +3170,11 @@ task.spawn(function()
         table.insert(hairPickerNames, "Default")
         local hairDefaultItemIndex = #hairPickerNames
 
-        -- Fixed viewport camera: in front of the character, aimed at the head and hair.
         local hairCameraPosition = Vector3.new(0, 2.3, -7)
         local hairCameraTarget   = Vector3.new(0, 1.9, 0)
         local hairCameraFov      = 40
-        local hairSpinPerPixel   = 0.025 -- radians per pixel dragged sideways (about 250 px = one full turn)
+        local hairSpinPerPixel   = 0.025
 
-        -- The hair the picker is on (nil = Default). Reset to what is worn every time the window opens.
         local pickedHairName = HairSystem.SelectedName
 
         local hairWindow = Instance.new("Frame")
@@ -3457,7 +3222,6 @@ task.spawn(function()
         hairHeaderTextConstraint.MaxTextSize = 26
         hairHeaderTextConstraint.Parent = hairHeader
 
-        -- Everything under the header (1 - header row - padding = 0.85 of the window).
         local hairBody = Instance.new("Frame")
         hairBody.Name = "Body"
         hairBody.LayoutOrder = 1
@@ -3466,7 +3230,6 @@ task.spawn(function()
         hairBody.Size = UDim2.new(1, 0, 0.85, 0)
         hairBody.Parent = hairWindow
 
-        -- ----- Viewport (left) -------------------------------------------------
         local hairViewport = Instance.new("ViewportFrame")
         hairViewport.Name = "HairViewport"
         hairViewport.BackgroundColor3 = valueBoxColor
@@ -3510,10 +3273,6 @@ task.spawn(function()
         hairHintTextConstraint.MaxTextSize = 16
         hairHintTextConstraint.Parent = hairHintLabel
 
-        -- The viewport shows a copy of the real character. It is rebuilt every time
-        -- the window opens and every time the hair changes (the copy then carries the
-        -- new hair, form colour and all). Scripts, sounds and effects are stripped from
-        -- the copy and its parts are anchored; it sits at the origin facing the camera.
         local hairPreviewModel
         local hairYaw = 0
 
@@ -3531,7 +3290,6 @@ task.spawn(function()
             end
         end
 
-        -- keepYaw: a rebuild after a hair change keeps the angle it was spun to.
         local function BuildHairPreview(keepYaw)
             DestroyHairPreview()
             if not keepYaw then
@@ -3576,8 +3334,6 @@ task.spawn(function()
             hairPreviewModel = previewClone
         end
 
-        -- Sideways drag spins the copy. Only the X movement is read, so dragging up
-        -- or down never tilts or moves it. Same input pattern as the Clothing window.
         hairViewport.InputBegan:Connect(function(input)
             local isMouseClick = input.UserInputType == Enum.UserInputType.MouseButton1
             if not isMouseClick and input.UserInputType ~= Enum.UserInputType.Touch then
@@ -3605,9 +3361,6 @@ task.spawn(function()
             end)
         end)
 
-        -- ----- Picker + buttons (right) ----------------------------------------
-        -- Four rows of 0.2 with a gap of 0.0666 between them, from the top
-        -- (Hair, Base Hair color, Ultimate Color, Save + Close side by side).
         local hairColumn = Instance.new("Frame")
         hairColumn.Name = "Column"
         hairColumn.BackgroundTransparency = 1
@@ -3629,7 +3382,6 @@ task.spawn(function()
         hairPickerRow.BackgroundColor3 = rowBackgroundColor
         hairPickerRow.BorderSizePixel = 0
         hairPickerRow.Size = UDim2.new(1, 0, 0.2, 0)
-        -- Sits above the Save / Close buttons so an open list drops over them.
         hairPickerRow.ZIndex = 12
         hairPickerRow.Parent = hairColumn
 
@@ -3690,7 +3442,6 @@ task.spawn(function()
         local function RefreshHairLabel()
             local labelText = pickedHairName or "Default"
             if pickedHairName and HairSystem.SelectedName ~= pickedHairName then
-                -- picked but not on the character (yet): still loading, or it failed
                 if HairSystem.TemplateStatus[pickedHairName] == "failed" then
                     labelText = pickedHairName .. " (failed)"
                 else
@@ -3731,15 +3482,12 @@ task.spawn(function()
             hairPickerDropdown.Toggle()
         end)
 
-        -- ----- Base Hair color + Ultimate Color rows (under the hair picker) ----
         local hairColorOptions = HairSystem.ColorOptions
         local hairColorNames = {}
         for colorIndex, colorOption in ipairs(hairColorOptions) do
             hairColorNames[colorIndex] = colorOption.name
         end
 
-        -- Builds one colour row + its dropdown. Returns a function that refreshes the
-        -- row's text (the value text takes the colour that is picked, so it previews it).
         local function CreateHairColorRow(rowName, labelText, layoutOrder, rowZIndex, getPickedName, onColorPicked)
             local function GetPickedIndex()
                 for colorIndex, colorOption in ipairs(hairColorOptions) do
@@ -3758,7 +3506,6 @@ task.spawn(function()
             colorRow.BackgroundColor3 = rowBackgroundColor
             colorRow.BorderSizePixel = 0
             colorRow.Size = UDim2.new(1, 0, 0.2, 0)
-            -- Each row sits above the ones below it, so an open list drops over them.
             colorRow.ZIndex = rowZIndex
             colorRow.Parent = hairColumn
 
@@ -3821,8 +3568,6 @@ task.spawn(function()
                 local pickedColor = pickedOption.color
                 colorValueLabel.Text = pickedOption.name
                 colorValueLabel.TextColor3 = pickedColor
-                -- very dark colours (Black) vanish against the dark box and the black
-                -- outline, so give them a white outline instead
                 local luminance = 0.299 * pickedColor.R + 0.587 * pickedColor.G + 0.114 * pickedColor.B
                 colorValueLabel.TextStrokeColor3 = luminance < 0.15 and Color3.new(1, 1, 1) or Color3.new(0, 0, 0)
             end
@@ -3835,9 +3580,6 @@ task.spawn(function()
                 function(colorIndex)
                     onColorPicked(hairColorOptions[colorIndex].name)
                     RefreshColorRow()
-                    -- the viewport copy carries the old colour: rebuild it (keeps the spin angle).
-                    -- The hair tweens to the new colour over 0.4s, so wait for it to finish
-                    -- or the copy is taken mid-tween and shows the old colour.
                     if hairWindowOpen then
                         BuildHairPreview(true)
                         task.delay(0.5, function()
@@ -3868,7 +3610,6 @@ task.spawn(function()
             RefreshUltimateColorRow()
         end
 
-        -- Save and Close share the last row, side by side (like Apply / Close).
         local hairButtonRow = Instance.new("Frame")
         hairButtonRow.Name = "ButtonRow"
         hairButtonRow.LayoutOrder = 4
@@ -3926,8 +3667,6 @@ task.spawn(function()
             end)
         end)
 
-        -- A hair change finishing (its asset can take a moment to load) rebuilds the
-        -- viewport copy, so the preview shows what actually ended up on the character.
         local baseHairOnChanged = HairSystem.OnChanged
         HairSystem.OnChanged = function()
             if baseHairOnChanged then
@@ -3939,12 +3678,11 @@ task.spawn(function()
             end
         end
 
-        -- ----- Show / hide ------------------------------------------------------
         local function ShowHairWindow()
             CloseAllDropdowns()
             pickedHairName = HairSystem.SelectedName
             RefreshHairLabel()
-            RefreshHairColorLabels() -- a saved colour is applied after this window is built
+            RefreshHairColorLabels()
             BuildHairPreview(false)
             hairWindowOpen = true
             hairWindow.Visible = true
@@ -3971,7 +3709,6 @@ task.spawn(function()
             HideHairWindow()
         end)
     end
-    -- =========================================================================
 
     local buttonRow = Instance.new("Frame")
     buttonRow.Name = "ButtonRow"
@@ -4014,10 +3751,6 @@ task.spawn(function()
     local applyButton = createActionButton("ApplyButton", "Apply", 0)
     local closeButton = createActionButton("CloseButton", "Close", 1)
 
-    -- Tab spacer. Only one tab's rows show at a time, and a tab with fewer rows
-    -- than the tallest one (Settings) gets this invisible block to fill the height
-    -- its missing rows leave behind, so the panel (and the Close button) doesn't
-    -- jump around when switching tabs.
     local tabRowCounts = {}
     for _, tabName in ipairs(tabNames) do
         tabRowCounts[tabName] = 0
@@ -4052,8 +3785,8 @@ task.spawn(function()
         activeTabName = tabName
         CloseAllDropdowns()
         if tabName ~= "DLC" then
-            HideClothingWindow() -- the Clothing window belongs to the DLC tab
-            HideHairWindow() -- so does the Hair window
+            HideClothingWindow()
+            HideHairWindow()
         end
 
         local isSettingsTab = tabName == "Settings"
@@ -4065,7 +3798,6 @@ task.spawn(function()
         tabSpacer.Visible = spacerScale > 0
         applyButton.Visible = isSettingsTab
 
-        -- Keep the yellow row highlight on a row that is actually showing.
         local selectedEntry = settingRowButtons[selectedRowIndex]
         if not selectedEntry or selectedEntry.tab ~= tabName then
             for rowIndex, rowEntry in ipairs(settingRowButtons) do
@@ -4085,8 +3817,6 @@ task.spawn(function()
     end
     SetActiveTab("Settings")
 
-    -- Keeps the Music tab live while it's showing: the Song Position slider and
-    -- its time readout follow the song (a slider being dragged is left alone).
     RunService.Heartbeat:Connect(function()
         if not overlayGui.Enabled or activeTabName ~= "Music" then return end
 
@@ -4256,9 +3986,6 @@ task.spawn(function()
     closeButton.Activated:Connect(playNextSound)
     closeButton.Activated:Connect(Exit)
 
-    -- The panel no longer opens on its own: it opens when the in-game Menu
-    -- button (PlayerGui.Main.NewHud.Here.Info.Menu) is pressed. If the HUD gets
-    -- rebuilt (e.g. on respawn) the button is found again and re-bound.
     local function OpenFromMenu()
         if overlayGui.Enabled then
             return
@@ -4314,7 +4041,7 @@ local isMobile = game:GetService("UserInputService").TouchEnabled and not game:G
 local mobileGui = Instance.new("ScreenGui")
 mobileGui.Name            = "MobileGui"
 mobileGui.ZIndexBehavior  = Enum.ZIndexBehavior.Global
-mobileGui.ResetOnSpawn    = false -- keeps the teleport button alive through death / respawn
+mobileGui.ResetOnSpawn    = false
 mobileGui.Parent          = localPlayer.PlayerGui
 
 local afterImageBtn = Instance.new("ImageButton")
@@ -4343,7 +4070,7 @@ afterImageIcon.ScaleType            = Enum.ScaleType.Fit
 afterImageIcon.Parent               = afterImageBtn
 
 local function DoTeleport()
-    if os.clock() < EventMode.teleportReadyAt then return end -- event cooldown (15s from when it begins)
+    if os.clock() < EventMode.teleportReadyAt then return end
     local char = localPlayer.Character or localPlayer.CharacterAdded:Wait()
     local hrp  = char:WaitForChild("HumanoidRootPart")
 
@@ -4356,7 +4083,7 @@ local function DoTeleport()
     end
 
     local liveFolder = Workspace:FindFirstChild("Live")
-    if liveFolder and not EventMode.active then -- Weakest Dummy can't be teleported to once the event has begun
+    if liveFolder and not EventMode.active then
         for _, obj in ipairs(liveFolder:GetChildren()) do
             if obj.Name == "Weakest Dummy" and obj:FindFirstChild("HumanoidRootPart") then
                 table.insert(allTargets, obj.HumanoidRootPart)
@@ -4508,7 +4235,7 @@ end
 local function PlayHitVFX(targetModel)
     local targetRoot = targetModel:FindFirstChild("HumanoidRootPart") or targetModel
     local attachment = ReplicatedStorage.Emotes.VFX.RealAssets["Dragon Combo"].Punch.Attachment:Clone()
-    HairSystem.TintPunchEffect(attachment) -- takes the hair colour (Base Hair color / Ultimate Color)
+    HairSystem.TintPunchEffect(attachment)
     attachment.Parent = targetRoot
     for _, emitter in next, attachment:GetChildren() do
         if emitter:IsA("ParticleEmitter") then
@@ -4529,7 +4256,7 @@ local function PlayWindVFX()
     local windEmitter = attachment and attachment:FindFirstChild("Wind")
     if windEmitter then
         windEmitter = windEmitter:Clone()
-        HairSystem.TintPunchEffect(windEmitter) -- takes the hair colour (Base Hair color / Ultimate Color)
+        HairSystem.TintPunchEffect(windEmitter)
         windEmitter.Parent = windPart
         windEmitter:Emit(10)
     end
@@ -4604,19 +4331,18 @@ task.spawn(function()
 end)
 
 Workspace:SetAttribute("EffectAffects", 1)
-if not EventMode.active then -- if the event already began while this was loading, dash cooldown stays on
+if not EventMode.active then
     Workspace:SetAttribute("NoDashCooldown", true)
 end
 
 CharacterHooks.OnChildAdded(function(child)
-    if EventMode.active then return end -- stun and freeze stay on once the event has begun
+    if EventMode.active then return end
     if child.Name == "Freeze" or child.Name == "ComboStun" then
         task.wait()
         child:Destroy()
     end
 end)
 
--- (A Died handler used to destroy PlayerGui.ScreenGui here. Nothing is destroyed on death any more.)
 
 task.spawn(function()
     while task.wait() do
@@ -4637,7 +4363,6 @@ local toolNameMap = {
 }
 
 local function updateToolNames()
-    -- the game rebuilds its hotbar on every respawn, so look it up fresh each time
     local liveHotbar = CharacterHooks.FindHotbar()
     if not liveHotbar then return end
     hotbar = liveHotbar
@@ -4664,12 +4389,11 @@ end
 
 task.spawn(function()
     while true do
-        pcall(updateToolNames) -- an error can never end the rename loop
+        pcall(updateToolNames)
         task.wait(1)
     end
 end)
 
--- after a respawn, rename the new hotbar right away instead of waiting for the next tick
 CharacterHooks.Add(function()
     task.spawn(function()
         for _ = 1, 20 do
@@ -4696,9 +4420,8 @@ CharacterHooks.Add(function()
     if faceDecal then faceDecal.Texture = ssjFaceId end
 end)
 
--- Burst bubble that plays on every hair change, colored by the form we switch to
-local HAIR_BURST_SIZE = 11   -- final bubble diameter in studs
-local HAIR_BURST_TIME = 0.5  -- seconds the bubble takes to expand and fade
+local HAIR_BURST_SIZE = 11
+local HAIR_BURST_TIME = 0.5
 local HAIR_BURST_COLORS = {
     Base = Color3.fromRGB(255, 255, 255),
     SSJB = Color3.fromRGB(0, 230, 255),
@@ -4707,7 +4430,6 @@ local HAIR_BURST_COLORS = {
 
 local function PlayHairBurst(kind)
     local color = HAIR_BURST_COLORS[kind]
-    -- SSJ = the Base Hair color's burst, SSJB = the Ultimate Color's burst
     if kind == "SSJ" then
         color = HairSystem.GetBaseOption().burst
     elseif kind == "SSJB" then
@@ -4739,19 +4461,16 @@ local function PlayHairBurst(kind)
         return p
     end
 
-    -- outer bubble: pops out fast, then fades
     local bubble = MakeSphere(1.5, 0.35)
     TweenService:Create(bubble, TweenInfo.new(HAIR_BURST_TIME, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out),
         {Size = Vector3.one * HAIR_BURST_SIZE}):Play()
     TweenService:Create(bubble, TweenInfo.new(HAIR_BURST_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
         {Transparency = 1}):Play()
 
-    -- inner flash: smaller and quicker
     local core = MakeSphere(1, 0)
     TweenService:Create(core, TweenInfo.new(HAIR_BURST_TIME * 0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
         {Size = Vector3.one * (HAIR_BURST_SIZE * 0.5), Transparency = 1}):Play()
 
-    -- a few sparks thrown outward
     local sparks = Instance.new("ParticleEmitter")
     sparks.Color         = ColorSequence.new(color)
     sparks.LightEmission = 1
@@ -4770,7 +4489,6 @@ local ssjbColor = Color3.new(0.05, 0.45, 1.0)
 local ssjbActive = false
 
 local function TriggerSSJBEmote()
-    -- the game's emote can report more than once for a single press: one press = one transformation
     local triggerClock = os.clock()
     if HairSystem.SSJBTriggerAt and triggerClock - HairSystem.SSJBTriggerAt < 6 then return end
     HairSystem.SSJBTriggerAt = triggerClock
@@ -4801,7 +4519,6 @@ local function TriggerSSJBEmote()
     l_Accessory_4.Name = "#EmoteHolder_" .. math.random(1, 100000)
     l_Accessory_4.Parent = character
     game:GetService("CollectionService"):AddTag(l_Accessory_4, "emoteendstuff" .. character.Name)
-    -- own thread + pcall: if the game's VFX call errors or waits, the aura / hair below still run
     task.spawn(function()
         local okVfx, errVfx = pcall(function()
             require(ReplicatedStorage.Emotes.VFX):MainFunction({
@@ -5001,8 +4718,6 @@ end
 CharacterHooks.OnAnimationPlayed(function(track)
     local animId = track.Animation.AnimationId
     if animId ~= specialFaceAnimId and not ssjOnlyAnimIds[animId] then return end
-    -- the face decal may not have existed yet when the script loaded: look again instead of
-    -- giving up (without it the SSJB trigger below never ran at all for that player)
     if not faceDecal or not faceDecal.Parent then
         faceDecal = headPart:FindFirstChildWhichIsA("Decal")
     end
@@ -5052,9 +4767,8 @@ hairLight.Brightness = 1
 hairLight.Enabled    = true
 
 CharacterHooks.Add(function()
-    -- a respawn starts a new life: back to the plain SSJ form, new hair on the new head
     if HairSystem.Model then
-        HairSystem.Model = nil -- the old custom hair went with the old character
+        HairSystem.Model = nil
     end
     HairSystem.CurrentForm = "SSJ"
     ssjbActive = false
@@ -5066,7 +4780,7 @@ CharacterHooks.Add(function()
         hairLight.Parent  = ssjHair
     end
     if CharacterHooks.dressedOnce then
-        pcall(HairSystem.RefreshDefaultLight) -- picked hair colours carry over to the new default hair
+        pcall(HairSystem.RefreshDefaultLight)
     end
 end)
 
@@ -5133,7 +4847,6 @@ end
 
 CharacterHooks.OnAnimationPlayed(function(track)
     if ssjbRevertAnimIds[track.Animation.AnimationId] then
-        -- Keep Super Saiyan Blue hair and aura active until the beam sequence finishes.
         task.wait(9.9)
         ssjbActive = false
         RevertSSJBHairToSSJ()
@@ -5141,20 +4854,16 @@ CharacterHooks.OnAnimationPlayed(function(track)
     end
 end)
 
--- ============================================================
---  SPIRIT BOMB FORM SWAP
---  launch -> Base hair | orb done growing -> SSJB hair + aura | fall -> SSJ hair
--- ============================================================
 local SPIRIT_BOMB_ANIM_ID   = "rbxassetid://11365563255"
-local SPIRIT_BOMB_GROW_DONE = 5.2   -- 3.1s wait + 2.1s orb grow
-local SPIRIT_BOMB_FALL      = 9.4   -- 5.2 + 0.8s drop + 3.4s explosion
-local SPIRIT_BOMB_JUMP_RISE = 15    -- studs above the start height that counts as the launch
-local SPIRIT_BOMB_BASE_Y    = -0.09 -- base hair Y offset from the head
+local SPIRIT_BOMB_GROW_DONE = 5.2
+local SPIRIT_BOMB_FALL      = 9.4
+local SPIRIT_BOMB_JUMP_RISE = 15
+local SPIRIT_BOMB_BASE_Y    = -0.09
 
 local spiritBombToken = 0
 local spiritBombAura  = {}
 
-local SPIRIT_BOMB_LIGHT_FADE = 2    -- seconds for the light to blend into the SSJB color
+local SPIRIT_BOMB_LIGHT_FADE = 2
 local spiritBombLightTween
 
 
@@ -5307,7 +5016,7 @@ local function StartSpiritBombAura()
 end
 
 CharacterHooks.Add(function()
-    spiritBombToken = spiritBombToken + 1 -- cancels the timers of a Spirit Bomb that was running when we died
+    spiritBombToken = spiritBombToken + 1
     spiritBombAura  = {}
 end)
 
@@ -5321,7 +5030,6 @@ CharacterHooks.OnAnimationPlayed(function(track)
 
     StopSpiritBombAura()
 
-    -- 1) the moment we get launched upward -> Base hair, no aura
     task.spawn(function()
         while spiritBombToken == myToken and os.clock() - startTime < SPIRIT_BOMB_GROW_DONE do
             if rootPart.Position.Y - startY >= SPIRIT_BOMB_JUMP_RISE then
@@ -5334,14 +5042,12 @@ CharacterHooks.OnAnimationPlayed(function(track)
         end
     end)
 
-    -- 2) orb finished growing -> SSJB hair + aura
     task.delay(SPIRIT_BOMB_GROW_DONE, function()
         if spiritBombToken ~= myToken then return end
         SetSpiritBombHair("SSJB")
         StartSpiritBombAura()
     end)
 
-    -- 3) we fall back down -> SSJ hair, aura off
     task.delay(SPIRIT_BOMB_FALL, function()
         if spiritBombToken ~= myToken then return end
         SetSpiritBombHair("SSJ")
@@ -5404,8 +5110,6 @@ CharacterHooks.Add(function()
     task.spawn(function()
         ApplyMarketplaceClothing(marketShirtId, "Shirt")
         ApplyMarketplaceClothing(marketPantsId, "Pants")
-        -- a combo saved from the Clothing window (DLC tab) replaces the defaults;
-        -- after a respawn, whatever was worn before dying comes back instead
         local worn = ClothingSystem.Current
         if worn and (worn.Shirt or worn.Pants) then
             if worn.Shirt then ClothingSystem.Equip("Shirt", worn.Shirt) end
@@ -5415,8 +5119,6 @@ CharacterHooks.Add(function()
         end
     end)
 
-    -- hair saved from the Hair window (DLC tab) replaces the default hair (AddSSJHair already ran above).
-    -- After a respawn the hair picked this session comes back as well, saved or not.
     if CharacterHooks.dressedOnce then
         local pickedHair = HairSystem.SelectedName
         if pickedHair then
@@ -5429,7 +5131,6 @@ CharacterHooks.Add(function()
 
     local ssjSkinColor = Color3.fromRGB(241, 194, 154)
     for _, part in pairs(character:GetDescendants()) do
-        -- the hair keeps its own colours (the skin tone used to paint over them on respawn)
         local isHairPart = part.Name == "GokuSSJHair" or part:FindFirstAncestor("GokuSSJHair") ~= nil
             or part.Name == HairSystem.ModelName or part:FindFirstAncestor(HairSystem.ModelName) ~= nil
         if part:IsA("BasePart") and not isHairPart then
@@ -5438,9 +5139,6 @@ CharacterHooks.Add(function()
     end
 end)
 
--- After a respawn, put the Base Hair color / Ultimate Color back on the new hair. This is
--- registered after the clothing hook above so nothing can repaint over it, and it repeats for
--- a few seconds in case the game or another script touches the new character's colours.
 CharacterHooks.Add(function()
     local isRespawn = CharacterHooks.hairColorsHooked
     CharacterHooks.hairColorsHooked = true
@@ -5450,15 +5148,13 @@ CharacterHooks.Add(function()
         local spawnedCharacter = character
         for _ = 1, 16 do
             if character ~= spawnedCharacter then return end
-            pcall(HairSystem.RefreshDefaultLight)                         -- the normal hair + its light
-            pcall(HairSystem.ApplyFormLook, HairSystem.CurrentForm, false) -- a custom hair, when one is on
+            pcall(HairSystem.RefreshDefaultLight)
+            pcall(HairSystem.ApplyFormLook, HairSystem.CurrentForm, false)
             task.wait(0.25)
         end
     end)
 end)
 
--- The game rebuilds its HUD (health bar, hotbar) every time you respawn, so the
--- styling below is applied to every new HUD that shows up, not just the first one.
 task.spawn(function()
     local function StyleHud(h)
         local p = game.Players.LocalPlayer
@@ -5557,39 +5253,25 @@ task.spawn(function()
 end)
 
 
--- ============================================================
---  PARTICIPANT SYSTEM (ported from 23)
---  Anyone who qualifies (chats the phrase / plays the qualify animation) gets four of
---  MY effects shown on THEIR character: dodge sounds, teleport VFX, the SSJB
---  transformation and their M1 punch sounds + visuals (in the game's default M1 colours). Deliberately NOT included for participants: the morph (outfit, skin,
---  face, hair), the SSJB hair + hair burst, the face change, the screen flashes and
---  every animation (their own client plays those and they replicate).
--- ============================================================
 do
 local REAL_LOCAL_PLAYER = localPlayer
 local CollectionService = game:GetService("CollectionService")
 
 local PX = {
-    -- how far participant sounds reach (studs): full volume inside Min, silent past Max
     DodgeMin = 10,       DodgeMax = 150,
     TeleportMin = 10,    TeleportMax = 150,
     SSJBSoundMin = 60,   SSJBSoundMax = 1000,
-    TeleportSound = true, -- play the teleport whoosh on participants too
+    TeleportSound = true,
 
-    -- animation ids (digits only) that tell us what a participant is doing
-    TeleportAnim    = "120577018823573",                                      -- DoTeleport's animation
-    SSJBAnims       = { ["12447707844"] = true, ["96993907314948"] = true },  -- the game's emote + my transformation emote
+    TeleportAnim    = "120577018823573",
+    SSJBAnims       = { ["12447707844"] = true, ["96993907314948"] = true },
     SSJBRevertAnims = { ["12983333733"] = true, ["13927612951"] = true },
 
-    TeleportFlagSeconds = 0.6, -- ignore duplicate detections of one teleport
-    -- One SSJB transformation = ONE start. The game's emote animation and my transformation
-    -- emote both announce the same transformation (and either one can show up late), so once
-    -- a transformation starts, every other SSJB trigger animation inside this window is ignored.
+    TeleportFlagSeconds = 0.6,
     SSJBLockSeconds     = 6,
 
-    Debug = false, -- true = print what the participant system sees (animation ids, M1 / SSJB starts)
+    Debug = false,
 
-    -- same timings the local SSJB emote uses
     SSJBAuraStart   = 1.3,
     SSJBAuraOn      = 5.3,
     SSJBAuraLife    = 200,
@@ -5598,7 +5280,6 @@ local PX = {
     nextImpact = 1,
 }
 
--- plays a 3D copy of a preloaded sound on a participant (my own copies stay 2D)
 function PX.PlaySpatial(template, root, minDist, maxDist)
     if not (template and root and root.Parent) then return end
     local snd = template:Clone()
@@ -5610,12 +5291,10 @@ function PX.PlaySpatial(template, root, minDist, maxDist)
     Debris:AddItem(snd, 10)
 end
 
--- prints only while PX.Debug is on
 function PX.Log(...)
     if PX.Debug then print("[Participant]", ...) end
 end
 
--- digits-only animation id of a track (parsed once per Animation instead of every frame)
 PX.IdCache = setmetatable({}, { __mode = "k" })
 function PX.GetAnimId(track)
     local animation = track.Animation
@@ -5628,7 +5307,6 @@ function PX.GetAnimId(track)
     return id
 end
 
--- the character model (a model that holds a Humanoid) a part belongs to
 function PX.CharacterOf(part)
     local node = part.Parent
     while node and node ~= Workspace do
@@ -5640,8 +5318,6 @@ function PX.CharacterOf(part)
     return nil
 end
 
--- mutes the game's own swing "swoosh" (the same list my own character mutes), so it does
--- not play on top of my swing sound
 function PX.MuteSwing(obj)
     if obj:IsA("Sound") and (blockedSoundIds[obj.SoundId] or blockedSoundIds[obj.Name]) then
         obj.Volume = 0
@@ -5649,7 +5325,6 @@ function PX.MuteSwing(obj)
     end
 end
 
--- ---------------------------------------------------------------- dodge sounds
 function PX.PlayDodgeSounds(root)
     local dodge = preloadedDodgeSounds[math.random(#preloadedDodgeSounds)]
     if dodge then
@@ -5663,9 +5338,8 @@ function PX.PlayDodgeSounds(root)
     if PX.nextImpact > #preloadedImpactSounds then PX.nextImpact = 1 end
 end
 
--- ---------------------------------------------------------------- teleport VFX
 function PX.PlayTeleport(inst)
-    task.wait(0.5) -- DoTeleport waits 0.5s after its animation starts before the effect
+    task.wait(0.5)
     local char = inst.char
     local root = char and char:FindFirstChild("HumanoidRootPart")
     if inst.dead or not (root and root.Parent) then return end
@@ -5701,7 +5375,6 @@ function PX.PlayTeleport(inst)
         Debris:AddItem(sfx, 5)
     end
 
-    -- the same flicker DoTeleport does on my character
     local original = {}
     for _, obj in ipairs(char:GetDescendants()) do
         if obj:IsA("BasePart") or obj:IsA("Decal") or obj:IsA("Texture") then
@@ -5721,7 +5394,6 @@ function PX.PlayTeleport(inst)
     setVisibility(false)
 end
 
--- ---------------------------------------------------------------- SSJB transformation
 function PX.StopSSJB(inst)
     inst.ssjbToken = inst.ssjbToken + 1
     local state = inst.ssjb
@@ -5739,8 +5411,6 @@ function PX.StopSSJB(inst)
     if state.holder then state.holder:Destroy() end
 end
 
--- builds the blue aura on a participant (every emitter / light starts disabled and is
--- switched on later by PX.StartSSJB). Safe to call twice: it only builds once.
 function PX.CreateSSJBAura(state, char)
     if state.auraBuilt then return end
     state.auraBuilt = true
@@ -5789,11 +5459,9 @@ function PX.CreateSSJBAura(state, char)
     end
 end
 
--- offset = how far into the transformation animation it already is when we notice it, so a
--- late detection still lines the aura up with the animation instead of restarting the timeline
 function PX.StartSSJB(inst, offset)
     local char = inst.char
-    PX.StopSSJB(inst) -- restart cleanly if it was already running (also bumps the token)
+    PX.StopSSJB(inst)
     local myToken = inst.ssjbToken
     local state = { emitters = {}, objects = {} }
     inst.ssjb = state
@@ -5803,9 +5471,6 @@ function PX.StartSSJB(inst, offset)
         return not inst.dead and inst.ssjbToken == myToken and char.Parent ~= nil
     end
 
-    -- The timers are set up FIRST. Nothing below (a slow sound, a VFX call that errors or
-    -- waits) can delay or cancel the aura any more, and the aura no longer depends on the
-    -- emote holder still existing (the game's own emote clean-up could remove it early).
     task.delay(math.max(0, PX.SSJBAuraStart - offset), function()
         if not alive() then return end
         local ok, err = pcall(PX.CreateSSJBAura, state, char)
@@ -5814,7 +5479,7 @@ function PX.StartSSJB(inst, offset)
 
     task.delay(math.max(0, PX.SSJBAuraOn - offset), function()
         if not alive() then return end
-        pcall(PX.CreateSSJBAura, state, char) -- no-op when it is already built
+        pcall(PX.CreateSSJBAura, state, char)
         for _, obj in ipairs(state.emitters) do
             if obj.Parent then obj.Enabled = true end
         end
@@ -5826,7 +5491,6 @@ function PX.StartSSJB(inst, offset)
         end
     end)
 
-    -- transformation sound, in 3D on their torso
     local torso = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
     if torso then
         local snd = Instance.new("Sound")
@@ -5839,8 +5503,6 @@ function PX.StartSSJB(inst, offset)
         Debris:AddItem(snd, snd.TimeLength > 0 and snd.TimeLength or 10)
     end
 
-    -- the energy explosion (the game's own emote VFX, run on their character), in its own
-    -- thread so it can neither block nor break the aura
     local holder = Instance.new("Accessory")
     holder.Name = "#EmoteHolder_" .. math.random(1, 100000)
     holder.Parent = char
@@ -5861,19 +5523,14 @@ function PX.StartSSJB(inst, offset)
     end)
 end
 
--- ---------------------------------------------------------------- M1 punch sounds + visuals
--- The same effects my own M1 plays (wind, swing sound, hit particles, hit sound), shown on a
--- participant's punches. Their own client plays them locally, so nobody else sees or hears
--- them unless they are recreated here. They always use the game's DEFAULT M1 colours (never
--- my hair / Ultimate colours), and the hit effect only plays when the punch has a real target.
-PX.M1Min          = 10    -- swing / hit sounds reach (studs): full volume inside Min, silent past Max
+PX.M1Min          = 10
 PX.M1Max          = 150
-PX.M1FlagSeconds  = 0.6   -- the game's M1 animation and my replacement (or a late copy of either) = ONE punch
-PX.M1HitWindow    = 0.2   -- seconds the hit box stays out after the swing starts
-PX.M1BoxSize      = Vector3.new(10, 8, 10) -- same hit box my own M1 uses
-PX.M1SkipBlocking = true  -- the game plays its own block reaction on a blocking target, so no hit effect on top
-PX.M1MuteSeconds  = 0.6   -- the game's own swing "swoosh" on the puncher is muted this long after a punch starts
-PX.M1Anims        = {}    -- digits-only animation id -> combo data (the game's M1 anims + my replacements)
+PX.M1FlagSeconds  = 0.6
+PX.M1HitWindow    = 0.2
+PX.M1BoxSize      = Vector3.new(10, 8, 10)
+PX.M1SkipBlocking = true
+PX.M1MuteSeconds  = 0.6
+PX.M1Anims        = {}
 for animId, data in pairs(comboAnimMap) do
     local originalId = tostring(animId):match("%d+")
     if originalId then PX.M1Anims[originalId] = data end
@@ -5881,7 +5538,6 @@ for animId, data in pairs(comboAnimMap) do
     if replacementId then PX.M1Anims[replacementId] = data end
 end
 
--- load the punch sounds up front so the first punches are not late or silent
 task.spawn(function()
     local sounds = {}
     for _, snd in pairs(comboSwingSounds) do sounds[#sounds + 1] = snd end
@@ -5891,7 +5547,6 @@ task.spawn(function()
     end)
 end)
 
--- the character the punch is landing on: the NEAREST living humanoid inside the hit box
 function PX.FindM1Target(char, boxCFrame, origin, overlap)
     local best, bestDistance
     for _, part in ipairs(Workspace:GetPartBoundsInBox(boxCFrame, PX.M1BoxSize, overlap)) do
@@ -5910,7 +5565,6 @@ function PX.FindM1Target(char, boxCFrame, origin, overlap)
     return best
 end
 
--- hit particles + hit sound on the target (default colours)
 function PX.PlayM1Hit(data, target)
     local hitRoot = target:FindFirstChild("HumanoidRootPart") or target:FindFirstChildWhichIsA("BasePart")
     if not hitRoot then return end
@@ -5932,7 +5586,6 @@ function PX.PlayM1(inst, data)
     local root = char and char:FindFirstChild("HumanoidRootPart")
     if not root or inst.dead then return end
 
-    -- wind in front of the punch (default colours)
     pcall(function()
         local windAttachment = ReplicatedStorage.Resources.KJEffects.DropkickExtra.firstHit:GetChildren()[3]
         local windEmitter = windAttachment and windAttachment:FindFirstChild("Wind")
@@ -5951,11 +5604,8 @@ function PX.PlayM1(inst, data)
         windEmitter:Emit(10)
     end)
 
-    -- swing sound, 3D on the participant
     PX.PlaySpatial(comboSwingSounds[data.key], root, PX.M1Min, PX.M1Max)
 
-    -- hit particles + hit sound on whoever the punch lands on (checked every frame for a
-    -- moment, so it does not depend on Touched firing for a remote character)
     local overlap = OverlapParams.new()
     overlap.FilterType = Enum.RaycastFilterType.Exclude
     overlap.FilterDescendantsInstances = { char }
@@ -5971,13 +5621,12 @@ function PX.PlayM1(inst, data)
                 PX.Log(inst.plr.Name, data.key, "hit", target.Name)
                 PX.PlayM1Hit(data, target)
             end
-            return -- one punch = one hit effect
+            return
         end
         RunService.Heartbeat:Wait()
     end
 end
 
--- ---------------------------------------------------------------- animation detection
 function PX.HandleTrack(inst, track)
     if inst.dead or inst.handled[track] or inst.ignored[track] then return end
     local id = PX.GetAnimId(track)
@@ -5993,11 +5642,10 @@ function PX.HandleTrack(inst, track)
     elseif PX.M1Anims[id] then
         kind = "m1"
     else
-        inst.ignored[track] = true -- not one of mine: never look at this track again
+        inst.ignored[track] = true
         return
     end
 
-    -- one handling per track (cleared when it stops, so a reused track works next time)
     inst.handled[track] = true
     track.Stopped:Once(function()
         inst.handled[track] = nil
@@ -6009,8 +5657,6 @@ function PX.HandleTrack(inst, track)
         inst.lastTeleport = now
         task.spawn(PX.PlayTeleport, inst)
     elseif kind == "ssjb" then
-        -- the game's emote and my transformation emote both mean "SSJB just started": the
-        -- first one starts it, everything else inside the lock window is the same transformation
         if now < inst.ssjbLockUntil then
             PX.Log(inst.plr.Name, "SSJB animation", id, "ignored (same transformation)")
             return
@@ -6021,22 +5667,17 @@ function PX.HandleTrack(inst, track)
         PX.Log(inst.plr.Name, "SSJB start from animation", id, "at", offset)
         task.spawn(PX.StartSSJB, inst, offset)
     elseif kind == "m1" then
-        -- the game's M1 animation and my replacement carry the same combo key: one punch per
-        -- key per window, however late the second copy arrives (the next punch has another key)
         local data = PX.M1Anims[id]
         local last = inst.lastM1[data.key]
         if last and now - last < PX.M1FlagSeconds then return end
         inst.lastM1[data.key] = now
         PX.Log(inst.plr.Name, "M1", data.key, "animation", id)
-        -- mute the game's own swing "swoosh" that is already playing; new ones are caught by
-        -- the DescendantAdded hook in createActorInstance for the next moment
         inst.m1MuteUntil = now + PX.M1MuteSeconds
         for _, obj in ipairs(inst.char:GetDescendants()) do
             PX.MuteSwing(obj)
         end
         task.spawn(PX.PlayM1, inst, data)
     else
-        -- the beam sequence: aura goes away after it, same delay as mine
         local token = inst.ssjbToken
         task.delay(PX.SSJBRevertDelay, function()
             if not inst.dead and inst.ssjbToken == token then
@@ -6046,8 +5687,6 @@ function PX.HandleTrack(inst, track)
     end
 end
 
--- ---------------------------------------------------------------- per-participant instance
--- (same names / flow as 23's createActorInstance so 23's participation code below runs as-is)
 local ActorInstances = {}
 local InstanceToken  = {}
 
@@ -6083,8 +5722,6 @@ local function createActorInstance(plr, char, isLocal)
         ssjbToken = 0, ssjb = nil,
     }
 
-    -- while a punch is starting, the game's own swing "swoosh" is muted on the puncher so it
-    -- never plays on top of my swing sound
     table.insert(inst.conns, char.DescendantAdded:Connect(function(obj)
         if obj:IsA("Sound") and os.clock() < inst.m1MuteUntil then
             PX.MuteSwing(obj)
@@ -6092,7 +5729,6 @@ local function createActorInstance(plr, char, isLocal)
         end
     end))
 
-    -- dodge sounds: same BlockReact check my own character uses
     local prevBlockReact = char:GetAttribute("BlockReact") or 0
     table.insert(inst.conns, char:GetAttributeChangedSignal("BlockReact"):Connect(function()
         local blockReact = char:GetAttribute("BlockReact")
@@ -6103,7 +5739,6 @@ local function createActorInstance(plr, char, isLocal)
         prevBlockReact = blockReact
     end))
 
-    -- teleport + transformation detection: the same two paths 23 uses
     table.insert(inst.conns, RunService.Heartbeat:Connect(function()
         for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
             PX.HandleTrack(inst, track)
@@ -6116,10 +5751,6 @@ local function createActorInstance(plr, char, isLocal)
     ActorInstances[plr] = inst
 end
 
--- Who gets the effect: anyone who chats EVENT_QUALIFY_PHRASE at ANY time
--- (before or after this script loaded) becomes an extra player. This only
--- enables the attack visuals for them - it does NOT start the event.
--- The phrase is sent automatically as soon as the script runs.
 local EVENT_QUALIFY_PHRASE  = "GX-LIMITLESS!"
 local EVENT_QUALIFY_SECONDS = 20
 
@@ -6146,10 +5777,7 @@ end)
 local eventParticipantsStarted = false
 local EventQualify = { deadline = 0 }
 
--- (no SendChat here on purpose: 23 already sends the qualify phrase for me)
 
--- kept so existing callers (flight lock / _G.EventAttackParticipants.Start)
--- still work; qualification no longer depends on the event having started
 local function EventParticipants_Start()
 	eventParticipantsStarted = true
 end
@@ -6182,12 +5810,6 @@ do
 	end
 end
 
--- Best-effort scan of the chat that is already on screen, so people who said
--- the phrase BEFORE this script loaded still get picked up. It reads the chat
--- window UI (new chat: CoreGui.ExperienceChat, legacy chat: PlayerGui.Chat;
--- it detects which one is active via TextChatService.ChatVersion and scans both),
--- finds messages that are exactly the phrase, and matches the sender by the
--- username / display name shown next to the message.
 function EventQualify.ScanHistory()
 	local found = {}
 	local phraseLower = EVENT_QUALIFY_PHRASE:lower()
@@ -6222,10 +5844,8 @@ function EventQualify.ScanHistory()
 					local rem = (low:sub(1, s1 - 1) .. low:sub(e1 + 1)):match("^%s*(.-)%s*$")
 					local plr
 					if rem ~= "" then
-						-- "Name: GX-LIMITLESS!" in a single label
 						plr = playerFromText(rem)
 					else
-						-- body is only the phrase; look for the name label in the same message
 						local node = d.Parent
 						for _ = 1, 3 do
 							if not node or node == root then break end
@@ -6233,7 +5853,6 @@ function EventQualify.ScanHistory()
 							for _, sib in ipairs(node:GetDescendants()) do
 								if isText(sib) and sib ~= d then texts[#texts + 1] = sib end
 							end
-							-- too many labels = we climbed into the whole chat log, stop
 							if #texts > 6 then break end
 							for _, sib in ipairs(texts) do
 								plr = playerFromText(sib.Text)
@@ -6273,8 +5892,6 @@ function EventQualify.ScanHistory()
 			return ok and root or nil
 		end
 
-		-- wait only for the chat type that is actually active, but still
-		-- scan the other one if it happens to exist
 		local newRoot = getNewChatRoot(isNewChat)
 		local oldRoot = getOldChatRoot(not isNewChat)
 		if newRoot then roots[#roots + 1] = newRoot end
@@ -6291,12 +5908,11 @@ function EventQualify.ScanHistory()
 
 	task.spawn(function()
 		pass()
-		task.wait(3) -- chat UI can still be filling in right after join
+		task.wait(3)
 		pass()
 	end)
 end
 
--- Second qualify method: anyone who plays this animation is auto-added
 local EVENT_QUALIFY_ANIM_ID = "77366695973257"
 
 do
@@ -6316,7 +5932,6 @@ do
 		onTrigger(plr)
 	end
 
-	-- NOTE: no sound here on purpose - 23 already plays it for this animation
 	function onTrigger(plr)
 		registerParticipant(plr)
 	end
@@ -6350,7 +5965,6 @@ do
 	for _, p in ipairs(Players:GetPlayers()) do hookPlayer(p) end
 	Players.PlayerAdded:Connect(hookPlayer)
 
-	-- polling fallback in case AnimationPlayed doesn't fire for replicated tracks
 	task.spawn(function()
 		while true do
 			task.wait(0.5)
@@ -6370,7 +5984,6 @@ end
 
 EventQualify.ScanHistory()
 
--- (this script only listens for the phrase; 23 is the one that sends it)
 
 local GokuParticipants = {
 	Start = function() EventParticipants_Start() end,
@@ -6381,6 +5994,5 @@ local GokuParticipants = {
 	end,
 }
 _G.GokuParticipants = GokuParticipants
--- don't overwrite 23's table (this script loads 23)
 _G.EventAttackParticipants = _G.EventAttackParticipants or GokuParticipants
 end
