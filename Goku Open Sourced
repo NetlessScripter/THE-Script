@@ -1,14 +1,3185 @@
-task.spawn(function()
-    local ok, err = pcall(function()
-        loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/Leap%26UI"))()
+if _G.Rain == nil then _G.Rain = true end
+if _G.Music == nil then _G.Music = true end
+if _G.Graphics == nil then _G.Graphics = true end
+_G.SunsetQualityState = _G.SunsetQualityState or "Max"
+
+local MenuLoads = { rainPending = false, sunsetStarted = false }
+local menuFinished = false
+
+-- hides the game HUD (hotbar, shiftlock cursor, touch controls) until a character is selected
+local MenuHud = { hidden = true, saved = {}, conns = {} }
+
+function MenuHud.hideObject(obj)
+    if not MenuHud.hidden or not obj or MenuHud.saved[obj] ~= nil then return end
+    local property = obj:IsA("ScreenGui") and "Enabled" or "Visible"
+    local readOk, current = pcall(function() return obj[property] end)
+    if not readOk then return end
+
+    MenuHud.saved[obj] = { property = property, value = current }
+    pcall(function() obj[property] = false end)
+
+    table.insert(MenuHud.conns, obj:GetPropertyChangedSignal(property):Connect(function()
+        if MenuHud.hidden and obj[property] then
+            -- the game turned it on itself; remember that as the value to restore
+            MenuHud.saved[obj].value = true
+            obj[property] = false
+        end
+    end))
+end
+
+function MenuHud.release()
+    if not MenuHud.hidden then return end
+    MenuHud.hidden = false
+    for _, conn in ipairs(MenuHud.conns) do conn:Disconnect() end
+    MenuHud.conns = {}
+    for obj, info in pairs(MenuHud.saved) do
+        if obj.Parent then
+            pcall(function() obj[info.property] = info.value end)
+        end
+    end
+    MenuHud.saved = {}
+end
+
+do
+    local localPlayer = game:GetService("Players").LocalPlayer
+    local function watch(path)
+        task.spawn(function()
+            pcall(function()
+                local node = localPlayer:WaitForChild("PlayerGui", 30)
+                for _, name in ipairs(path) do
+                    node = node and node:WaitForChild(name, 30)
+                end
+                if node then MenuHud.hideObject(node) end
+            end)
+        end)
+    end
+    watch({ "Hotbar", "Backpack", "Hotbar" })
+    watch({ "MobileShiftlockCursor" })
+    watch({ "TouchGui" })
+end
+
+local function RunMainMenu(onFinished)
+    local function verticalGradient(...)
+        local colors = { ... }
+        local keypoints = {}
+        for i, color in ipairs(colors) do
+            keypoints[i] = ColorSequenceKeypoint.new((i - 1) / (#colors - 1), color)
+        end
+        return ColorSequence.new(keypoints)
+    end
+
+    local THEMES = {
+        goku = {
+            header         = Color3.fromRGB(232, 112, 32),
+            headerStroke   = Color3.fromRGB(120, 48, 16),
+            rowBackground  = Color3.fromRGB(78, 52, 44),
+            rowStroke      = Color3.fromRGB(214, 110, 58),
+            nameGradient   = verticalGradient(Color3.fromRGB(255, 255, 255), Color3.fromRGB(255, 214, 64), Color3.fromRGB(255, 150, 40)),
+            infoGradient   = verticalGradient(Color3.fromRGB(255, 255, 255), Color3.fromRGB(255, 226, 150)),
+            buttonGradient = verticalGradient(Color3.fromRGB(255, 255, 255), Color3.fromRGB(255, 206, 70)),
+        },
+        gohan = {
+            header         = Color3.fromRGB(140, 70, 210),
+            headerStroke   = Color3.fromRGB(62, 26, 104),
+            rowBackground  = Color3.fromRGB(52, 36, 82),
+            rowStroke      = Color3.fromRGB(160, 110, 230),
+            nameGradient   = verticalGradient(Color3.fromRGB(255, 255, 255), Color3.fromRGB(220, 180, 255), Color3.fromRGB(170, 110, 255)),
+            infoGradient   = verticalGradient(Color3.fromRGB(255, 255, 255), Color3.fromRGB(225, 205, 255)),
+            buttonGradient = verticalGradient(Color3.fromRGB(255, 255, 255), Color3.fromRGB(205, 170, 255)),
+        },
+    }
+
+    local CHARACTERS = {
+        {
+            name = "Son Goku",
+            info = "The ultimate warrior, forged in the fires of endless battle.",
+            theme = THEMES.goku,
+        },
+        {
+            name = "Son Gohan",
+            info = "Calm on the surface, but his bottomless potential stirs when he is pushed too far.",
+            theme = THEMES.gohan,
+            unavailableMessage = "Gohan is not available as of November 6, 2026 and is still in the works",
+        },
+    }
+    local SELECT_TEXT = "Select"
+    local NEXT_TEXT   = "Next"
+
+    local TYPEWRITER_NAME_DELAY  = 0.06
+    local TYPEWRITER_INFO_DELAY  = 0.025
+    local TYPEWRITER_START_DELAY = 1.15
+
+    local VIEWPORT_OPEN_POSITION   = UDim2.new(0.68, 0, 0.5, 0)
+    local VIEWPORT_CLOSED_POSITION = UDim2.new(0.68, 0, 1.6, 0)
+    local VIEWPORT_SIZE            = UDim2.new(0.34, 0, 0.72, 0)
+    local VIEWPORT_AMBIENT         = Color3.fromRGB(190, 190, 190)
+    local CHARACTER_YAW_DEGREES    = 20
+    local CAMERA_FOV               = 35
+
+    local CHARACTER_ART_OPEN_POSITION   = UDim2.new(0, 0, 0, 0)
+    local CHARACTER_ART_CLOSED_POSITION = UDim2.new(0, 0, 0.9, 0)
+
+    local STARTUP_ANIMATION_ID = "rbxassetid://120577018823573"
+    local LOOP_ANIMATION_ID    = "rbxassetid://102959457211902"
+
+    local ENABLE_MOUSE_PARALLAX = true
+    local PARALLAX_ART_PIXELS   = 7
+    local PARALLAX_VIEW_PIXELS  = 13
+    local MOUSE_LOOK_DEGREES    = 8
+    local ENABLE_IDLE_MOTION    = true
+    local CAMERA_SWAY           = true
+    local EXIT_FLASH_WHITENESS  = 0.6
+    local EXIT_FOV_PUNCH        = 16
+
+    local BackNav = {
+        position   = UDim2.new(0.03, 0, 0.06, 0),
+        size       = 0.075,
+        switchTime = 1.15,
+        active     = false,
+        gradients  = {},
+        tracks     = {},
+        animGeneration = 0,
+        cutsceneLoop   = 0,
+    }
+
+    local TweenService     = game:GetService("TweenService")
+    local Players          = game:GetService("Players")
+    local RunService       = game:GetService("RunService")
+    local UserInputService = game:GetService("UserInputService")
+    local SoundService     = game:GetService("SoundService")
+    local Lighting         = game:GetService("Lighting")
+
+    local localPlayer = Players.LocalPlayer
+
+    function BackNav.freeze()
+        if BackNav.frozen then return end
+        BackNav.frozen = true
+
+        local okControls = pcall(function()
+            local playerModule = localPlayer:WaitForChild("PlayerScripts"):WaitForChild("PlayerModule", 5)
+            local controls = require(playerModule):GetControls()
+            controls:Disable()
+            BackNav.controls = controls
+        end)
+        if okControls then return end
+
+        warn("[Freeze] Couldn't reach the player controls, holding walk speed and jump at zero instead")
+        local saved = {}
+        BackNav.fallback = RunService.Heartbeat:Connect(function()
+            local character = localPlayer.Character
+            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+            if not humanoid then return end
+            if not saved.humanoid or saved.humanoid ~= humanoid then
+                saved.humanoid = humanoid
+                saved.walk, saved.jumpPower, saved.jumpHeight = humanoid.WalkSpeed, humanoid.JumpPower, humanoid.JumpHeight
+            end
+            humanoid.WalkSpeed = 0
+            humanoid.JumpPower = 0
+            humanoid.JumpHeight = 0
+        end)
+        BackNav.restoreFallback = function()
+            local humanoid = saved.humanoid
+            if humanoid and humanoid.Parent then
+                humanoid.WalkSpeed = saved.walk
+                humanoid.JumpPower = saved.jumpPower
+                humanoid.JumpHeight = saved.jumpHeight
+            end
+        end
+    end
+
+    function BackNav.returnPlayer()
+        local savedCFrame = BackNav.savedCFrame
+        if not savedCFrame then return end
+
+        local character = localPlayer.Character
+        local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+        if not rootPart then return end
+
+        character:PivotTo(savedCFrame)
+        rootPart.AssemblyLinearVelocity = Vector3.zero
+        rootPart.AssemblyAngularVelocity = Vector3.zero
+        pcall(function()
+            workspace:RequestStreamAroundAsync(savedCFrame.Position, 5)
+        end)
+    end
+
+    BackNav.menuCheckGeneration = 0
+    BackNav.menuCheckSeconds = 3
+    BackNav.menuCheckInterval = 0.1
+    BackNav.menuCheckTolerance = 10
+
+    function BackNav.stopMenuPositionCheck()
+        BackNav.menuCheckGeneration += 1
+    end
+
+    function BackNav.startMenuPositionCheck(menuCFrame)
+        BackNav.menuCheckGeneration += 1
+        local generation = BackNav.menuCheckGeneration
+
+        task.spawn(function()
+            local deadline = os.clock() + BackNav.menuCheckSeconds
+            while os.clock() < deadline do
+                if BackNav.menuCheckGeneration ~= generation then return end
+
+                local character = localPlayer.Character
+                local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+                if rootPart and (rootPart.Position - menuCFrame.Position).Magnitude > BackNav.menuCheckTolerance then
+                    character:PivotTo(menuCFrame)
+                    rootPart.AssemblyLinearVelocity = Vector3.zero
+                    rootPart.AssemblyAngularVelocity = Vector3.zero
+                    pcall(function()
+                        workspace:RequestStreamAroundAsync(menuCFrame.Position, 5)
+                    end)
+                end
+
+                task.wait(BackNav.menuCheckInterval)
+            end
+        end)
+    end
+
+    BackNav.menuStartupAnimationId = "rbxassetid://15503201875"
+    BackNav.menuAnimationId = "rbxassetid://15503362953"
+    BackNav.menuAnimationGeneration = 0
+
+    function BackNav.stopMenuAnimation()
+        BackNav.menuAnimationGeneration += 1
+        local startupTrack = BackNav.menuStartupTrack
+        local loopTrack = BackNav.menuTrack
+        BackNav.menuStartupTrack = nil
+        BackNav.menuTrack = nil
+        for _, track in ipairs({ startupTrack, loopTrack }) do
+            if track then
+                pcall(function()
+                    track:Stop(0.2)
+                    track:Destroy()
+                end)
+            end
+        end
+    end
+
+    function BackNav.playMenuAnimation()
+        BackNav.stopMenuAnimation()
+        local generation = BackNav.menuAnimationGeneration
+
+        local ok, err = pcall(function()
+            local character = localPlayer.Character or localPlayer.CharacterAdded:Wait()
+            local humanoid = character:WaitForChild("Humanoid", 10)
+            if not humanoid then return end
+
+            local animator = humanoid:FindFirstChildOfClass("Animator")
+            if not animator then
+                animator = Instance.new("Animator")
+                animator.Parent = humanoid
+            end
+
+            local function loadTrack(animationId, looped)
+                local animation = Instance.new("Animation")
+                animation.AnimationId = animationId
+                local track = animator:LoadAnimation(animation)
+                track.Looped = looped
+                track.Priority = Enum.AnimationPriority.Action4
+                return track
+            end
+
+            local startupTrack = loadTrack(BackNav.menuStartupAnimationId, false)
+            local loopTrack = loadTrack(BackNav.menuAnimationId, true)
+
+            if BackNav.menuAnimationGeneration ~= generation then
+                startupTrack:Destroy()
+                loopTrack:Destroy()
+                return
+            end
+
+            BackNav.menuStartupTrack = startupTrack
+            BackNav.menuTrack = loopTrack
+
+            local loopStarted = false
+            local function startLoop()
+                if loopStarted then return end
+                loopStarted = true
+                if BackNav.menuAnimationGeneration ~= generation then return end
+                loopTrack:Play(0.1)
+            end
+
+            -- the loop takes over the moment the startup animation finishes
+            startupTrack.Stopped:Once(startLoop)
+            startupTrack:Play(0.2)
+
+            -- safety net in case the startup track never reports it stopped
+            task.delay(math.max(startupTrack.Length, 0.1) + 1, startLoop)
+        end)
+        if not ok then
+            warn("[MenuAnimation] Couldn't play the menu animation: " .. tostring(err))
+        end
+    end
+
+    function BackNav.unfreeze()
+        if not BackNav.frozen then return end
+        BackNav.frozen = false
+
+        if BackNav.controls then
+            pcall(function()
+                BackNav.controls:Enable()
+            end)
+            BackNav.controls = nil
+        end
+        if BackNav.fallback then
+            BackNav.fallback:Disconnect()
+            BackNav.fallback = nil
+            if BackNav.restoreFallback then
+                BackNav.restoreFallback()
+                BackNav.restoreFallback = nil
+            end
+        end
+    end
+
+    local Style = Enum.EasingStyle
+    local Dir   = Enum.EasingDirection
+    local Expo  = Style.Exponential
+
+    local function info(duration, style, direction, delayTime)
+        return TweenInfo.new(duration, style, direction, 0, false, delayTime or 0)
+    end
+
+    local function lerp(a, b, t)
+        return a + (b - a) * t
+    end
+
+    local Spring = {}
+    Spring.__index = Spring
+
+    function Spring.new(initial, speed, damper)
+        return setmetatable({
+            pos = initial,
+            vel = 0,
+            target = initial,
+            speed = speed,
+            damper = damper,
+        }, Spring)
+    end
+
+    function Spring:step(dt)
+        local w, z = self.speed, self.damper
+        local x0 = self.pos - self.target
+        local v0 = self.vel
+        local x, v
+
+        if math.abs(z - 1) < 1e-4 then
+            local e = math.exp(-w * dt)
+            local c = v0 + w * x0
+            x = (x0 + c * dt) * e
+            v = (v0 - c * w * dt) * e
+        elseif z < 1 then
+            local wd = w * math.sqrt(1 - z * z)
+            local e = math.exp(-z * w * dt)
+            local cs, sn = math.cos(wd * dt), math.sin(wd * dt)
+            local b = (v0 + z * w * x0) / wd
+            x = e * (x0 * cs + b * sn)
+            v = e * (v0 * cs - (x0 * wd + z * w * b) * sn)
+        else
+            local s = math.sqrt(z * z - 1)
+            local r1 = -w * (z + s)
+            local r2 = -w * (z - s)
+            local c2 = (v0 - r1 * x0) / (r2 - r1)
+            local c1 = x0 - c2
+            local e1, e2 = math.exp(r1 * dt), math.exp(r2 * dt)
+            x = c1 * e1 + c2 * e2
+            v = c1 * r1 * e1 + c2 * r2 * e2
+        end
+
+        self.pos = self.target + x
+        self.vel = v
+        return self.pos
+    end
+
+    local activeTweens = {}
+
+    local function trackTween(tween)
+        activeTweens[tween] = true
+        tween.Completed:Connect(function()
+            activeTweens[tween] = nil
+        end)
+        return tween
+    end
+
+    local function cancelActiveTweens()
+        for tween in pairs(activeTweens) do
+            tween:Cancel()
+        end
+        table.clear(activeTweens)
+    end
+
+    local function playTween(target, tweenInfo, goal)
+        local tween = trackTween(TweenService:Create(target, tweenInfo, goal))
+        tween:Play()
+        return tween
+    end
+
+    local function tweenValue(tweenInfo, callback)
+        local value = Instance.new("NumberValue")
+        value.Value = 0
+        local connection = value.Changed:Connect(callback)
+
+        local tween = trackTween(TweenService:Create(value, tweenInfo, { Value = 1 }))
+        tween.Completed:Connect(function(playbackState)
+            if playbackState == Enum.PlaybackState.Completed then
+                callback(1)
+            end
+            connection:Disconnect()
+            value:Destroy()
+        end)
+        tween:Play()
+        return tween
+    end
+
+    local function makeFadeGroup(...)
+        local entries = {}
+
+        local function consider(instance)
+            if instance:GetAttribute("NoFade") then return end
+            if instance:IsA("GuiObject") then
+                table.insert(entries, { instance, "BackgroundTransparency", instance.BackgroundTransparency })
+                if instance:IsA("TextLabel") or instance:IsA("TextButton") then
+                    table.insert(entries, { instance, "TextTransparency", instance.TextTransparency })
+                end
+            elseif instance:IsA("UIStroke") then
+                table.insert(entries, { instance, "Transparency", instance.Transparency })
+            end
+        end
+
+        for _, root in ipairs({ ... }) do
+            consider(root)
+            for _, descendant in ipairs(root:GetDescendants()) do
+                consider(descendant)
+            end
+        end
+
+        local group = { value = 1 }
+        function group.apply(visibility)
+            visibility = math.clamp(visibility, 0, 1)
+            group.value = visibility
+            for _, entry in ipairs(entries) do
+                entry[1][entry[2]] = 1 - (1 - entry[3]) * visibility
+            end
+        end
+        return group
+    end
+
+    local function tweenFade(group, target, tweenInfo)
+        local from = group.value
+        return tweenValue(tweenInfo, function(alpha)
+            group.apply(from + (target - from) * alpha)
+        end)
+    end
+
+    local function lerpSequence(from, to, t)
+        local a, b = from.Keypoints, to.Keypoints
+        if #a ~= #b then
+            return (t < 0.5) and from or to
+        end
+        local keypoints = table.create(#a)
+        for i = 1, #a do
+            keypoints[i] = ColorSequenceKeypoint.new(a[i].Time, a[i].Value:Lerp(b[i].Value, t))
+        end
+        return ColorSequence.new(keypoints)
+    end
+
+    local orbit = {
+        introYaw  = 0,
+        introZoom = 1,
+        exitYaw   = 0,
+    }
+
+    local BORDER_URL    = "https://raw.githubusercontent.com/ChosenSkibidi/Goku-Update-Testing-/refs/heads/main/Borders.png"
+    local CHARACTER_URL = "https://raw.githubusercontent.com/ChosenSkibidi/Goku-Update-Testing-/refs/heads/main/IMG_5452.png"
+
+    writefile("Borders.png", game:HttpGet(BORDER_URL))
+    local borderAsset = getcustomasset("Borders.png")
+
+    writefile("IMG_5452.png", game:HttpGet(CHARACTER_URL))
+    local characterAsset = getcustomasset("IMG_5452.png")
+
+    local guiParent = (gethui and gethui()) or game:GetService("CoreGui")
+
+    local existing = guiParent:FindFirstChild("BordersOverlayGui")
+    if existing then
+        existing:Destroy()
+    end
+
+    local overlayGui = Instance.new("ScreenGui")
+    overlayGui.Name = "BordersOverlayGui"
+    overlayGui.IgnoreGuiInset = true
+    overlayGui.ScreenInsets = Enum.ScreenInsets.None
+    overlayGui.ResetOnSpawn = false
+    overlayGui.DisplayOrder = 2147483647
+    overlayGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    overlayGui.Enabled = false
+
+    local borderImage = Instance.new("ImageLabel")
+    borderImage.Name = "BordersImage"
+    borderImage.BackgroundTransparency = 1
+    borderImage.BorderSizePixel = 0
+    borderImage.ZIndex = 2147483646
+    borderImage.Image = borderAsset
+    borderImage.ScaleType = Enum.ScaleType.Stretch
+    borderImage.AnchorPoint = Vector2.new(0.5, 0.5)
+    borderImage.Size = UDim2.new(4, 0, 4, 0)
+    borderImage.Position = UDim2.new(0.5, 0, 0.5, 0)
+    borderImage.Parent = overlayGui
+
+    local function makeLayer(name)
+        local layer = Instance.new("Frame")
+        layer.Name = name
+        layer.BackgroundTransparency = 1
+        layer.BorderSizePixel = 0
+        layer.Position = UDim2.new(0, 0, 0, 0)
+        layer.Size = UDim2.new(1, 0, 1, 0)
+        layer.ZIndex = 2147483647
+        layer.Parent = overlayGui
+        return layer
+    end
+
+    local artLayer      = makeLayer("ArtLayer")
+    local viewportLayer = makeLayer("ViewportLayer")
+
+    local characterImage = Instance.new("ImageLabel")
+    characterImage.Name = "CharacterImage"
+    characterImage.BackgroundTransparency = 1
+    characterImage.BorderSizePixel = 0
+    characterImage.ZIndex = 2147483647
+    characterImage.Image = characterAsset
+    characterImage.ScaleType = Enum.ScaleType.Stretch
+    characterImage.AnchorPoint = Vector2.new(0, 0)
+    characterImage.Size = UDim2.new(1, 0, 1, 0)
+    characterImage.Position = CHARACTER_ART_CLOSED_POSITION
+    characterImage.Parent = artLayer
+
+    local characterAspectRatio = Instance.new("UIAspectRatioConstraint")
+    characterAspectRatio.AspectRatio = 1261 / 1247
+    characterAspectRatio.Parent = characterImage
+
+    local viewport = Instance.new("ViewportFrame")
+    viewport.Name = "CharacterViewport"
+    viewport.BackgroundTransparency = 1
+    viewport.BorderSizePixel = 0
+    viewport.ZIndex = 2147483647
+    viewport.AnchorPoint = Vector2.new(0.5, 0.5)
+    viewport.Size = VIEWPORT_SIZE
+    viewport.Position = VIEWPORT_CLOSED_POSITION
+    viewport.Ambient = VIEWPORT_AMBIENT
+    viewport.LightColor = Color3.fromRGB(255, 255, 255)
+    viewport.LightDirection = Vector3.new(-0.3, -0.5, 1)
+    viewport.Parent = viewportLayer
+
+    local viewportScale = Instance.new("UIScale")
+    viewportScale.Name = "PopScale"
+    viewportScale.Scale = 1
+    viewportScale.Parent = viewport
+
+    local viewportCamera = Instance.new("Camera")
+    viewportCamera.FieldOfView = CAMERA_FOV
+    viewportCamera.Parent = viewport
+    viewport.CurrentCamera = viewportCamera
+
+    local previewModel
+
+    local viewportFocus, viewportDistance, viewportHeight
+
+    local function makeDisc(name, thickness, diameter, centerY, color, material)
+        local disc = Instance.new("Part")
+        disc.Name = name
+        disc.Shape = Enum.PartType.Cylinder
+        disc.Anchored = true
+        disc.CanCollide = false
+        disc.Size = Vector3.new(thickness, diameter, diameter)
+        disc.Color = color
+        disc.Material = material
+
+        disc.CFrame = CFrame.new(0, centerY, 0) * CFrame.Angles(0, 0, math.rad(90))
+        disc.Parent = viewport
+        return disc
+    end
+
+    local function buildViewport()
+        local sourceCharacter = localPlayer.Character or localPlayer.CharacterAdded:Wait()
+
+        local wasArchivable = sourceCharacter.Archivable
+        sourceCharacter.Archivable = true
+        local cloneOk, previewClone = pcall(function()
+            return sourceCharacter:Clone()
+        end)
+        sourceCharacter.Archivable = wasArchivable
+
+        local characterHeight = 5.5
+        if cloneOk and previewClone then
+            for _, descendant in ipairs(previewClone:GetDescendants()) do
+                if descendant:IsA("LuaSourceContainer") or descendant:IsA("Sound")
+                    or descendant:IsA("ParticleEmitter") or descendant:IsA("Trail")
+                    or descendant:IsA("Beam") or descendant:IsA("Light")
+                    or descendant:IsA("Highlight") or descendant:IsA("BillboardGui")
+                    or descendant:IsA("ForceField") or descendant:IsA("Fire")
+                    or descendant:IsA("Smoke") or descendant:IsA("Sparkles") then
+                    descendant:Destroy()
+                elseif descendant:IsA("BasePart") then
+
+                    descendant.Anchored = (descendant.Name == "HumanoidRootPart")
+                end
+            end
+
+            local previewHumanoid = previewClone:FindFirstChildOfClass("Humanoid")
+            if previewHumanoid then
+                previewHumanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+                previewHumanoid.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+            end
+
+            local yaw = math.rad(CHARACTER_YAW_DEGREES)
+            previewClone:PivotTo(CFrame.Angles(0, yaw, 0))
+            local boundsCFrame, boundsSize = previewClone:GetBoundingBox()
+            characterHeight = boundsSize.Y
+            local feetY = boundsCFrame.Position.Y - boundsSize.Y / 2
+            previewClone:PivotTo(CFrame.new(0, -feetY + 0.06, 0) * CFrame.Angles(0, yaw, 0))
+
+            local worldModel = Instance.new("WorldModel")
+            worldModel.Name = "PreviewWorld"
+            worldModel.Parent = viewport
+            previewClone.Parent = worldModel
+            previewModel = previewClone
+        else
+            warn("[CharacterSelect] Couldn't copy the character for the viewport")
+        end
+
+        local diameter = math.max(characterHeight, 5)
+        makeDisc("PlatformBase", 0.4, diameter, -0.2, Color3.fromRGB(58, 64, 76), Enum.Material.SmoothPlastic)
+        makeDisc("PlatformTop", 0.06, diameter * 0.93, 0.03, Color3.fromRGB(78, 85, 100), Enum.Material.SmoothPlastic)
+
+        local bottomY = -0.4
+        local topY = characterHeight + 0.06
+        local centerY = (bottomY + topY) / 2
+        local halfSpan = (topY - bottomY) / 2 * 1.4
+
+        local screenSize = workspace.CurrentCamera.ViewportSize
+        local aspect = (screenSize.X * VIEWPORT_SIZE.X.Scale) / (screenSize.Y * VIEWPORT_SIZE.Y.Scale)
+        local halfTan = math.tan(math.rad(CAMERA_FOV / 2))
+        local distanceForHeight = halfSpan / halfTan
+        local distanceForWidth = (diameter / 2 * 1.15) / (halfTan * aspect)
+        local distance = math.max(distanceForHeight, distanceForWidth)
+
+        viewportFocus = Vector3.new(0, centerY, 0)
+        viewportDistance = distance
+        viewportHeight = distance * 0.18
+        viewportCamera.CFrame = CFrame.lookAt(
+            viewportFocus + Vector3.new(0, viewportHeight, -viewportDistance),
+            viewportFocus
+        )
+    end
+
+    local viewportOk, viewportErr = pcall(buildViewport)
+    if not viewportOk then
+        warn("[CharacterSelect] Viewport failed: " .. tostring(viewportErr))
+    end
+
+    local manualStepConnection
+
+    function BackNav.stopAnimations()
+        BackNav.animGeneration += 1
+        for _, track in ipairs(BackNav.tracks) do
+            pcall(function()
+                track:Stop(0)
+            end)
+        end
+        table.clear(BackNav.tracks)
+    end
+
+    local function playViewportAnimations()
+        if not previewModel then return end
+
+        BackNav.stopAnimations()
+        local animGeneration = BackNav.animGeneration
+
+        local rigController = previewModel:FindFirstChildOfClass("Humanoid")
+            or previewModel:FindFirstChildOfClass("AnimationController")
+        if not rigController then
+            warn("[CharacterSelect] No Humanoid/AnimationController in the viewport clone")
+            return
+        end
+
+        local animator = rigController:FindFirstChildOfClass("Animator")
+        if not animator then
+            animator = Instance.new("Animator")
+            animator.Parent = rigController
+        end
+
+        local function loadTrack(animationId)
+            local animation = Instance.new("Animation")
+            animation.AnimationId = animationId
+            local ok, track = pcall(function()
+                return animator:LoadAnimation(animation)
+            end)
+            if ok and track then
+                track.Priority = Enum.AnimationPriority.Action4
+                table.insert(BackNav.tracks, track)
+                return track
+            end
+            warn("[CharacterSelect] Couldn't load animation " .. animationId .. " : " .. tostring(track))
+            return nil
+        end
+
+        local function ensureAnimatorIsStepping(track)
+            task.wait(0.35)
+            if manualStepConnection or not track.IsPlaying then return end
+            if track.TimePosition > 0.05 then return end
+
+            manualStepConnection = RunService.RenderStepped:Connect(function(deltaTime)
+                pcall(function()
+                    animator:StepAnimations(deltaTime)
+                end)
+            end)
+        end
+
+        overlayGui.Destroying:Connect(function()
+            if manualStepConnection then
+                manualStepConnection:Disconnect()
+                manualStepConnection = nil
+            end
+        end)
+
+        task.spawn(function()
+            local startupTrack = loadTrack(STARTUP_ANIMATION_ID)
+            local loopTrack = loadTrack(LOOP_ANIMATION_ID)
+
+            if loopTrack then
+                loopTrack.Looped = true
+            end
+
+            if startupTrack then
+                startupTrack.Looped = false
+                startupTrack:Play(0.2)
+                task.spawn(ensureAnimatorIsStepping, startupTrack)
+
+                if loopTrack then
+                    local BLEND_TIME = 0.3
+
+                    local waited = 0
+                    while startupTrack.Length <= 0 and waited < 3 do
+                        task.wait(0.05)
+                        waited += 0.05
+                    end
+
+                    if startupTrack.Length > BLEND_TIME * 2 then
+
+                        local handoverAt = startupTrack.Length - BLEND_TIME
+                        local deadline = os.clock() + startupTrack.Length / math.max(startupTrack.Speed, 0.05) + 5
+                        while startupTrack.IsPlaying and startupTrack.TimePosition < handoverAt and os.clock() < deadline
+                            and BackNav.animGeneration == animGeneration do
+                            RunService.Heartbeat:Wait()
+                        end
+                        if previewModel and previewModel.Parent and BackNav.animGeneration == animGeneration then
+                            loopTrack:Play(BLEND_TIME)
+                            startupTrack:Stop(BLEND_TIME)
+                        end
+                    else
+                        startupTrack.Stopped:Wait()
+                        if previewModel and previewModel.Parent and BackNav.animGeneration == animGeneration then
+                            loopTrack:Play(0.2)
+                        end
+                    end
+                end
+            elseif loopTrack then
+                loopTrack:Play(0.2)
+                task.spawn(ensureAnimatorIsStepping, loopTrack)
+            end
+        end)
+    end
+
+    local settingsFont = Font.new("rbxassetid://12187375716", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+
+    local nameGradient   = CHARACTERS[1].theme.nameGradient
+    local infoGradient   = CHARACTERS[1].theme.infoGradient
+    local buttonGradient = CHARACTERS[1].theme.buttonGradient
+
+    local function styleText(label, strokeThickness, gradientColors)
+        label.FontFace = settingsFont
+        label.TextColor3 = Color3.new(1, 1, 1)
+        label.TextStrokeTransparency = 1
+
+        local textStroke = Instance.new("UIStroke")
+        textStroke.Name = "TextOutline"
+        textStroke.Color = Color3.new(0, 0, 0)
+        textStroke.Thickness = strokeThickness
+        textStroke.LineJoinMode = Enum.LineJoinMode.Round
+        textStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
+        textStroke.Parent = label
+
+        local textGradient = Instance.new("UIGradient")
+        textGradient.Name = "TextGradient"
+        textGradient.Rotation = 90
+        textGradient.Color = gradientColors
+        textGradient.Parent = label
+    end
+
+    local headerColor        = CHARACTERS[1].theme.header
+    local headerStrokeColor  = CHARACTERS[1].theme.headerStroke
+    local rowBackgroundColor = CHARACTERS[1].theme.rowBackground
+    local rowStrokeColor     = CHARACTERS[1].theme.rowStroke
+
+    local rowHeight  = 0.045
+    local bodyHeight = 0.1
+    local padHeight  = 0.006
+    local panelHeightScale = rowHeight * 2 + bodyHeight + padHeight * 2
+
+    local panelRowScale     = rowHeight / panelHeightScale
+    local panelBodyScale    = bodyHeight / panelHeightScale
+    local panelPaddingScale = padHeight / panelHeightScale
+
+    local panelOpenPosition   = UDim2.new(0.875, 0, 0.46, 0)
+    local panelClosedPosition = UDim2.new(1.3, 0, 0.46, 0)
+
+    local infoPanel = Instance.new("Frame")
+    infoPanel.Name = "InfoPanel"
+    infoPanel.BackgroundTransparency = 1
+    infoPanel.BorderSizePixel = 0
+    infoPanel.ZIndex = 2147483647
+    infoPanel.AnchorPoint = Vector2.new(0.5, 0.5)
+    infoPanel.Size = UDim2.new(0.22, 0, panelHeightScale, 0)
+    infoPanel.Position = panelClosedPosition
+    infoPanel.Parent = overlayGui
+
+    local panelListLayout = Instance.new("UIListLayout")
+    panelListLayout.Padding = UDim.new(panelPaddingScale, 0)
+    panelListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    panelListLayout.Parent = infoPanel
+
+    local nameHeader = Instance.new("TextLabel")
+    nameHeader.Name = "Header"
+    nameHeader.LayoutOrder = 0
+    nameHeader.BackgroundColor3 = headerColor
+    nameHeader.BorderSizePixel = 0
+    nameHeader.Size = UDim2.new(1, 0, panelRowScale, 0)
+    nameHeader.Text = ""
+    nameHeader.Parent = infoPanel
+
+    local nameHeaderStroke = Instance.new("UIStroke")
+    nameHeaderStroke.Color = headerStrokeColor
+    nameHeaderStroke.Thickness = 2
+    nameHeaderStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    nameHeaderStroke.Parent = nameHeader
+
+    local nameHeaderPadding = Instance.new("UIPadding")
+    nameHeaderPadding.PaddingTop = UDim.new(0.2, 0)
+    nameHeaderPadding.PaddingBottom = UDim.new(0.2, 0)
+    nameHeaderPadding.Parent = nameHeader
+
+    local nameText = Instance.new("TextLabel")
+    nameText.Name = "NameText"
+    nameText.BackgroundTransparency = 1
+    nameText.Size = UDim2.new(1, 0, 1, 0)
+    nameText.Text = CHARACTERS[1].name
+    nameText.MaxVisibleGraphemes = 0
+    nameText.TextScaled = true
+    nameText.Parent = nameHeader
+    styleText(nameText, 2, nameGradient)
+
+    local nameHeaderTextConstraint = Instance.new("UITextSizeConstraint")
+    nameHeaderTextConstraint.MaxTextSize = 18
+    nameHeaderTextConstraint.Parent = nameText
+
+    local infoRow = Instance.new("Frame")
+    infoRow.Name = "InfoRow"
+    infoRow.LayoutOrder = 1
+    infoRow.BackgroundColor3 = rowBackgroundColor
+    infoRow.BorderSizePixel = 0
+    infoRow.Size = UDim2.new(1, 0, panelBodyScale, 0)
+    infoRow.Parent = infoPanel
+
+    local infoRowStroke = Instance.new("UIStroke")
+    infoRowStroke.Color = rowStrokeColor
+    infoRowStroke.Thickness = 1
+    infoRowStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    infoRowStroke.Parent = infoRow
+
+    local infoLabel = Instance.new("TextLabel")
+    infoLabel.Name = "Info"
+    infoLabel.BackgroundTransparency = 1
+    infoLabel.AnchorPoint = Vector2.new(0.5, 0.5)
+    infoLabel.Position = UDim2.new(0.5, 0, 0.5, 0)
+    infoLabel.Size = UDim2.new(0.92, 0, 0.8, 0)
+    infoLabel.Text = CHARACTERS[1].info
+    infoLabel.MaxVisibleGraphemes = 0
+    infoLabel.TextScaled = true
+    infoLabel.TextWrapped = true
+    infoLabel.TextXAlignment = Enum.TextXAlignment.Left
+    infoLabel.TextYAlignment = Enum.TextYAlignment.Center
+    infoLabel.Parent = infoRow
+    styleText(infoLabel, 1.5, infoGradient)
+
+    local infoTextConstraint = Instance.new("UITextSizeConstraint")
+    infoTextConstraint.MaxTextSize = 15
+    infoTextConstraint.Parent = infoLabel
+
+    local buttonRow = Instance.new("Frame")
+    buttonRow.Name = "ButtonRow"
+    buttonRow.LayoutOrder = 2
+    buttonRow.BackgroundTransparency = 1
+    buttonRow.BorderSizePixel = 0
+    buttonRow.Size = UDim2.new(1, 0, panelRowScale, 0)
+    buttonRow.Parent = infoPanel
+
+    local buttonStates = {}
+
+    local function makeActionButton(name, text, anchorPoint, position, options)
+        options = options or {}
+        local button = Instance.new("TextButton")
+        button.Name = name
+        button.AutoButtonColor = false
+        button.BackgroundColor3 = headerColor
+        button.BorderSizePixel = 0
+        button.AnchorPoint = anchorPoint
+        button.Position = position
+        button.Size = options.size or UDim2.new(0.47, 0, 1, 0)
+        button.Text = ""
+        button.Parent = options.parent or buttonRow
+
+        local buttonStroke = Instance.new("UIStroke")
+        buttonStroke.Color = headerStrokeColor
+        buttonStroke.Thickness = 2
+        buttonStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        buttonStroke.Parent = button
+
+        local lift = Instance.new("Frame")
+        lift.Name = "Lift"
+        lift.BackgroundColor3 = Color3.new(1, 1, 1)
+        lift.BackgroundTransparency = 1
+        lift.BorderSizePixel = 0
+        lift.Active = false
+        lift.Size = UDim2.new(1, 0, 1, 0)
+        lift.ZIndex = 2
+        lift:SetAttribute("NoFade", true)
+        lift.Parent = button
+
+        local sheen = Instance.new("Frame")
+        sheen.Name = "Sheen"
+        sheen.BackgroundColor3 = Color3.new(1, 1, 1)
+        sheen.BackgroundTransparency = 0
+        sheen.BorderSizePixel = 0
+        sheen.Active = false
+        sheen.Visible = false
+        sheen.Size = UDim2.new(1, 0, 1, 0)
+        sheen.ZIndex = 2
+        sheen:SetAttribute("NoFade", true)
+        sheen.Parent = button
+
+        local sheenGradient = Instance.new("UIGradient")
+        sheenGradient.Rotation = 20
+        sheenGradient.Offset = Vector2.new(-1, 0)
+        sheenGradient.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 1),
+            NumberSequenceKeypoint.new(0.38, 1),
+            NumberSequenceKeypoint.new(0.5, 0.62),
+            NumberSequenceKeypoint.new(0.62, 1),
+            NumberSequenceKeypoint.new(1, 1),
+        })
+        sheenGradient.Parent = sheen
+
+        if text then
+            local buttonText = Instance.new("TextLabel")
+            buttonText.Name = name .. "Text"
+            buttonText.BackgroundTransparency = 1
+            buttonText.Active = false
+            buttonText.Size = UDim2.new(1, 0, 1, 0)
+            buttonText.Text = text
+            buttonText.TextScaled = true
+            buttonText.ZIndex = 3
+            buttonText.Parent = button
+            styleText(buttonText, 2, buttonGradient)
+
+            local buttonTextConstraint = Instance.new("UITextSizeConstraint")
+            buttonTextConstraint.MaxTextSize = 16
+            buttonTextConstraint.Parent = buttonText
+        end
+
+        local buttonScale = Instance.new("UIScale")
+        buttonScale.Name = "PressScale"
+        buttonScale.Scale = 1
+        buttonScale.Parent = button
+
+        local state = {
+            button = button,
+            scale = buttonScale,
+            spring = Spring.new(1, 18, 0.6),
+            hovered = false,
+            pressed = false,
+        }
+
+        local function refreshSpring()
+            local spring = state.spring
+            if state.pressed then
+                spring.target, spring.speed, spring.damper = 0.92, 38, 0.85
+            elseif state.hovered then
+                spring.target, spring.speed, spring.damper = 1.07, 20, 0.5
+            else
+                spring.target, spring.speed, spring.damper = 1, 18, 0.6
+            end
+        end
+
+        local sweeping = false
+        local function playSheen()
+            if sweeping then return end
+            sweeping = true
+            sheen.Visible = true
+            sheenGradient.Offset = Vector2.new(-1, 0)
+            local sweep = TweenService:Create(sheenGradient, info(0.8, Style.Quint, Dir.InOut), {
+                Offset = Vector2.new(1, 0),
+            })
+            sweep.Completed:Connect(function()
+                sweeping = false
+                sheen.Visible = false
+            end)
+            sweep:Play()
+        end
+
+        button.MouseEnter:Connect(function()
+            state.hovered = true
+            refreshSpring()
+            TweenService:Create(lift, info(0.3, Style.Quad, Dir.Out), { BackgroundTransparency = 0.9 }):Play()
+            TweenService:Create(buttonStroke, info(0.3, Style.Quint, Dir.Out), { Thickness = 3 }):Play()
+            playSheen()
+        end)
+        button.MouseLeave:Connect(function()
+            state.hovered = false
+            state.pressed = false
+            refreshSpring()
+            TweenService:Create(lift, info(0.45, Style.Quad, Dir.Out), { BackgroundTransparency = 1 }):Play()
+            TweenService:Create(buttonStroke, info(0.45, Style.Quint, Dir.Out), { Thickness = 2 }):Play()
+        end)
+        button.MouseButton1Down:Connect(function()
+            state.pressed = true
+            refreshSpring()
+        end)
+        button.MouseButton1Up:Connect(function()
+            state.pressed = false
+            refreshSpring()
+        end)
+
+        function state.pulse()
+            state.spring.vel = state.spring.vel - 5
+        end
+
+        table.insert(buttonStates, state)
+        return button, state
+    end
+
+    local nextButton, nextState = makeActionButton("NextButton", NEXT_TEXT, Vector2.new(0, 0.5), UDim2.new(0.02, 0, 0.5, 0))
+    local selectButton, selectState = makeActionButton("SelectButton", SELECT_TEXT, Vector2.new(1, 0.5), UDim2.new(0.98, 0, 0.5, 0))
+
+    local function makePiece(element, layoutOrder, heightScale)
+        local holder = Instance.new("Frame")
+        holder.Name = element.Name .. "Holder"
+        holder.BackgroundTransparency = 1
+        holder.BorderSizePixel = 0
+        holder.LayoutOrder = layoutOrder
+        holder.Size = UDim2.new(1, 0, heightScale, 0)
+        holder.Parent = infoPanel
+
+        element.AnchorPoint = Vector2.new(0.5, 0.5)
+        element.Position = UDim2.new(0.5, 0, 0.5, 0)
+        element.Size = UDim2.new(1, 0, 1, 0)
+        element.Parent = holder
+
+        local popScale = Instance.new("UIScale")
+        popScale.Name = "PopScale"
+        popScale.Scale = 1
+        popScale.Parent = element
+
+        return {
+            element = element,
+            scale = popScale,
+            restPosition  = UDim2.new(0.5, 0, 0.5, 0),
+            risePosition  = UDim2.new(0.5, 0, 0.78, 0),
+            liftPosition  = UDim2.new(0.5, 0, 0.32, 0),
+            fade = makeFadeGroup(element),
+        }
+    end
+
+    local headerPiece  = makePiece(nameHeader, 0, panelRowScale)
+    local infoPiece    = makePiece(infoRow, 1, panelBodyScale)
+    local buttonsPiece = makePiece(buttonRow, 2, panelRowScale)
+    local panelPieces  = { headerPiece, infoPiece, buttonsPiece }
+
+    do
+        local holder = Instance.new("Frame")
+        holder.Name = "BackButtonHolder"
+        holder.BackgroundTransparency = 1
+        holder.BorderSizePixel = 0
+        holder.ZIndex = 2147483647
+        holder.SizeConstraint = Enum.SizeConstraint.RelativeYY
+        holder.AnchorPoint = Vector2.new(0, 0)
+        holder.Position = BackNav.position
+        holder.Size = UDim2.new(BackNav.size, 0, BackNav.size, 0)
+        holder.Parent = overlayGui
+
+        local frame = Instance.new("Frame")
+        frame.Name = "BackButtonFrame"
+        frame.BackgroundTransparency = 1
+        frame.BorderSizePixel = 0
+        frame.AnchorPoint = Vector2.new(0.5, 0.5)
+        frame.Position = UDim2.new(0.5, 0, 0.5, 0)
+        frame.Size = UDim2.new(1, 0, 1, 0)
+        frame.Parent = holder
+
+        BackNav.button, BackNav.state = makeActionButton(
+            "BackButton", nil, Vector2.new(0.5, 0.5), UDim2.new(0.5, 0, 0.5, 0),
+            { parent = frame, size = UDim2.new(1, 0, 1, 0) }
+        )
+
+        local function bar(name, centerX, centerY, length, thickness, rotation, color, zIndex)
+            local piece = Instance.new("Frame")
+            piece.Name = name
+            piece.BackgroundColor3 = color
+            piece.BorderSizePixel = 0
+            piece.Active = false
+            piece.AnchorPoint = Vector2.new(0.5, 0.5)
+            piece.Position = UDim2.new(centerX, 0, centerY, 0)
+            piece.Size = UDim2.new(length, 0, thickness, 0)
+            piece.Rotation = rotation
+            piece.ZIndex = zIndex
+            piece.Parent = BackNav.button
+
+            local corner = Instance.new("UICorner")
+            corner.CornerRadius = UDim.new(0.5, 0)
+            corner.Parent = piece
+            return piece
+        end
+
+        local tipX, tipY   = 0.26, 0.5
+        local shaftLength  = 0.44
+        local headLength   = 0.30
+        local thickness    = 0.115
+        local outline      = 0.04
+        local headOffset   = headLength / 2 * math.sqrt(0.5)
+
+        local parts = {
+            { "Shaft",    tipX + shaftLength / 2, tipY,              shaftLength,   0 },
+            { "HeadUp",   tipX + headOffset,      tipY - headOffset, headLength,  -45 },
+            { "HeadDown", tipX + headOffset,      tipY + headOffset, headLength,   45 },
+        }
+        for _, part in ipairs(parts) do
+            bar(part[1] .. "Outline", part[2], part[3], part[4] + outline * 2, thickness + outline * 2, part[5], Color3.new(0, 0, 0), 3)
+        end
+        for _, part in ipairs(parts) do
+            local fill = bar(part[1], part[2], part[3], part[4], thickness, part[5], Color3.new(1, 1, 1), 4)
+            local gradient = Instance.new("UIGradient")
+            gradient.Name = "ArrowGradient"
+            gradient.Rotation = 90
+            gradient.Color = CHARACTERS[1].theme.buttonGradient
+            gradient.Parent = fill
+            table.insert(BackNav.gradients, gradient)
+        end
+
+        local popScale = Instance.new("UIScale")
+        popScale.Name = "PopScale"
+        popScale.Scale = 1
+        popScale.Parent = frame
+
+        BackNav.piece = {
+            element = frame,
+            scale = popScale,
+            restPosition = UDim2.new(0.5, 0, 0.5, 0),
+            risePosition = UDim2.new(-0.5, 0, 0.5, 0),
+            liftPosition = UDim2.new(-0.5, 0, 0.5, 0),
+            fade = makeFadeGroup(frame),
+        }
+        table.insert(panelPieces, BackNav.piece)
+    end
+
+    local panelBump = Instance.new("UIScale")
+    panelBump.Name = "BumpScale"
+    panelBump.Scale = 1
+    panelBump.Parent = infoPanel
+
+    overlayGui.Parent = guiParent
+
+    local SHOT_DURATION       = 6
+    local SHOT_FADE_TIME      = 0.7
+    local FIRST_SHOT_FADE_OUT = 0.45
+    local FIRST_SHOT_FADE_IN  = 1.4
+
+    local cutsceneShots = {
+        {
+            from = CFrame.new(62055.257812, 1381.795898, -48943.531250, 0.790724, -0.241275, 0.562621, 0.000000, 0.919056, 0.394128, -0.612173, -0.311646, 0.726719),
+            fromFov = 75.00,
+            to = CFrame.new(62486.914062, 1558.351440, -49141.941406, 0.462067, -0.227026, 0.857294, 0.000000, 0.966679, 0.255992, -0.886845, -0.118286, 0.446670),
+            toFov = 75.00,
+        },
+        {
+            from = CFrame.new(62201.617188, 1354.540894, -49747.804688, 0.564967, -0.125244, 0.815553, 0.000000, 0.988413, 0.151790, -0.825113, -0.085756, 0.558421),
+            fromFov = 75.15,
+            to = CFrame.new(61799.960938, 1460.746460, -49792.097656, 0.820336, 0.256868, -0.510948, -0.000000, 0.893450, 0.449163, 0.571882, -0.368465, 0.732929),
+            toFov = 75.00,
+        },
+        {
+            from = CFrame.new(61912.667969, 1135.795044, -48099.414062, -0.855409, -0.039390, -0.516454, 0.000000, 0.997104, -0.076050, 0.517954, -0.065054, -0.852931),
+            fromFov = 75.00,
+            to = CFrame.new(61759.597656, 1244.744263, -48065.113281, -0.513258, 0.318151, -0.797086, 0.000000, 0.928751, 0.370704, 0.858235, 0.190267, -0.476689),
+            toFov = 75.47,
+        },
+        {
+            from = CFrame.new(63323.417969, 2601.184082, -47281.332031, 0.203954, -0.629128, 0.750067, -0.000000, 0.766172, 0.642636, -0.978980, -0.131068, 0.156264),
+            fromFov = 75.00,
+            to = CFrame.new(63380.234375, 2654.545166, -47322.132812, 0.503281, -0.491440, 0.710771, 0.000000, 0.822535, 0.568715, -0.864123, -0.286223, 0.413966),
+            toFov = 75.00,
+        },
+        {
+            from = CFrame.new(63375.457031, 4206.914062, -46734.015625, 0.988372, -0.105605, 0.109403, -0.000000, 0.719483, 0.694511, -0.152057, -0.686435, 0.711116),
+            fromFov = 75.30,
+            to = CFrame.new(63234.652344, 4151.974609, -47323.757812, -0.956958, 0.033636, -0.288270, 0.000002, 0.993262, 0.115892, 0.290225, 0.110903, -0.950510),
+            toFov = 76.12,
+        },
+    }
+
+    local function shotCurve(t)
+        local smooth = t * t * (3 - 2 * t)
+        return t * 0.6 + smooth * 0.4
+    end
+
+    local function swayOffset(clock)
+        if not CAMERA_SWAY then
+            return CFrame.new()
+        end
+        return CFrame.Angles(
+            math.sin(clock * 0.61) * 0.0050,
+            math.sin(clock * 0.47 + 1.3) * 0.0065,
+            math.sin(clock * 0.33 + 2.1) * 0.0030
+        )
+    end
+
+    local camera = workspace.CurrentCamera
+    local env = (getgenv and getgenv()) or _G
+
+    env.BorderUICutsceneId = (env.BorderUICutsceneId or 0) + 1
+    local cutsceneId = env.BorderUICutsceneId
+    if env.BorderUICutsceneTween then
+        env.BorderUICutsceneTween:Cancel()
+    end
+
+    local originalCameraType = camera.CameraType
+    if originalCameraType == Enum.CameraType.Scriptable then
+        originalCameraType = Enum.CameraType.Custom
+    end
+    local originalFov = env.BorderUIOriginalFov or camera.FieldOfView
+    env.BorderUIOriginalFov = originalFov
+
+    local oldFadeGui = guiParent:FindFirstChild("BorderUIFadeGui")
+    if oldFadeGui then
+        oldFadeGui:Destroy()
+    end
+
+    local fadeGui = Instance.new("ScreenGui")
+    fadeGui.Name = "BorderUIFadeGui"
+    fadeGui.IgnoreGuiInset = true
+    fadeGui.ScreenInsets = Enum.ScreenInsets.None
+    fadeGui.ResetOnSpawn = false
+    fadeGui.DisplayOrder = 2147483646
+    fadeGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+    local fadeFrame = Instance.new("Frame")
+    fadeFrame.Name = "Fade"
+    fadeFrame.BackgroundColor3 = Color3.new(0, 0, 0)
+    fadeFrame.BackgroundTransparency = 1
+    fadeFrame.BorderSizePixel = 0
+    fadeFrame.Size = UDim2.new(1, 0, 1, 0)
+    fadeFrame.ZIndex = 1
+    fadeFrame.Parent = fadeGui
+
+    local flashFrame = Instance.new("Frame")
+    flashFrame.Name = "Flash"
+    flashFrame.BackgroundColor3 = Color3.new(1, 1, 1)
+    flashFrame.BackgroundTransparency = 1
+    flashFrame.BorderSizePixel = 0
+    flashFrame.Size = UDim2.new(1, 0, 1, 0)
+    flashFrame.ZIndex = 2
+    flashFrame.Parent = fadeGui
+
+    fadeGui.Parent = guiParent
+
+    overlayGui.Destroying:Connect(function()
+        fadeGui:Destroy()
     end)
-    if not ok then warn("[Loader] " .. tostring(err)) end
-end)
-task.spawn(function()
-    local ok, err = pcall(function()
-        loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/BakaScript"))()
+
+    local fadeTween
+
+    local function fadeScreen(targetTransparency, duration, style, direction, delayTime)
+        if fadeTween then
+            fadeTween:Cancel()
+        end
+        fadeTween = TweenService:Create(fadeFrame, info(duration, style, direction, delayTime), {
+            BackgroundTransparency = targetTransparency,
+        })
+        fadeTween:Play()
+        return fadeTween
+    end
+
+    local cutsceneRunning = false
+    local cutsceneToken = 0
+    local cameraRestored = false
+
+    local function haltCutsceneLoop()
+        cutsceneRunning = false
+        cutsceneToken += 1
+    end
+
+    local function restoreCamera()
+        if cameraRestored then return end
+        cameraRestored = true
+
+        if env.BorderUICutsceneTween then
+            env.BorderUICutsceneTween:Cancel()
+        end
+
+        camera.CameraType = originalCameraType
+        camera.FieldOfView = originalFov
+        env.BorderUIOriginalFov = nil
+
+        local character = localPlayer.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            camera.CameraSubject = humanoid
+        end
+    end
+
+    local function startCutscenes()
+        if cutsceneRunning then return end
+        cutsceneRunning = true
+        BackNav.cutsceneLoop += 1
+        local loopId = BackNav.cutsceneLoop
+
+        task.spawn(function()
+            local index = 0
+            local firstShot = true
+
+            while cutsceneRunning and env.BorderUICutsceneId == cutsceneId and loopId == BackNav.cutsceneLoop do
+                index = index % #cutsceneShots + 1
+                local shot = cutsceneShots[index]
+
+                cutsceneToken += 1
+                local token = cutsceneToken
+
+                if firstShot then
+                    fadeScreen(0, FIRST_SHOT_FADE_OUT, Style.Sine, Dir.InOut)
+                    task.wait(FIRST_SHOT_FADE_OUT + 0.05)
+                    if not (cutsceneRunning and token == cutsceneToken and env.BorderUICutsceneId == cutsceneId) then
+                        return
+                    end
+                end
+
+                camera.CameraType = Enum.CameraType.Scriptable
+                camera.CFrame = shot.from
+                camera.FieldOfView = shot.fromFov
+
+                fadeFrame.BackgroundTransparency = 0
+                fadeScreen(1, firstShot and FIRST_SHOT_FADE_IN or SHOT_FADE_TIME, Style.Sine, Dir.Out)
+                firstShot = false
+
+                local progress = Instance.new("NumberValue")
+                progress.Value = 0
+                local glide = progress.Changed:Connect(function(value)
+                    if cameraRestored or env.BorderUICutsceneId ~= cutsceneId then return end
+                    local a = shotCurve(math.clamp(value, 0, 1))
+                    camera.CFrame = shot.from:Lerp(shot.to, a) * swayOffset(os.clock())
+                    camera.FieldOfView = lerp(shot.fromFov, shot.toFov, a)
+                end)
+
+                local tween = TweenService:Create(progress, TweenInfo.new(SHOT_DURATION, Enum.EasingStyle.Linear), {
+                    Value = 1,
+                })
+                env.BorderUICutsceneTween = tween
+                tween:Play()
+
+                task.delay(SHOT_DURATION - SHOT_FADE_TIME, function()
+                    if cutsceneRunning and token == cutsceneToken then
+                        fadeScreen(0, SHOT_FADE_TIME, Style.Sine, Dir.In)
+                    end
+                end)
+
+                tween.Completed:Wait()
+                glide:Disconnect()
+                progress:Destroy()
+            end
+        end)
+    end
+
+    local MUSIC_URL    = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/safe%20room.mp3"
+    local MUSIC_VOLUME = 0.6
+    local MUSIC_FADE_IN_TIME  = 3.5
+    local MUSIC_FADE_OUT_TIME = 1.9
+
+    local oldMusic = SoundService:FindFirstChild("CharacterSelectMusic")
+    if oldMusic then
+        oldMusic:Destroy()
+    end
+
+    local musicSound
+    local musicEqualizer
+    local musicCancelled = false
+
+    local function startMusic()
+        if _G.Music == false then return end
+        musicCancelled = false
+        local ok, err = pcall(function()
+            if not BackNav.musicAsset then
+                writefile("SafeRoom.mp3", game:HttpGet(MUSIC_URL))
+                BackNav.musicAsset = getcustomasset("SafeRoom.mp3")
+            end
+            local musicAsset = BackNav.musicAsset
+            if musicCancelled then return end
+
+            musicSound = Instance.new("Sound")
+            musicSound.Name = "CharacterSelectMusic"
+            musicSound.SoundId = musicAsset
+            musicSound.Volume = 0
+            musicSound.Looped = true
+            musicSound.Parent = SoundService
+
+            local eqOk, equalizer = pcall(function()
+                local effect = Instance.new("EqualizerSoundEffect")
+                effect.LowGain = 0
+                effect.MidGain = -14
+                effect.HighGain = -50
+                effect.Parent = musicSound
+                return effect
+            end)
+            if eqOk then
+                musicEqualizer = equalizer
+            end
+
+            musicSound:Play()
+
+            TweenService:Create(musicSound, info(MUSIC_FADE_IN_TIME, Style.Sine, Dir.Out), {
+                Volume = MUSIC_VOLUME,
+            }):Play()
+            if musicEqualizer then
+                TweenService:Create(musicEqualizer, info(MUSIC_FADE_IN_TIME + 1.2, Style.Quint, Dir.Out), {
+                    LowGain = 0,
+                    MidGain = 0,
+                    HighGain = 0,
+                }):Play()
+            end
+        end)
+        if not ok then
+            warn("[Music] Couldn't start the music: " .. tostring(err))
+        end
+    end
+
+    local function fadeOutMusic(delayTime)
+        musicCancelled = true
+        local sound = musicSound
+        if not sound then return end
+        musicSound = nil
+
+        local equalizer = musicEqualizer
+        musicEqualizer = nil
+
+        local fadeTween = TweenService:Create(sound, info(MUSIC_FADE_OUT_TIME, Style.Sine, Dir.InOut, delayTime), {
+            Volume = 0,
+        })
+        fadeTween.Completed:Connect(function()
+            sound:Stop()
+            sound:Destroy()
+        end)
+        fadeTween:Play()
+
+        if equalizer then
+            TweenService:Create(equalizer, info(MUSIC_FADE_OUT_TIME, Style.Quad, Dir.In, delayTime), {
+                MidGain = -26,
+                HighGain = -80,
+            }):Play()
+        end
+    end
+
+    do
+        local MENU_MUSIC_URL           = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/Dragon%20Ball%20Z%20Divine%20Clash!%20(Main%20Menu%20OST).mp3"
+        local MENU_MUSIC_FILE          = "MainMenuOST.mp3"
+        local MENU_MUSIC_VOLUME        = 0.6
+        local MENU_MUSIC_FADE_IN_TIME  = 2.5
+        local MENU_MUSIC_FADE_OUT_TIME = 1.4
+
+        local oldMenuMusic = SoundService:FindFirstChild("MainMenuMusic")
+        if oldMenuMusic then
+            oldMenuMusic:Destroy()
+        end
+
+        BackNav.menuMusicGeneration = 0
+
+        function BackNav.startMenuMusic()
+            if _G.Music == false then return end
+            BackNav.menuMusicGeneration += 1
+            local generation = BackNav.menuMusicGeneration
+
+            local ok, err = pcall(function()
+                if not BackNav.menuMusicAsset then
+                    writefile(MENU_MUSIC_FILE, game:HttpGet(MENU_MUSIC_URL))
+                    BackNav.menuMusicAsset = getcustomasset(MENU_MUSIC_FILE)
+                end
+                if BackNav.menuMusicGeneration ~= generation then return end
+
+                if BackNav.menuMusic then
+                    BackNav.menuMusic:Destroy()
+                end
+
+                local sound = Instance.new("Sound")
+                sound.Name = "MainMenuMusic"
+                sound.SoundId = BackNav.menuMusicAsset
+                sound.Volume = 0
+                sound.Looped = true
+                sound.Parent = SoundService
+                BackNav.menuMusic = sound
+
+                sound:Play()
+                TweenService:Create(sound, info(MENU_MUSIC_FADE_IN_TIME, Style.Sine, Dir.Out), {
+                    Volume = MENU_MUSIC_VOLUME,
+                }):Play()
+            end)
+            if not ok then
+                warn("[MenuMusic] Couldn't start the main menu music: " .. tostring(err))
+            end
+        end
+
+        function BackNav.stopMenuMusic()
+            BackNav.menuMusicGeneration += 1
+
+            local sound = BackNav.menuMusic
+            if not sound then return end
+            BackNav.menuMusic = nil
+
+            local fade = TweenService:Create(sound, info(MENU_MUSIC_FADE_OUT_TIME, Style.Sine, Dir.InOut), {
+                Volume = 0,
+            })
+            fade.Completed:Connect(function()
+                sound:Stop()
+                sound:Destroy()
+            end)
+            fade:Play()
+        end
+    end
+
+    local BLUR_SIZE          = 20
+    local BLUR_FADE_IN_TIME  = 1.8
+    local BLUR_FADE_OUT_TIME = 1.5
+
+    local oldBlur = Lighting:FindFirstChild("CharacterSelectBlur")
+    if oldBlur then
+        oldBlur:Destroy()
+    end
+
+    local blurEffect = Instance.new("BlurEffect")
+    blurEffect.Name = "CharacterSelectBlur"
+    blurEffect.Size = 0
+    blurEffect.Parent = (_G.Graphics ~= false) and Lighting or nil
+
+    local function fadeInBlur()
+        TweenService:Create(blurEffect, info(BLUR_FADE_IN_TIME, Style.Quint, Dir.Out), {
+            Size = BLUR_SIZE,
+        }):Play()
+    end
+
+    local function fadeOutBlur(spikeAt, spikeTime)
+        TweenService:Create(blurEffect, info(spikeTime, Style.Quad, Dir.Out, spikeAt), {
+            Size = BLUR_SIZE * 1.7,
+        }):Play()
+
+        task.delay(spikeAt + spikeTime, function()
+            if not blurEffect.Parent then return end
+            local settle = TweenService:Create(blurEffect, info(BLUR_FADE_OUT_TIME, Style.Quint, Dir.Out), {
+                Size = 0,
+            })
+            settle.Completed:Connect(function()
+                blurEffect:Destroy()
+            end)
+            settle:Play()
+        end)
+    end
+
+    function BackNav.clearBlur(duration)
+        TweenService:Create(blurEffect, info(duration, Style.Quad, Dir.InOut), {
+            Size = 0,
+        }):Play()
+    end
+
+    overlayGui.Destroying:Connect(function()
+        blurEffect:Destroy()
     end)
-    if not ok then warn("[Loader] " .. tostring(err)) end
+
+    local uiReady = false
+
+    local function popIn(piece, delayTime)
+        playTween(piece.scale, info(0.75, Style.Back, Dir.Out, delayTime), { Scale = 1 })
+        playTween(piece.element, info(0.8, Style.Quint, Dir.Out, delayTime), { Position = piece.restPosition })
+        tweenFade(piece.fade, 1, info(0.5, Style.Sine, Dir.Out, delayTime))
+    end
+
+    local function Open()
+        cancelActiveTweens()
+
+        borderImage.Size = UDim2.new(4, 0, 4, 0)
+        borderImage.Rotation = -1.5
+        borderImage.ImageTransparency = 1
+        characterImage.Position = CHARACTER_ART_CLOSED_POSITION
+        characterImage.ImageTransparency = 1
+        viewport.Position = VIEWPORT_CLOSED_POSITION
+        viewport.ImageTransparency = 1
+        viewport.Ambient = VIEWPORT_AMBIENT
+        viewportScale.Scale = 0.85
+        infoPanel.Position = panelClosedPosition
+        for _, piece in ipairs(panelPieces) do
+            piece.scale.Scale = 0
+            piece.element.Position = piece.risePosition
+            piece.fade.apply(0)
+        end
+        orbit.introYaw = 32
+        orbit.introZoom = 1.3
+        orbit.exitYaw = 0
+        overlayGui.Enabled = true
+
+        playTween(borderImage, info(1.9, Expo, Dir.Out), { Size = UDim2.new(1, 0, 1, 0) })
+        playTween(borderImage, info(2.2, Style.Quint, Dir.Out), { Rotation = 0 })
+        playTween(borderImage, info(0.6, Style.Sine, Dir.Out), { ImageTransparency = 0 })
+
+        playTween(characterImage, info(1.8, Style.Quint, Dir.Out, 0.25), { Position = CHARACTER_ART_OPEN_POSITION })
+        playTween(characterImage, info(0.9, Style.Sine, Dir.Out, 0.25), { ImageTransparency = 0 })
+
+        playTween(viewport, info(1.6, Style.Quint, Dir.Out, 0.4), { Position = VIEWPORT_OPEN_POSITION })
+        playTween(viewport, info(0.9, Style.Sine, Dir.Out, 0.4), { ImageTransparency = 0 })
+        playTween(viewportScale, info(1.3, Style.Back, Dir.Out, 0.45), { Scale = 1 })
+        tweenValue(info(2.1, Style.Quint, Dir.Out, 0.4), function(alpha)
+            orbit.introYaw = 32 * (1 - alpha)
+            orbit.introZoom = lerp(1.3, 1, alpha)
+        end)
+
+        playTween(infoPanel, info(1.3, Style.Quint, Dir.Out, 0.45), { Position = panelOpenPosition })
+        popIn(headerPiece, 0.85)
+        popIn(infoPiece, 0.97)
+        popIn(buttonsPiece, 1.09)
+        popIn(BackNav.piece, 1.05)
+
+        task.delay(0.6, playViewportAnimations)
+
+        task.delay(1.9, function()
+            uiReady = true
+        end)
+
+        fadeInBlur()
+    end
+
+    local exiting = false
+    local EXIT_TOTAL_TIME    = 2.4
+    local EXIT_FLASH_RAMP_AT = 0.33
+    local EXIT_FLASH_RAMP    = 0.42
+    local EXIT_FLASH_PEAK_AT = EXIT_FLASH_RAMP_AT + EXIT_FLASH_RAMP
+
+    local typeSequenceId = 0
+    local currentCharacterIndex = 1
+
+    local function collapsePiece(piece, delayTime)
+        playTween(piece.scale, info(0.42, Style.Back, Dir.In, delayTime), { Scale = 0 })
+        playTween(piece.element, info(0.42, Style.Quad, Dir.In, delayTime), { Position = piece.liftPosition })
+        tweenFade(piece.fade, 0, info(0.3, Style.Sine, Dir.In, delayTime + 0.12))
+    end
+
+    local function selectRing(button, color, delayTime)
+        local center = button.AbsolutePosition + button.AbsoluteSize / 2
+
+        local ring = Instance.new("Frame")
+        ring.Name = "SelectRing"
+        ring.AnchorPoint = Vector2.new(0.5, 0.5)
+        ring.Position = UDim2.fromOffset(center.X, center.Y)
+        ring.Size = UDim2.fromOffset(34, 34)
+        ring.BackgroundTransparency = 1
+        ring.BorderSizePixel = 0
+        ring.Visible = false
+        ring.ZIndex = 2147483647
+        ring.Parent = overlayGui
+
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0.5, 0)
+        corner.Parent = ring
+
+        local stroke = Instance.new("UIStroke")
+        stroke.Color = color
+        stroke.Thickness = 5
+        stroke.Transparency = 0.1
+        stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        stroke.Parent = ring
+
+        task.delay(delayTime, function()
+            if not ring.Parent then return end
+            ring.Visible = true
+            playTween(ring, info(0.85, Style.Quint, Dir.Out), { Size = UDim2.fromOffset(460, 460) })
+            playTween(stroke, info(0.85, Style.Quad, Dir.Out), { Transparency = 1, Thickness = 0.5 })
+        end)
+    end
+
+    local function confirmFlash(button)
+        local lift = button:FindFirstChild("Lift")
+        if not lift then return end
+        lift.BackgroundTransparency = 0.3
+        playTween(lift, info(0.7, Style.Quad, Dir.Out), { BackgroundTransparency = 1 })
+    end
+
+    local function Exit()
+        if exiting or BackNav.active then return end
+        exiting = true
+        BackNav.stopMenuPositionCheck()
+        cancelActiveTweens()
+
+        haltCutsceneLoop()
+        typeSequenceId += 1
+        fadeOutMusic(0.25)
+        fadeOutBlur(EXIT_FLASH_RAMP_AT, EXIT_FLASH_RAMP)
+
+        local theme = CHARACTERS[currentCharacterIndex].theme
+        local accent = theme.header:Lerp(Color3.new(1, 1, 1), EXIT_FLASH_WHITENESS)
+
+        selectRing(selectButton, accent, 0)
+        selectRing(selectButton, Color3.new(1, 1, 1), 0.09)
+        confirmFlash(selectButton)
+
+        collapsePiece(buttonsPiece, 0)
+        collapsePiece(infoPiece, 0.07)
+        collapsePiece(headerPiece, 0.14)
+        collapsePiece(BackNav.piece, 0)
+        playTween(infoPanel, info(0.65, Style.Quint, Dir.In, 0.1), { Position = panelClosedPosition })
+
+        playTween(viewport, info(0.3, Style.Quad, Dir.Out, 0.04), { Ambient = Color3.new(1, 1, 1) })
+        playTween(viewportScale, info(0.7, Style.Back, Dir.In, 0.06), { Scale = 0.3 })
+        playTween(viewport, info(0.8, Style.Quint, Dir.In, 0.1), { Position = VIEWPORT_CLOSED_POSITION })
+        playTween(viewport, info(0.4, Style.Sine, Dir.In, 0.42), { ImageTransparency = 1 })
+        tweenValue(info(0.85, Style.Quint, Dir.In, 0.05), function(alpha)
+            orbit.exitYaw = -55 * alpha
+        end)
+
+        playTween(characterImage, info(0.8, Style.Quint, Dir.In, 0.2), { Position = CHARACTER_ART_CLOSED_POSITION })
+        playTween(characterImage, info(0.4, Style.Sine, Dir.In, 0.55), { ImageTransparency = 1 })
+
+        playTween(borderImage, info(0.65, Expo, Dir.In, 0.2), { Size = UDim2.new(4, 0, 4, 0) })
+        playTween(borderImage, info(0.8, Style.Quad, Dir.In, 0.2), { Rotation = 2.5 })
+        playTween(borderImage, info(0.3, Style.Sine, Dir.In, 0.7), { ImageTransparency = 1 })
+
+        flashFrame.BackgroundColor3 = accent
+        playTween(flashFrame, info(EXIT_FLASH_RAMP, Style.Quad, Dir.In, EXIT_FLASH_RAMP_AT), {
+            BackgroundTransparency = 0,
+        })
+
+        task.delay(EXIT_FLASH_PEAK_AT + 0.03, function()
+            if not overlayGui.Parent then return end
+
+            if fadeTween then
+                fadeTween:Cancel()
+            end
+            fadeFrame.BackgroundTransparency = 1
+
+            BackNav.returnPlayer()
+            MenuHud.release()
+            restoreCamera()
+            BackNav.unfreeze()
+            camera.FieldOfView = math.min(120, originalFov + EXIT_FOV_PUNCH)
+            playTween(camera, info(1.5, Style.Quint, Dir.Out), { FieldOfView = originalFov })
+            playTween(flashFrame, info(1.25, Style.Quint, Dir.Out), { BackgroundTransparency = 1 })
+        end)
+
+        task.delay(EXIT_TOTAL_TIME, function()
+            if overlayGui.Parent then
+                overlayGui:Destroy()
+            end
+            if onFinished then
+                onFinished()
+            end
+        end)
+    end
+
+    local themeTweenInfo = info(0.65, Style.Quad, Dir.InOut)
+
+    local function tweenColors(target, goal)
+        TweenService:Create(target, themeTweenInfo, goal):Play()
+    end
+
+    local themeGradients = {
+        { gradient = nameText:FindFirstChild("TextGradient"), key = "nameGradient" },
+        { gradient = infoLabel:FindFirstChild("TextGradient"), key = "infoGradient" },
+        { gradient = nextButton:FindFirstChild("NextButtonText"):FindFirstChild("TextGradient"), key = "buttonGradient" },
+        { gradient = selectButton:FindFirstChild("SelectButtonText"):FindFirstChild("TextGradient"), key = "buttonGradient" },
+    }
+    for _, gradient in ipairs(BackNav.gradients) do
+        table.insert(themeGradients, { gradient = gradient, key = "buttonGradient" })
+    end
+    local themeGlide
+
+    local function applyTheme(theme)
+        if themeGlide then
+            themeGlide:Cancel()
+        end
+        local starts = {}
+        for i, entry in ipairs(themeGradients) do
+            starts[i] = entry.gradient.Color
+        end
+        themeGlide = tweenValue(themeTweenInfo, function(alpha)
+            local t = math.clamp(alpha, 0, 1)
+            for i, entry in ipairs(themeGradients) do
+                entry.gradient.Color = lerpSequence(starts[i], theme[entry.key], t)
+            end
+        end)
+
+        tweenColors(nameHeader, { BackgroundColor3 = theme.header })
+        tweenColors(nameHeaderStroke, { Color = theme.headerStroke })
+        tweenColors(infoRow, { BackgroundColor3 = theme.rowBackground })
+        tweenColors(infoRowStroke, { Color = theme.rowStroke })
+
+        for _, button in ipairs({ nextButton, selectButton, BackNav.button }) do
+            tweenColors(button, { BackgroundColor3 = theme.header })
+            tweenColors(button:FindFirstChildOfClass("UIStroke"), { Color = theme.headerStroke })
+        end
+    end
+
+    local function punctuationPause(text, letterIndex)
+        local byteIndex = utf8.offset(text, letterIndex)
+        if not byteIndex then return 1 end
+        local ch = text:sub(byteIndex, byteIndex)
+        if ch == "," or ch == ";" or ch == ":" then
+            return 6
+        elseif ch == "." or ch == "!" or ch == "?" then
+            return 10
+        end
+        return 1
+    end
+
+    local function typeLabel(label, text, charDelay, sequenceId)
+        label.Text = text
+        label.MaxVisibleGraphemes = 0
+
+        local total = utf8.len(text) or #text
+        local revealTimes = table.create(total)
+        local totalTime = 0
+        for i = 1, total do
+            revealTimes[i] = totalTime
+            totalTime += charDelay * punctuationPause(text, i)
+        end
+
+        local startTime = os.clock()
+        local shown = 0
+        while shown < total do
+            if sequenceId ~= typeSequenceId or not label.Parent then
+                return false
+            end
+            local elapsed = os.clock() - startTime
+            local due = shown
+            while due < total and revealTimes[due + 1] <= elapsed do
+                due += 1
+            end
+            if due ~= shown then
+                shown = due
+                label.MaxVisibleGraphemes = shown
+            end
+            if shown < total then
+                RunService.Heartbeat:Wait()
+            end
+        end
+
+        while os.clock() < startTime + totalTime do
+            if sequenceId ~= typeSequenceId or not label.Parent then
+                return false
+            end
+            RunService.Heartbeat:Wait()
+        end
+
+        if sequenceId ~= typeSequenceId then
+            return false
+        end
+        label.MaxVisibleGraphemes = -1
+        return true
+    end
+
+    local textFade = makeFadeGroup(nameText, infoLabel)
+
+    local TEXT_FADE_OUT_TIME = 0.16
+
+    local function fadeTextOut(sequenceId)
+        local startVisibility = textFade.value
+        local fadeStartTime = os.clock()
+        while true do
+            if sequenceId ~= typeSequenceId then
+                return false
+            end
+            local progress = math.clamp((os.clock() - fadeStartTime) / TEXT_FADE_OUT_TIME, 0, 1)
+            local easedProgress = TweenService:GetValue(progress, Style.Sine, Dir.In)
+            textFade.apply(startVisibility * (1 - easedProgress))
+            if progress >= 1 then
+                return true
+            end
+            RunService.Heartbeat:Wait()
+        end
+    end
+
+    local function typeCharacter(index, fadeOldTextOut)
+        typeSequenceId += 1
+        local sequenceId = typeSequenceId
+        local character = CHARACTERS[index]
+
+        applyTheme(character.theme)
+
+        task.spawn(function()
+
+            if fadeOldTextOut and not fadeTextOut(sequenceId) then
+                return
+            end
+
+            nameText.Text = character.name
+            nameText.MaxVisibleGraphemes = 0
+            infoLabel.Text = character.info
+            infoLabel.MaxVisibleGraphemes = 0
+            textFade.apply(1)
+
+            if typeLabel(nameText, character.name, TYPEWRITER_NAME_DELAY, sequenceId) then
+                typeLabel(infoLabel, character.info, TYPEWRITER_INFO_DELAY, sequenceId)
+            end
+        end)
+    end
+
+    local bumpSpring = Spring.new(1, 24, 0.5)
+    local swapYawSpring = Spring.new(0, 12, 0.45)
+    local swapZoomSpring = Spring.new(1, 14, 0.55)
+
+    local function swapPop()
+        bumpSpring.vel = bumpSpring.vel - 1.8
+        swapYawSpring.vel = swapYawSpring.vel + 250
+        swapZoomSpring.vel = swapZoomSpring.vel - 1.6
+
+        local burst = playTween(viewport, info(0.09, Style.Quad, Dir.Out), { Ambient = Color3.new(1, 1, 1) })
+        burst.Completed:Connect(function(playbackState)
+            if playbackState ~= Enum.PlaybackState.Completed or exiting then return end
+            playTween(viewport, info(0.7, Style.Quint, Dir.Out), { Ambient = VIEWPORT_AMBIENT })
+        end)
+    end
+
+    function BackNav.go()
+        if exiting or BackNav.active or not uiReady or not BackNav.returnToMenu then return end
+        BackNav.active = true
+        uiReady = false
+        cancelActiveTweens()
+
+        haltCutsceneLoop()
+        typeSequenceId += 1
+        fadeOutMusic(0)
+        BackNav.clearBlur(0.9)
+
+        BackNav.state.pulse()
+
+        collapsePiece(BackNav.piece, 0)
+        collapsePiece(buttonsPiece, 0)
+        collapsePiece(infoPiece, 0.06)
+        collapsePiece(headerPiece, 0.12)
+        playTween(infoPanel, info(0.65, Style.Quint, Dir.In, 0.1), { Position = panelClosedPosition })
+
+        playTween(viewportScale, info(0.7, Style.Back, Dir.In, 0.05), { Scale = 0.85 })
+        playTween(viewport, info(0.8, Style.Quint, Dir.In, 0.05), { Position = VIEWPORT_CLOSED_POSITION })
+        playTween(viewport, info(0.4, Style.Sine, Dir.In, 0.35), { ImageTransparency = 1 })
+        tweenValue(info(0.85, Style.Quint, Dir.In, 0.05), function(alpha)
+            orbit.introYaw = lerp(0, 32, alpha)
+            orbit.introZoom = lerp(1, 1.3, alpha)
+        end)
+
+        playTween(characterImage, info(0.8, Style.Quint, Dir.In, 0.1), { Position = CHARACTER_ART_CLOSED_POSITION })
+        playTween(characterImage, info(0.4, Style.Sine, Dir.In, 0.45), { ImageTransparency = 1 })
+
+        playTween(borderImage, info(0.85, Expo, Dir.In, 0.15), { Size = UDim2.new(4, 0, 4, 0) })
+        playTween(borderImage, info(0.9, Style.Quint, Dir.In, 0.15), { Rotation = -1.5 })
+        playTween(borderImage, info(0.35, Style.Sine, Dir.In, 0.6), { ImageTransparency = 1 })
+
+        fadeScreen(0, 0.55, Style.Sine, Dir.InOut, 0.45)
+
+        task.delay(BackNav.switchTime, function()
+            if exiting then return end
+
+            if env.BorderUICutsceneTween then
+                env.BorderUICutsceneTween:Cancel()
+            end
+            overlayGui.Enabled = false
+            BackNav.stopAnimations()
+
+            nameText.MaxVisibleGraphemes = 0
+            infoLabel.MaxVisibleGraphemes = 0
+            if currentCharacterIndex ~= 1 then
+                currentCharacterIndex = 1
+                applyTheme(CHARACTERS[1].theme)
+            end
+
+            for _, state in ipairs(buttonStates) do
+                state.hovered, state.pressed = false, false
+                state.spring.target, state.spring.speed, state.spring.damper = 1, 18, 0.6
+                local lift = state.button:FindFirstChild("Lift")
+                if lift then
+                    lift.BackgroundTransparency = 1
+                end
+                local stroke = state.button:FindFirstChildOfClass("UIStroke")
+                if stroke then
+                    stroke.Thickness = 2
+                end
+            end
+
+            local ok, err = pcall(BackNav.returnToMenu)
+            if not ok then
+                warn("[Back] Couldn't return to the main menu: " .. tostring(err))
+            end
+            BackNav.active = false
+        end)
+    end
+
+    BackNav.button.Activated:Connect(function()
+        BackNav.go()
+    end)
+
+    nextButton.Activated:Connect(function()
+        if exiting or not uiReady then return end
+        nextState.pulse()
+        currentCharacterIndex = currentCharacterIndex % #CHARACTERS + 1
+        typeCharacter(currentCharacterIndex, true)
+        swapPop()
+    end)
+
+    selectButton.Activated:Connect(function()
+        if exiting or BackNav.active then return end
+        selectState.pulse()
+
+        local unavailableMessage = CHARACTERS[currentCharacterIndex].unavailableMessage
+        if unavailableMessage then
+            pcall(function()
+                game:GetService("StarterGui"):SetCore("SendNotification", {
+                    Title = "Character Unavailable",
+                    Text = unavailableMessage,
+                    Duration = 5,
+                })
+            end)
+            return
+        end
+
+        Exit()
+    end)
+
+    local motionStart = os.clock()
+    local touchOnly = UserInputService.TouchEnabled and not UserInputService.MouseEnabled
+    local mouseDriven = ENABLE_MOUSE_PARALLAX and not touchOnly
+
+    local artSpringX  = Spring.new(0, 4, 1)
+    local artSpringY  = Spring.new(0, 4, 1)
+    local viewSpringX = Spring.new(0, 5.5, 1)
+    local viewSpringY = Spring.new(0, 5.5, 1)
+    local lookYawSpring   = Spring.new(0, 6, 0.9)
+    local lookPitchSpring = Spring.new(0, 6, 0.9)
+
+    local function onFrame(deltaTime)
+        deltaTime = math.min(deltaTime, 0.05)
+        local clock = os.clock() - motionStart
+
+        local screen = camera.ViewportSize
+        local nx, ny = 0, 0
+        if mouseDriven and screen.X > 0 and screen.Y > 0 then
+            local mouse = UserInputService:GetMouseLocation()
+            nx = math.clamp((mouse.X / screen.X - 0.5) * 2, -1, 1)
+            ny = math.clamp((mouse.Y / screen.Y - 0.5) * 2, -1, 1)
+        end
+
+        if screen.X > 0 and screen.Y > 0 then
+            artSpringX.target  = -nx * PARALLAX_ART_PIXELS
+            artSpringY.target  = -ny * PARALLAX_ART_PIXELS * 0.6
+            viewSpringX.target = -nx * PARALLAX_VIEW_PIXELS
+            viewSpringY.target = -ny * PARALLAX_VIEW_PIXELS * 0.6
+            artLayer.Position = UDim2.new(
+                artSpringX:step(deltaTime) / screen.X, 0,
+                artSpringY:step(deltaTime) / screen.Y, 0
+            )
+            viewportLayer.Position = UDim2.new(
+                viewSpringX:step(deltaTime) / screen.X, 0,
+                viewSpringY:step(deltaTime) / screen.Y, 0
+            )
+        end
+
+        if viewportDistance then
+            lookYawSpring.target = -nx * MOUSE_LOOK_DEGREES
+            lookPitchSpring.target = ny * 0.03
+
+            local yawDegrees = orbit.introYaw + orbit.exitYaw + swapYawSpring:step(deltaTime) + lookYawSpring:step(deltaTime)
+            local pitch = lookPitchSpring:step(deltaTime)
+            local zoom = orbit.introZoom * swapZoomSpring:step(deltaTime)
+
+            if ENABLE_IDLE_MOTION then
+                yawDegrees += math.sin(clock * 0.55) * 1.4
+                pitch += math.sin(clock * 0.8 + 1.2) * 0.012
+            end
+
+            local offset = Vector3.new(0, viewportHeight + viewportDistance * pitch, -viewportDistance * zoom)
+            local position = viewportFocus + CFrame.Angles(0, math.rad(yawDegrees), 0):VectorToWorldSpace(offset)
+            viewportCamera.CFrame = CFrame.lookAt(position, viewportFocus)
+        else
+            swapYawSpring:step(deltaTime)
+            swapZoomSpring:step(deltaTime)
+        end
+
+        for _, state in ipairs(buttonStates) do
+            state.scale.Scale = math.max(0.01, state.spring:step(deltaTime))
+        end
+        panelBump.Scale = math.max(0.01, bumpSpring:step(deltaTime))
+    end
+
+    do
+        local motionConnection = RunService.RenderStepped:Connect(onFrame)
+        overlayGui.Destroying:Connect(function()
+            motionConnection:Disconnect()
+        end)
+    end
+
+    local function createMainMenu(onBegin)
+        local TextService = game:GetService("TextService")
+
+        local STAGE_W, STAGE_H = 640, 360
+        local MENU_FONT      = settingsFont
+        local LOGO_FONT      = Enum.Font.Bangers
+        local SUBTITLE_FONT  = Enum.Font.Garamond
+
+        local VERSION_TEXT     = "Version 1.03"
+        local COPYRIGHT_LINE_1 = "Fan-made by LIMITLESS | discord.gg/xQjDuf2UHK"
+        local COPYRIGHT_LINE_2 = "Dragon Ball © Bird Studio / Shueisha, Toei Animation. Unofficial fan project."
+
+        local YELLOW      = Color3.fromRGB(255, 232, 58)
+        local HOT_COLOR   = Color3.fromRGB(255, 252, 214)
+        local WHITE       = Color3.fromRGB(255, 255, 255)
+        local GREY        = Color3.fromRGB(150, 150, 150)
+        local BLACK       = Color3.fromRGB(0, 0, 0)
+        local LOGO_YELLOW_TOP, LOGO_YELLOW_BOTTOM = Color3.fromRGB(255, 248, 90), Color3.fromRGB(255, 212, 0)
+        local LOGO_RED_TOP, LOGO_RED_BOTTOM       = Color3.fromRGB(238, 44, 38), Color3.fromRGB(168, 6, 10)
+        local NIMBUS_BLUE = Color3.fromRGB(176, 228, 242)
+
+        local MENU_ITEMS = {
+            { id = "new", text = "Begin" },
+        }
+        local MENU_X         = 320
+        local MENU_Y         = { 262, 284, 306 }
+        local MENU_TEXT_SIZE = 13
+
+        local TITLE_SLAM_START_SCALE = 2.4
+        local TITLE_SLAM_DELAY       = 0.15
+        local TITLE_SLAM_TIME        = 0.32
+        local TITLE_SHAKE_POSITION   = 9
+        local TITLE_SHAKE_ROTATION   = 1.4
+        local TITLE_SHAKE_SPEED      = 17
+        local TITLE_SHAKE_DECAY      = 3.2
+        local TITLE_REVEAL_TIME      = 1.1
+        local TITLE_IMPACT_FLASH     = 0.82
+        local REVEAL_FROM, REVEAL_TO = -0.6, 0.6
+
+        local LOGO_CENTER      = Vector2.new(320, 88)
+        local LOGO_TARGET_W    = 304
+        local KAKAROT_CENTER   = Vector2.new(312, 145)
+        local KAKAROT_TEXT_W   = 167
+        local KAKAROT_TEXT_SZ  = 22
+
+        local LOGO_IMAGE_URL        = "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/IMG_6810.png"
+        local LOGO_IMAGE_FILE       = "DivineClashLogo.png"
+        local LOGO_IMAGE_RECT_POS   = Vector2.new(0, 52)
+        local LOGO_IMAGE_RECT_SIZE  = Vector2.new(2032, 722)
+        local LOGO_IMAGE_WIDTH      = 380
+        local LOGO_IMAGE_CENTER     = Vector2.new(320, 92)
+
+        local INTERACTIVE_AFTER = 1.6
+        local CONFIRM_DELAY     = 0.28
+        local DESTROY_AFTER     = 1.0
+
+        local function measureText(text, fontFace, size)
+            local ok, bounds = pcall(function()
+                local params = Instance.new("GetTextBoundsParams")
+                params.Text = text
+                params.Font = fontFace
+                params.Size = size
+                params.Width = 10000
+                return TextService:GetTextBoundsAsync(params)
+            end)
+            if ok and bounds then
+                return bounds
+            end
+            return Vector2.new(#text * size * 0.5, size)
+        end
+
+        local function glide(target, duration, style, direction, delayTime, goal)
+            TweenService:Create(target, info(duration, style, direction, delayTime), goal):Play()
+        end
+
+        local previousMenuGui = guiParent:FindFirstChild("BorderUIMainMenuGui")
+        if previousMenuGui then
+            previousMenuGui:Destroy()
+        end
+
+        local menuGui = Instance.new("ScreenGui")
+        menuGui.Name = "BorderUIMainMenuGui"
+        menuGui.IgnoreGuiInset = true
+        menuGui.ScreenInsets = Enum.ScreenInsets.None
+        menuGui.ResetOnSpawn = false
+        menuGui.DisplayOrder = 2147483645
+        menuGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+        menuGui.Enabled = false
+
+        local stage = Instance.new("Frame")
+        stage.Name = "Stage"
+        stage.BackgroundTransparency = 1
+        stage.AnchorPoint = Vector2.new(0.5, 0.5)
+        stage.Position = UDim2.new(0.5, 0, 0.5, 0)
+        stage.Size = UDim2.fromOffset(STAGE_W, STAGE_H)
+        stage.Parent = menuGui
+
+        local stageScale = Instance.new("UIScale")
+        stageScale.Parent = stage
+
+        local textFades, frameFades = {}, {}
+
+        local function registerText(label, stroke, delayTime)
+            label.TextTransparency = 1
+            if stroke then
+                stroke.Transparency = 1
+            end
+            table.insert(textFades, { label = label, stroke = stroke, delay = delayTime or 0 })
+        end
+
+        local function registerFrame(frame, stroke, delayTime, shown, noFill, strokeShown)
+            if not noFill then
+                frame.BackgroundTransparency = 1
+            end
+            if stroke then
+                stroke.Transparency = 1
+            end
+            table.insert(frameFades, {
+                frame = frame, stroke = stroke, delay = delayTime or 0,
+                shown = shown or 0, noFill = noFill, strokeShown = strokeShown or 0,
+            })
+        end
+
+        local function newText(parent, text, font, size, color)
+            local label = Instance.new("TextLabel")
+            label.BackgroundTransparency = 1
+            label.BorderSizePixel = 0
+            label.Text = text
+            label.TextSize = size
+            label.TextColor3 = color
+            label.TextXAlignment = Enum.TextXAlignment.Center
+            label.TextYAlignment = Enum.TextYAlignment.Center
+            if typeof(font) == "EnumItem" then
+                label.Font = font
+            else
+                label.FontFace = font
+            end
+            label.Parent = parent
+            return label
+        end
+
+        local function newStroke(parent, thickness, color)
+            local stroke = Instance.new("UIStroke")
+            stroke.Color = color or BLACK
+            stroke.Thickness = thickness
+            stroke.LineJoinMode = Enum.LineJoinMode.Round
+            stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
+            stroke.Parent = parent
+            return stroke
+        end
+
+        local function verticalFill(parent, top, bottom)
+            local gradient = Instance.new("UIGradient")
+            gradient.Rotation = 90
+            gradient.Color = ColorSequence.new(top, bottom)
+            gradient.Parent = parent
+            return gradient
+        end
+
+        local logoAsset = BackNav.logoAsset
+        if not logoAsset then
+            local okLoad, loaded = pcall(function()
+                writefile(LOGO_IMAGE_FILE, game:HttpGet(LOGO_IMAGE_URL))
+                return getcustomasset(LOGO_IMAGE_FILE)
+            end)
+            if okLoad and loaded then
+                logoAsset = loaded
+                BackNav.logoAsset = loaded
+            else
+                warn("[Menu] Couldn't load the title image, using the text logo: " .. tostring(loaded))
+            end
+        end
+
+        local logoCenter = logoAsset and LOGO_IMAGE_CENTER or LOGO_CENTER
+        local logoStartPosition = UDim2.fromOffset(logoCenter.X, logoCenter.Y + 12)
+        local logoPosition = UDim2.fromOffset(logoCenter.X, logoCenter.Y)
+        local KAKAROT_LINE_WIDTH = 242
+        local kakarotLine
+        local logoImage, logoBody, logoShadow, revealGradient
+        local glareLayers = {}
+
+        local logoHolder = Instance.new("Frame")
+        logoHolder.Name = "Logo"
+        logoHolder.BackgroundTransparency = 1
+        logoHolder.AnchorPoint = Vector2.new(0.5, 0.5)
+        logoHolder.Position = logoStartPosition
+        logoHolder.Size = UDim2.fromOffset(LOGO_IMAGE_WIDTH, LOGO_IMAGE_WIDTH * LOGO_IMAGE_RECT_SIZE.Y / LOGO_IMAGE_RECT_SIZE.X)
+        logoHolder.ZIndex = 5
+        logoHolder.Parent = stage
+
+        local logoScale = Instance.new("UIScale")
+        logoScale.Scale = TITLE_SLAM_START_SCALE
+        logoScale.Parent = logoHolder
+
+        if logoAsset then
+
+            logoBody = Instance.new("Frame")
+            logoBody.Name = "LogoBody"
+            logoBody.BackgroundTransparency = 1
+            logoBody.AnchorPoint = Vector2.new(0.5, 0.5)
+            logoBody.Position = UDim2.new(0.5, 0, 0.5, 0)
+            logoBody.Size = UDim2.new(1, 0, 1, 0)
+            logoBody.ZIndex = 5
+            logoBody.Parent = logoHolder
+
+            local function logoLayer(name, zIndex)
+                local layer = Instance.new("ImageLabel")
+                layer.Name = name
+                layer.BackgroundTransparency = 1
+                layer.BorderSizePixel = 0
+                layer.Image = logoAsset
+                layer.ImageRectOffset = LOGO_IMAGE_RECT_POS
+                layer.ImageRectSize = LOGO_IMAGE_RECT_SIZE
+                layer.ScaleType = Enum.ScaleType.Stretch
+                layer.Size = UDim2.new(1, 0, 1, 0)
+                layer.ZIndex = zIndex
+                layer.Parent = logoBody
+                return layer
+            end
+
+            logoShadow = logoLayer("LogoSilhouette", 5)
+            logoShadow.ImageColor3 = Color3.fromRGB(8, 12, 28)
+            logoShadow.ImageTransparency = 1
+
+            logoImage = logoLayer("LogoImage", 6)
+            revealGradient = Instance.new("UIGradient")
+            revealGradient.Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 0),
+                NumberSequenceKeypoint.new(0.46, 0),
+                NumberSequenceKeypoint.new(0.54, 1),
+                NumberSequenceKeypoint.new(1, 1),
+            })
+            revealGradient.Offset = Vector2.new(REVEAL_FROM, 0)
+            revealGradient.Parent = logoImage
+
+            for _, spec in ipairs({
+                { name = "GlareHalo", width = 78, color = Color3.fromRGB(170, 215, 255), shown = 0.82, z = 7 },
+                { name = "GlareGlow", width = 24, color = Color3.fromRGB(215, 238, 255), shown = 0.4,  z = 8 },
+                { name = "GlareCore", width = 3.5, color = Color3.fromRGB(255, 255, 255), shown = 0,   z = 9 },
+            }) do
+                local glare = Instance.new("Frame")
+                glare.Name = spec.name
+                glare.AnchorPoint = Vector2.new(0.5, 0.5)
+                glare.Position = UDim2.new(0.5 + REVEAL_FROM, 0, 0.5, 0)
+                glare.Size = UDim2.new(0, spec.width, 1.3, 0)
+                glare.BackgroundColor3 = spec.color
+                glare.BackgroundTransparency = 1
+                glare.BorderSizePixel = 0
+                glare.ZIndex = spec.z
+                glare.Parent = logoBody
+                local glareGradient = Instance.new("UIGradient")
+                glareGradient.Transparency = NumberSequence.new({
+                    NumberSequenceKeypoint.new(0, 1),
+                    NumberSequenceKeypoint.new(0.5, 0),
+                    NumberSequenceKeypoint.new(1, 1),
+                })
+                glareGradient.Parent = glare
+                table.insert(glareLayers, { frame = glare, shown = spec.shown })
+            end
+        else
+
+        local logoFace = Font.fromEnum(LOGO_FONT)
+        local function unitWidth(text)
+            return measureText(text, logoFace, 100).X / 100
+        end
+        local wDrag, wN, wBall, wZ = unitWidth("DRAG"), unitWidth("N"), unitWidth("BALL"), unitWidth("Z")
+        local BALL_RATIO, Z_RATIO, PAD_RATIO = 0.36, 1.18, -0.025
+        local totalPerSize = wDrag + BALL_RATIO + wN + wBall + wZ * Z_RATIO + PAD_RATIO * 4
+        local logoSize = math.min(86, LOGO_TARGET_W / totalPerSize)
+        local zSize = math.min(100, logoSize * Z_RATIO)
+        local ballSize = logoSize * BALL_RATIO
+
+        logoHolder.Size = UDim2.fromOffset(LOGO_TARGET_W + 40, zSize * 1.15)
+
+        local logoList = Instance.new("UIListLayout")
+        logoList.FillDirection = Enum.FillDirection.Horizontal
+        logoList.HorizontalAlignment = Enum.HorizontalAlignment.Center
+        logoList.VerticalAlignment = Enum.VerticalAlignment.Center
+        logoList.SortOrder = Enum.SortOrder.LayoutOrder
+        logoList.Padding = UDim.new(0, PAD_RATIO * logoSize)
+        logoList.Parent = logoHolder
+
+        local function logoPiece(text, size, top, bottom, order, delayTime)
+            local label = newText(logoHolder, text, LOGO_FONT, size, WHITE)
+            label.AutomaticSize = Enum.AutomaticSize.X
+            label.Size = UDim2.fromOffset(0, size * 1.15)
+            label.LayoutOrder = order
+            verticalFill(label, top, bottom)
+            local stroke = newStroke(label, math.max(2, size * 0.09))
+            registerText(label, stroke, delayTime)
+            return label
+        end
+
+        logoPiece("DRAG", logoSize, LOGO_YELLOW_TOP, LOGO_YELLOW_BOTTOM, 1, 0.15)
+
+        local ball = Instance.new("Frame")
+        ball.Name = "DragonBall"
+        ball.AnchorPoint = Vector2.new(0.5, 0.5)
+        ball.Size = UDim2.fromOffset(ballSize, ballSize)
+        ball.BackgroundColor3 = WHITE
+        ball.BorderSizePixel = 0
+        ball.LayoutOrder = 2
+        ball.Parent = logoHolder
+        local ballCorner = Instance.new("UICorner")
+        ballCorner.CornerRadius = UDim.new(0.5, 0)
+        ballCorner.Parent = ball
+        verticalFill(ball, Color3.fromRGB(255, 214, 84), Color3.fromRGB(242, 128, 20))
+        local ballStroke = newStroke(ball, math.max(2, logoSize * 0.07))
+        ballStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        registerFrame(ball, ballStroke, 0.24)
+
+        local star = newText(ball, "★", Enum.Font.SourceSansBold, math.min(100, ballSize * 0.85), Color3.fromRGB(222, 30, 30))
+        star.AnchorPoint = Vector2.new(0.5, 0.5)
+        star.Position = UDim2.new(0.5, 0, 0.52, 0)
+        star.Size = UDim2.new(1, 0, 1, 0)
+        registerText(star, nil, 0.3)
+
+        logoPiece("N", logoSize, LOGO_YELLOW_TOP, LOGO_YELLOW_BOTTOM, 3, 0.33)
+        logoPiece("BALL", logoSize, LOGO_RED_TOP, LOGO_RED_BOTTOM, 4, 0.42)
+        logoPiece("Z", zSize, LOGO_RED_TOP, LOGO_RED_BOTTOM, 5, 0.55)
+
+        local subtitleFace = Font.fromEnum(SUBTITLE_FONT)
+        local letters = { "K", "A", "K", "A", "R", "O", "T" }
+        local letterWidths, letterSum = {}, 0
+        for i, letter in ipairs(letters) do
+            letterWidths[i] = measureText(letter, subtitleFace, KAKAROT_TEXT_SZ).X
+            letterSum += letterWidths[i]
+        end
+        local letterPadding = math.max(2, (KAKAROT_TEXT_W - letterSum) / (#letters - 1))
+
+        kakarotLine = Instance.new("Frame")
+        kakarotLine.Name = "KakarotStreak"
+        kakarotLine.AnchorPoint = Vector2.new(0.5, 0.5)
+        kakarotLine.Position = UDim2.fromOffset(313.5, 146.5)
+        kakarotLine.Size = UDim2.fromOffset(0, 2)
+        kakarotLine.BackgroundColor3 = NIMBUS_BLUE
+        kakarotLine.BorderSizePixel = 0
+        kakarotLine.ZIndex = 2
+        kakarotLine.Parent = stage
+        local kakarotLineGradient = Instance.new("UIGradient")
+        kakarotLineGradient.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 1),
+            NumberSequenceKeypoint.new(0.12, 0.55),
+            NumberSequenceKeypoint.new(0.55, 0.4),
+            NumberSequenceKeypoint.new(0.9, 0.1),
+            NumberSequenceKeypoint.new(1, 1),
+        })
+        kakarotLineGradient.Parent = kakarotLine
+        registerFrame(kakarotLine, nil, 0.9)
+
+        for _, blob in ipairs({
+            { x = 418, y = 143,   w = 24, h = 7 },
+            { x = 407, y = 145.5, w = 15, h = 6 },
+            { x = 429, y = 140.5, w = 11, h = 5 },
+        }) do
+            local cloud = Instance.new("Frame")
+            cloud.Name = "NimbusWisp"
+            cloud.AnchorPoint = Vector2.new(0.5, 0.5)
+            cloud.Position = UDim2.fromOffset(blob.x, blob.y)
+            cloud.Size = UDim2.fromOffset(blob.w, blob.h)
+            cloud.BackgroundColor3 = NIMBUS_BLUE
+            cloud.BorderSizePixel = 0
+            cloud.ZIndex = 2
+            cloud.Parent = stage
+            local cloudCorner = Instance.new("UICorner")
+            cloudCorner.CornerRadius = UDim.new(0.5, 0)
+            cloudCorner.Parent = cloud
+            registerFrame(cloud, nil, 1.15, 0.3)
+        end
+
+        local kakarotHolder = Instance.new("Frame")
+        kakarotHolder.Name = "Kakarot"
+        kakarotHolder.BackgroundTransparency = 1
+        kakarotHolder.AnchorPoint = Vector2.new(0.5, 0.5)
+        kakarotHolder.Position = UDim2.fromOffset(KAKAROT_CENTER.X, KAKAROT_CENTER.Y)
+        kakarotHolder.Size = UDim2.fromOffset(KAKAROT_TEXT_W + 30, KAKAROT_TEXT_SZ * 1.2)
+        kakarotHolder.ZIndex = 3
+        kakarotHolder.Parent = stage
+
+        local kakarotList = Instance.new("UIListLayout")
+        kakarotList.FillDirection = Enum.FillDirection.Horizontal
+        kakarotList.HorizontalAlignment = Enum.HorizontalAlignment.Center
+        kakarotList.VerticalAlignment = Enum.VerticalAlignment.Center
+        kakarotList.SortOrder = Enum.SortOrder.LayoutOrder
+        kakarotList.Padding = UDim.new(0, letterPadding)
+        kakarotList.Parent = kakarotHolder
+
+        for i, letter in ipairs(letters) do
+            local label = newText(kakarotHolder, letter, SUBTITLE_FONT, KAKAROT_TEXT_SZ, BLACK)
+            label.AutomaticSize = Enum.AutomaticSize.X
+            label.Size = UDim2.fromOffset(0, KAKAROT_TEXT_SZ * 1.2)
+            label.LayoutOrder = i
+            label.ZIndex = 3
+            local stroke = newStroke(label, 0.7, BLACK)
+            registerText(label, stroke, 0.75 + 0.06 * i)
+        end
+
+        end
+
+        local items = {}
+        for i, def in ipairs(MENU_ITEMS) do
+            local width = measureText(def.text, MENU_FONT, MENU_TEXT_SIZE).X
+            local button = Instance.new("TextButton")
+            button.Name = def.id
+            button.AutoButtonColor = false
+            button.BackgroundTransparency = 1
+            button.BorderSizePixel = 0
+            button.AnchorPoint = Vector2.new(0.5, 0.5)
+            button.Position = UDim2.fromOffset(MENU_X, MENU_Y[i])
+            button.Size = UDim2.fromOffset(120, 20)
+            button.Text = def.text
+            button.FontFace = MENU_FONT
+            button.TextSize = MENU_TEXT_SIZE
+            button.TextColor3 = def.disabled and GREY or (i == 1 and YELLOW or WHITE)
+            button.ZIndex = 6
+            button.Parent = stage
+
+            local scale = Instance.new("UIScale")
+            scale.Parent = button
+            local stroke = newStroke(button, 1, BLACK)
+            registerText(button, stroke, 1.15 + 0.1 * (i - 1))
+
+            items[i] = {
+                def = def,
+                button = button,
+                scale = scale,
+                spring = Spring.new(1, 20, 0.55),
+                y = MENU_Y[i],
+                leftX = MENU_X - width / 2,
+                rightX = MENU_X + width / 2,
+                disabled = def.disabled == true,
+            }
+        end
+
+        local streakGlow = Instance.new("Frame")
+        streakGlow.Name = "StreakGlow"
+        streakGlow.AnchorPoint = Vector2.new(0.5, 0.5)
+        streakGlow.BackgroundColor3 = YELLOW
+        streakGlow.BorderSizePixel = 0
+        streakGlow.ZIndex = 4
+        streakGlow.Parent = stage
+        local streakGlowGradient = Instance.new("UIGradient")
+        streakGlowGradient.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 1),
+            NumberSequenceKeypoint.new(0.3, 0),
+            NumberSequenceKeypoint.new(0.75, 0),
+            NumberSequenceKeypoint.new(1, 1),
+        })
+        streakGlowGradient.Parent = streakGlow
+        registerFrame(streakGlow, nil, 1.5, 0.86)
+
+        local streak = Instance.new("Frame")
+        streak.Name = "Streak"
+        streak.AnchorPoint = Vector2.new(0.5, 0.5)
+        streak.BackgroundColor3 = WHITE
+        streak.BorderSizePixel = 0
+        streak.ZIndex = 5
+        streak.Parent = stage
+        local streakGradient = Instance.new("UIGradient")
+        streakGradient.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, YELLOW),
+            ColorSequenceKeypoint.new(0.45, HOT_COLOR),
+            ColorSequenceKeypoint.new(1, YELLOW),
+        })
+        streakGradient.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0.9),
+            NumberSequenceKeypoint.new(0.22, 0),
+            NumberSequenceKeypoint.new(0.72, 0.05),
+            NumberSequenceKeypoint.new(1, 1),
+        })
+        streakGradient.Parent = streak
+        registerFrame(streak, nil, 1.5, 0)
+
+        local function hudLabel(text, anchorPosition, delayTime)
+            local label = newText(menuGui, text, MENU_FONT, 14, WHITE)
+            label.AnchorPoint = Vector2.new(1, 0.5)
+            label.Position = anchorPosition
+            label.TextXAlignment = Enum.TextXAlignment.Right
+            label.ZIndex = 6
+            local stroke = newStroke(label, 1.5, BLACK)
+            registerText(label, stroke, delayTime)
+            return label, stroke
+        end
+        local versionLabel, versionStroke = hudLabel(VERSION_TEXT, UDim2.new(0.943, 0, 0.071, 0), 0.7)
+        local copyrightOne, copyrightOneStroke = hudLabel(COPYRIGHT_LINE_1, UDim2.new(0.9086, 0, 0.9083, 0), 0.8)
+        local copyrightTwo, copyrightTwoStroke = hudLabel(COPYRIGHT_LINE_2, UDim2.new(0.9086, 0, 0.9333, 0), 0.8)
+
+        local impactFlash = Instance.new("Frame")
+        impactFlash.Name = "ImpactFlash"
+        impactFlash.BackgroundColor3 = WHITE
+        impactFlash.BackgroundTransparency = 1
+        impactFlash.BorderSizePixel = 0
+        impactFlash.Size = UDim2.new(1, 0, 1, 0)
+        impactFlash.ZIndex = 50
+        impactFlash.Parent = menuGui
+
+        local function updateLayout()
+            local viewport = camera.ViewportSize
+            stageScale.Scale = math.max(viewport.Y, 1) / STAGE_H
+
+            local versionSize = math.clamp(math.floor(viewport.Y * 0.0265 + 0.5), 8, 100)
+            versionLabel.TextSize = versionSize
+            versionLabel.Size = UDim2.new(0.3, 0, 0, versionSize * 1.4)
+            versionStroke.Thickness = math.max(1, versionSize * 0.1)
+
+            local copyrightSize = math.clamp(math.floor(viewport.Y * 0.0195 + 0.5), 7, 100)
+            for _, pair in ipairs({ { copyrightOne, copyrightOneStroke }, { copyrightTwo, copyrightTwoStroke } }) do
+                pair[1].TextSize = copyrightSize
+                pair[1].Size = UDim2.new(0.5, 0, 0, copyrightSize * 1.4)
+                pair[2].Thickness = math.max(1, copyrightSize * 0.09)
+            end
+        end
+        updateLayout()
+        local viewportConnection = camera:GetPropertyChangedSignal("ViewportSize"):Connect(updateLayout)
+
+        menuGui.Parent = guiParent
+
+        local selected = 1
+        local pressedIndex = nil
+        local interactive = false
+        local confirmed = false
+        local clockStart = os.clock()
+
+        local streakY = Spring.new(items[1].y, 16, 0.65)
+        local shakeStart = nil
+        local streakLeft = Spring.new(items[1].leftX - 5, 14, 0.9)
+        local streakRight = Spring.new(items[1].rightX + 12, 14, 0.9)
+
+        local function refreshItemSprings()
+            for i, item in ipairs(items) do
+                if pressedIndex == i then
+                    item.spring.target, item.spring.speed, item.spring.damper = 0.93, 38, 0.85
+                elseif selected == i then
+                    item.spring.target, item.spring.speed, item.spring.damper = 1.07, 22, 0.5
+                else
+                    item.spring.target, item.spring.speed, item.spring.damper = 1, 18, 0.6
+                end
+            end
+        end
+
+        local function setSelected(index)
+            local item = items[index]
+            if not item or item.disabled or index == selected then return end
+            selected = index
+            for i, other in ipairs(items) do
+                if not other.disabled then
+                    glide(other.button, 0.2, Style.Sine, Dir.Out, 0, { TextColor3 = (i == selected) and YELLOW or WHITE })
+                end
+            end
+            refreshItemSprings()
+        end
+
+        local function moveSelection(step)
+            local index = selected
+            for _ = 1, #items do
+                index = ((index - 1 + step) % #items) + 1
+                if not items[index].disabled then
+                    setSelected(index)
+                    return
+                end
+            end
+        end
+
+        local frameConnection = RunService.RenderStepped:Connect(function(deltaTime)
+            deltaTime = math.min(deltaTime, 0.05)
+            local item = items[selected]
+
+            streakY.target = item.y
+            streakLeft.target = item.leftX - 5
+            streakRight.target = confirmed and (item.rightX + 150) or (item.rightX + 12)
+
+            local cy = streakY:step(deltaTime)
+
+            if logoBody and shakeStart then
+                local elapsed = os.clock() - shakeStart
+                local decay = math.exp(-elapsed * TITLE_SHAKE_DECAY)
+                if decay < 0.004 then
+                    shakeStart = nil
+                    logoBody.Position = UDim2.new(0.5, 0, 0.5, 0)
+                    logoBody.Rotation = 0
+                else
+                    local s = elapsed * TITLE_SHAKE_SPEED
+                    logoBody.Position = UDim2.new(
+                        0.5, math.noise(s, 1.7, 0.3) * 2 * TITLE_SHAKE_POSITION * decay,
+                        0.5, math.noise(4.3, s, 0.7) * 2 * TITLE_SHAKE_POSITION * decay
+                    )
+                    logoBody.Rotation = math.noise(8.1, 2.2 + s, 0.5) * 2 * TITLE_SHAKE_ROTATION * decay
+                end
+            end
+
+            local left = streakLeft:step(deltaTime)
+            local right = streakRight:step(deltaTime)
+            local width = math.max(right - left, 1)
+            streak.Position = UDim2.fromOffset((left + right) / 2, cy + 1)
+            streak.Size = UDim2.fromOffset(width, 1.4)
+            streakGlow.Position = UDim2.fromOffset((left + right) / 2, cy + 1)
+            streakGlow.Size = UDim2.fromOffset(width, 9)
+
+            for _, entry in ipairs(items) do
+                entry.scale.Scale = math.max(0.01, entry.spring:step(deltaTime))
+            end
+        end)
+
+        local function showEntryText(entry)
+            glide(entry.label, 0.6, Style.Sine, Dir.Out, entry.delay, { TextTransparency = 0 })
+            if entry.stroke then
+                glide(entry.stroke, 0.6, Style.Sine, Dir.Out, entry.delay, { Transparency = 0 })
+            end
+        end
+
+        local function showEntryFrame(entry)
+            if not entry.noFill then
+                glide(entry.frame, 0.6, Style.Sine, Dir.Out, entry.delay, { BackgroundTransparency = entry.shown })
+            end
+            if entry.stroke then
+                glide(entry.stroke, 0.6, Style.Sine, Dir.Out, entry.delay, { Transparency = entry.strokeShown })
+            end
+        end
+
+        local function playIntro()
+            menuGui.Enabled = true
+            refreshItemSprings()
+
+            for _, entry in ipairs(textFades) do
+                showEntryText(entry)
+            end
+            for _, entry in ipairs(frameFades) do
+                showEntryFrame(entry)
+            end
+
+            logoHolder.Position = logoPosition
+            glide(logoScale, TITLE_SLAM_TIME, Enum.EasingStyle.Quint, Enum.EasingDirection.In, TITLE_SLAM_DELAY, { Scale = 1 })
+            if logoShadow then
+                glide(logoShadow, 0.22, Style.Sine, Dir.Out, TITLE_SLAM_DELAY, { ImageTransparency = 0.1 })
+            end
+
+            task.delay(TITLE_SLAM_DELAY + TITLE_SLAM_TIME, function()
+                if confirmed then return end
+
+                logoScale.Scale = 0.9
+                glide(logoScale, 0.75, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out, 0, { Scale = 1 })
+                impactFlash.BackgroundTransparency = TITLE_IMPACT_FLASH
+                glide(impactFlash, 0.45, Style.Quad, Dir.Out, 0, { BackgroundTransparency = 1 })
+                shakeStart = os.clock()
+
+                if revealGradient then
+                    glide(revealGradient, TITLE_REVEAL_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut, 0, { Offset = Vector2.new(REVEAL_TO, 0) })
+                    for _, layer in ipairs(glareLayers) do
+                        glide(layer.frame, TITLE_REVEAL_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut, 0, { Position = UDim2.new(0.5 + REVEAL_TO, 0, 0.5, 0) })
+                        glide(layer.frame, 0.1, Style.Sine, Dir.Out, 0, { BackgroundTransparency = layer.shown })
+                        task.delay(TITLE_REVEAL_TIME - 0.25, function()
+                            glide(layer.frame, 0.25, Style.Sine, Dir.In, 0, { BackgroundTransparency = 1 })
+                        end)
+                    end
+                    glide(logoShadow, 0.35, Style.Sine, Dir.Out, TITLE_REVEAL_TIME * 0.85, { ImageTransparency = 1 })
+                end
+            end)
+            if kakarotLine then
+                glide(kakarotLine, 1.4, Expo, Dir.Out, 0.9, { Size = UDim2.fromOffset(KAKAROT_LINE_WIDTH, 2) })
+            end
+
+            task.delay(INTERACTIVE_AFTER, function()
+                interactive = true
+            end)
+        end
+
+        local function confirm()
+            if confirmed or not interactive then return end
+            confirmed = true
+            pressedIndex = nil
+            refreshItemSprings()
+            items[selected].spring.vel -= 4
+
+            shakeStart = nil
+
+            for _, entry in ipairs(textFades) do
+                glide(entry.label, 0.4, Style.Sine, Dir.In, 0.1, { TextTransparency = 1 })
+                if entry.stroke then
+                    glide(entry.stroke, 0.4, Style.Sine, Dir.In, 0.1, { Transparency = 1 })
+                end
+            end
+            for _, entry in ipairs(frameFades) do
+                if not entry.noFill then
+                    glide(entry.frame, 0.4, Style.Sine, Dir.In, 0.1, { BackgroundTransparency = 1 })
+                end
+                if entry.stroke then
+                    glide(entry.stroke, 0.4, Style.Sine, Dir.In, 0.1, { Transparency = 1 })
+                end
+            end
+            glide(logoScale, 0.8, Style.Quad, Dir.Out, 0, { Scale = 1.08 })
+            if logoImage then
+                glide(logoImage, 0.4, Style.Sine, Dir.In, 0.1, { ImageTransparency = 1 })
+            end
+            glide(logoHolder, 0.8, Style.Quad, Dir.In, 0, { Position = UDim2.fromOffset(logoCenter.X, logoCenter.Y - 10) })
+
+            task.delay(CONFIRM_DELAY, onBegin)
+            task.delay(DESTROY_AFTER, function()
+                menuGui:Destroy()
+            end)
+        end
+
+        local function activate(index)
+            local item = items[index]
+            if not item or item.disabled or confirmed or not interactive then return end
+            if item.def.id == "new" then
+                confirm()
+            else
+
+                item.spring.vel -= 4
+            end
+        end
+
+        for i, item in ipairs(items) do
+            item.button.MouseEnter:Connect(function()
+                if interactive and not confirmed then
+                    setSelected(i)
+                end
+            end)
+            item.button.MouseButton1Down:Connect(function()
+                if item.disabled or confirmed then return end
+                pressedIndex = i
+                refreshItemSprings()
+            end)
+            item.button.MouseButton1Up:Connect(function()
+                if pressedIndex == i then
+                    pressedIndex = nil
+                    refreshItemSprings()
+                end
+            end)
+            item.button.MouseLeave:Connect(function()
+                if pressedIndex == i then
+                    pressedIndex = nil
+                    refreshItemSprings()
+                end
+            end)
+            item.button.Activated:Connect(function()
+                activate(i)
+            end)
+        end
+
+        local inputConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+            if gameProcessed or not interactive or confirmed then return end
+            local key = input.KeyCode
+            if key == Enum.KeyCode.Up or key == Enum.KeyCode.W or key == Enum.KeyCode.DPadUp then
+                moveSelection(-1)
+            elseif key == Enum.KeyCode.Down or key == Enum.KeyCode.S or key == Enum.KeyCode.DPadDown then
+                moveSelection(1)
+            elseif key == Enum.KeyCode.Return or key == Enum.KeyCode.KeypadEnter or key == Enum.KeyCode.ButtonA then
+                activate(selected)
+            end
+        end)
+
+        menuGui.Destroying:Connect(function()
+            frameConnection:Disconnect()
+            inputConnection:Disconnect()
+            viewportConnection:Disconnect()
+        end)
+
+        return playIntro
+    end
+
+    task.spawn(function()
+        BackNav.freeze()
+        overlayGui.Destroying:Connect(BackNav.unfreeze)
+
+        MenuLoads.rainPending = true
+        task.spawn(function()
+            local rainLoaded, rainResult = pcall(function()
+                return loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/GOKU/refs/heads/main/RAIN%20MODULE"))()
+            end)
+            if rainLoaded and rainResult then
+                MenuLoads.rain = rainResult
+                if _G.Rain == false then
+                    rainResult:Disable()
+                end
+            else
+                warn("[MainMenu] Rain failed to load: " .. tostring(rainResult))
+            end
+            MenuLoads.rainPending = false
+        end)
+
+        MenuLoads.sunsetStarted = true
+        task.spawn(function()
+            local sunsetLoaded, sunsetError = pcall(function()
+                loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/Sunset"))()
+            end)
+            if not sunsetLoaded then
+                MenuLoads.sunsetStarted = false
+                warn("[MainMenu] Sunset failed to load: " .. tostring(sunsetError))
+            end
+        end)
+
+        local MODEL_ASSET_ID = 2593911216
+        local MODEL_POSITION = Vector3.new(62365.13671875, 2278.4423828125, -49140.63671875)
+
+        local MENU_PLAYER_POSITION = Vector3.new(63168.68359375, 4107.470703125, -47578.47265625)
+        local MENU_CAMERA_CFRAME = CFrame.new(63163.625000, 4107.925293, -47595.687500, -0.959414, -0.014839, -0.281612, 0.000000, 0.998615, -0.052621, 0.282003, -0.050486, -0.958084)
+        local MENU_CAMERA_FOV = 70
+        local MENU_BLACKOUT_TIME = 0.5
+        local MENU_REVEAL_TIME = 1.6
+        local MENU_INTRO_DELAY = 1.6
+
+        local MENU_FLY_TIME      = 3.6
+        local MENU_FLY_OFFSET    = Vector3.new(3, 1.5, 9)
+        local MENU_FLY_PITCH     = -3
+        local MENU_FLY_YAW       = -5
+        local MENU_FLY_ROLL      = 3
+        local MENU_FLY_FOV       = 82
+        local TITLE_BARS_SYNC    = 0.45
+        local MENU_BAR_HEIGHT    = 0.12
+        local MENU_FLY_START_CFRAME = MENU_CAMERA_CFRAME
+            * CFrame.new(MENU_FLY_OFFSET)
+            * CFrame.Angles(math.rad(MENU_FLY_PITCH), math.rad(MENU_FLY_YAW), math.rad(MENU_FLY_ROLL))
+
+        local MENU_SWAY_ENABLED   = true
+        local MENU_SWAY_SPEED     = 0.2
+        local MENU_SWAY_POSITION  = 0.4
+        local MENU_SWAY_ROTATION  = 0.8
+        local MENU_SWAY_ROLL      = 0.2
+        local MENU_SWAY_PUSH      = 0.9
+        local MENU_SWAY_FOV       = 0.8
+        local MENU_SWAY_EASE_IN   = 2.0
+
+        local barsGui
+        local menuBars
+        local function createLetterbox()
+            if barsGui then
+                barsGui:Destroy()
+            end
+            local gui = Instance.new("ScreenGui")
+            gui.Name = "BorderUIMenuBars"
+            gui.IgnoreGuiInset = true
+            gui.ScreenInsets = Enum.ScreenInsets.None
+            gui.ResetOnSpawn = false
+            gui.DisplayOrder = 2147483644
+            local function makeBar(anchorY)
+                local bar = Instance.new("Frame")
+                bar.AnchorPoint = Vector2.new(0, anchorY)
+                bar.Position = UDim2.new(0, 0, anchorY, 0)
+                bar.Size = UDim2.new(1, 0, MENU_BAR_HEIGHT, 0)
+                bar.BackgroundColor3 = Color3.new(0, 0, 0)
+                bar.BorderSizePixel = 0
+                bar.Parent = gui
+                return bar
+            end
+            barsGui = gui
+            menuBars = { makeBar(0), makeBar(1) }
+            gui.Parent = guiParent
+        end
+
+        local function retractLetterbox()
+            local gui, bars = barsGui, menuBars
+            if not gui or not gui.Parent or not bars then return end
+            for i, bar in ipairs(bars) do
+                local tween = TweenService:Create(bar, TweenInfo.new(0.8, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+                    Size = UDim2.new(1, 0, 0, 0),
+                })
+                tween:Play()
+                if i == #bars then
+                    tween.Completed:Connect(function()
+                        gui:Destroy()
+                    end)
+                end
+            end
+        end
+
+        local lookTarget
+        local lookConnection
+        local function stopCharacterLook()
+            if lookConnection then
+                lookConnection:Disconnect()
+                lookConnection = nil
+            end
+            if lookTarget then
+                lookTarget:Destroy()
+                lookTarget = nil
+            end
+        end
+
+        local swayConnection
+        local function stopMenuCameraSway()
+            if swayConnection then
+                swayConnection:Disconnect()
+                swayConnection = nil
+            end
+        end
+
+        local function placeMenuScene()
+            stopCharacterLook()
+            stopMenuCameraSway()
+
+            lookTarget = Instance.new("Part")
+            lookTarget.Name = "MenuLookTarget"
+            lookTarget.Anchored = true
+            lookTarget.CanCollide = false
+            lookTarget.CanTouch = false
+            lookTarget.CanQuery = false
+            lookTarget.CastShadow = false
+            lookTarget.Transparency = 1
+            lookTarget.Size = Vector3.new(1, 1, 1)
+            lookTarget.Position = MENU_CAMERA_CFRAME.Position - MENU_CAMERA_CFRAME.LookVector * 8
+            lookTarget.Parent = workspace
+
+            local menuCFrame = CFrame.lookAt(MENU_PLAYER_POSITION, Vector3.new(lookTarget.Position.X, MENU_PLAYER_POSITION.Y, lookTarget.Position.Z))
+
+            local placed, placeError = pcall(function()
+                local character = localPlayer.Character or localPlayer.CharacterAdded:Wait()
+                local rootPart = character:WaitForChild("HumanoidRootPart", 10)
+                if rootPart then
+                    if not BackNav.savedCFrame then
+                        BackNav.savedCFrame = rootPart.CFrame
+                    end
+
+                    character:PivotTo(menuCFrame)
+                    rootPart.AssemblyLinearVelocity = Vector3.zero
+                    rootPart.AssemblyAngularVelocity = Vector3.zero
+                end
+
+                pcall(function()
+                    workspace:RequestStreamAroundAsync(MENU_PLAYER_POSITION, 5)
+                end)
+
+                camera.CameraType = Enum.CameraType.Scriptable
+                camera.CFrame = MENU_FLY_START_CFRAME
+                camera.FieldOfView = MENU_FLY_FOV
+            end)
+            if not placed then
+                warn("[Menu] Couldn't place the player and camera: " .. tostring(placeError))
+            end
+
+            BackNav.startMenuPositionCheck(menuCFrame)
+
+            lookConnection = RunService.PreSimulation:Connect(function()
+                if not lookTarget then return end
+                local character = localPlayer.Character
+                local root = character and character:FindFirstChild("HumanoidRootPart")
+                if not root then return end
+                local position = root.Position
+                local flatTarget = Vector3.new(lookTarget.Position.X, position.Y, lookTarget.Position.Z)
+                if (flatTarget - position).Magnitude < 0.1 then return end
+                root.CFrame = CFrame.lookAt(position, flatTarget)
+                root.AssemblyAngularVelocity = Vector3.zero
+            end)
+
+            if placed then
+                task.spawn(BackNav.playMenuAnimation)
+                local flyStart = os.clock()
+                local seed = math.random() * 100
+                swayConnection = RunService.RenderStepped:Connect(function()
+                    local elapsed = os.clock() - flyStart
+
+                    local flyT = math.clamp(elapsed / MENU_FLY_TIME, 0, 1)
+                    local fly = 1 - (1 - flyT) ^ 5
+                    local baseCFrame = MENU_FLY_START_CFRAME:Lerp(MENU_CAMERA_CFRAME, fly)
+                    local baseFov = MENU_FLY_FOV + (MENU_CAMERA_FOV - MENU_FLY_FOV) * fly
+
+                    local swayAmount = 0
+                    if MENU_SWAY_ENABLED then
+                        local easeIn = math.clamp((elapsed - MENU_FLY_TIME * 0.35) / MENU_SWAY_EASE_IN, 0, 1)
+                        swayAmount = easeIn * easeIn * (3 - 2 * easeIn)
+                    end
+                    local s = elapsed * MENU_SWAY_SPEED
+
+                    local moveX = math.noise(s, seed, 0) * 2
+                    local moveY = math.noise(seed, s, 3.1) * 2
+                    local pan   = math.noise(s * 0.9, seed, 7.7) * 2
+                    local tilt  = math.noise(seed, s * 0.9, 9.3) * 2
+                    local roll  = math.noise(s * 0.7, 4.4, seed) * 2
+                    local push  = math.sin(elapsed * 0.16) * MENU_SWAY_PUSH
+
+                    local offset = CFrame.new(moveX * MENU_SWAY_POSITION, moveY * MENU_SWAY_POSITION * 0.7, push)
+                    local rotation = CFrame.Angles(
+                        math.rad(tilt * MENU_SWAY_ROTATION),
+                        math.rad(pan * MENU_SWAY_ROTATION),
+                        math.rad(roll * MENU_SWAY_ROLL)
+                    )
+                    camera.CFrame = baseCFrame:Lerp(baseCFrame * offset * rotation, swayAmount)
+                    camera.FieldOfView = baseFov + math.sin(elapsed * 0.13) * MENU_SWAY_FOV * swayAmount
+                end)
+            end
+
+        end
+
+        local function onBegin()
+            stopMenuCameraSway()
+            stopCharacterLook()
+            BackNav.stopMenuMusic()
+            BackNav.stopMenuAnimation()
+            currentCharacterIndex = 1
+            Open()
+            startCutscenes()
+            task.delay(TYPEWRITER_START_DELAY, typeCharacter, 1)
+            task.spawn(startMusic)
+        end
+
+        local function playMenu()
+            local playMenuIntro = createMainMenu(onBegin)
+
+            task.spawn(BackNav.startMenuMusic)
+            fadeScreen(1, MENU_REVEAL_TIME, Style.Sine, Dir.Out)
+            task.delay(MENU_INTRO_DELAY, playMenuIntro)
+
+            task.delay(MENU_INTRO_DELAY + TITLE_BARS_SYNC, retractLetterbox)
+        end
+
+        BackNav.returnToMenu = function()
+            createLetterbox()
+            placeMenuScene()
+            playMenu()
+        end
+
+        createLetterbox()
+
+        fadeScreen(0, MENU_BLACKOUT_TIME, Style.Sine, Dir.InOut)
+        local blackoutEndsAt = os.clock() + MENU_BLACKOUT_TIME
+
+        local ok, objects = pcall(function()
+            return game:GetObjects("rbxassetid://" .. MODEL_ASSET_ID)
+        end)
+        if not ok or not objects then
+            warn("[Model] GetObjects failed: " .. tostring(objects))
+            objects = {}
+        end
+
+        for _, object in ipairs(objects) do
+            object.Parent = workspace
+            if object:IsA("PVInstance") then
+                local pivot = object:GetPivot()
+
+                object:PivotTo(CFrame.new(MODEL_POSITION) * (pivot - pivot.Position))
+            end
+        end
+
+        local blackoutRemaining = blackoutEndsAt - os.clock()
+        if blackoutRemaining > 0 then
+            task.wait(blackoutRemaining)
+        end
+
+        placeMenuScene()
+        playMenu()
+    end)
+end
+
+local menuRan, menuError = pcall(RunMainMenu, function()
+    MenuHud.release()
+    menuFinished = true
 end)
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players        = game:GetService("Players")
@@ -211,10 +3382,6 @@ do
         warn("[WoodReplacer] Workspace.Map folder not found.")
     end
 end
-
-if _G.Rain == nil then _G.Rain = true end
-if _G.Music == nil then _G.Music = true end
-if _G.Graphics == nil then _G.Graphics = true end
 
 local localPlayer    = Players.LocalPlayer
 local character      = localPlayer.Character or localPlayer.CharacterAdded:Wait()
@@ -940,6 +4107,120 @@ do
 end
 
 task.spawn(HairSystem.Preload)
+
+-- the morph runs right away (accessory/FakeHead hiding, default outfit, saved
+-- clothing + hair from GokuClothingCombo.json / GokuHairSave.json, skin colour)
+-- so it's already on while the menu is up instead of waiting for Select.
+-- This is the script's own dress-up hook, moved up unchanged.
+local ssjFaceId     = "rbxassetid://12876975875"
+
+local function ApplyMarketplaceClothing(assetId, clothingType)
+    local ok, objects = pcall(game.GetObjects, game, "rbxassetid://" .. assetId)
+    if not ok or not objects then return end
+    for _, obj in ipairs(objects) do
+        local clothing = obj:IsA(clothingType) and obj or obj:FindFirstChildWhichIsA(clothingType)
+        if clothing then
+            local existing = character:FindFirstChildOfClass(clothingType)
+            if existing then existing:Destroy() end
+            local newCloth = Instance.new(clothingType)
+            if clothingType == "Shirt" then
+                newCloth.ShirtTemplate = clothing.ShirtTemplate
+            else
+                newCloth.PantsTemplate = clothing.PantsTemplate
+            end
+            newCloth.Parent = character
+            break
+        end
+    end
+end
+
+CharacterHooks.Add(function()
+    for _, accessory in ipairs(character:GetChildren()) do
+        if accessory:IsA("Accessory") or accessory:IsA("Hat") then
+            accessory:Destroy()
+        end
+    end
+
+    local liveFolder = Workspace:FindFirstChild("Live")
+    if liveFolder then
+        local fakeHead = liveFolder:FindFirstChild(localPlayer.Name) and liveFolder[localPlayer.Name]:FindFirstChild("FakeHead")
+        if fakeHead then
+            for _, item in ipairs(fakeHead:GetChildren()) do
+                if item:IsA("Accessory") or item:IsA("Hat") then item:Destroy() end
+            end
+            local fakeHeadFace = fakeHead:FindFirstChildWhichIsA("Decal")
+            if fakeHeadFace then fakeHeadFace.Texture = ssjFaceId end
+        end
+    end
+
+    for _, item in ipairs(character:GetChildren()) do
+        if item:IsA("Shirt") or item:IsA("Pants") then item:Destroy() end
+    end
+
+    local shirt = Instance.new("Shirt")
+    shirt.ShirtTemplate = "rbxassetid://102058923729170"
+    shirt.Parent        = character
+
+    local pants = Instance.new("Pants")
+    pants.PantsTemplate = "rbxassetid://18456843948"
+    pants.Parent        = character
+
+
+    task.spawn(function()
+        ApplyMarketplaceClothing(marketShirtId, "Shirt")
+        ApplyMarketplaceClothing(marketPantsId, "Pants")
+        local worn = ClothingSystem.Current
+        if worn and (worn.Shirt or worn.Pants) then
+            if worn.Shirt then ClothingSystem.Equip("Shirt", worn.Shirt) end
+            if worn.Pants then ClothingSystem.Equip("Pants", worn.Pants) end
+        else
+            ClothingSystem.ApplySaved()
+        end
+    end)
+
+    if CharacterHooks.dressedOnce then
+        local pickedHair = HairSystem.SelectedName
+        if pickedHair then
+            HairSystem.Equip(pickedHair)
+        end
+    else
+        HairSystem.ApplySaved()
+    end
+    CharacterHooks.dressedOnce = true
+
+    local ssjSkinColor = Color3.fromRGB(241, 194, 154)
+    for _, part in pairs(character:GetDescendants()) do
+        local isHairPart = part.Name == "GokuSSJHair" or part:FindFirstAncestor("GokuSSJHair") ~= nil
+            or part.Name == HairSystem.ModelName or part:FindFirstAncestor(HairSystem.ModelName) ~= nil
+        if part:IsA("BasePart") and not isHairPart then
+            part.Color = ssjSkinColor
+        end
+    end
+end)
+
+
+-- everything below this point still waits for the menu to finish
+if menuRan then
+    while not menuFinished do
+        task.wait(0.1)
+    end
+else
+    MenuHud.release()
+    warn("[MainMenu] Menu failed, starting Goku directly: " .. tostring(menuError))
+end
+
+task.spawn(function()
+    local ok, err = pcall(function()
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/Leap%26UI"))()
+    end)
+    if not ok then warn("[Loader] " .. tostring(err)) end
+end)
+task.spawn(function()
+    local ok, err = pcall(function()
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/BakaScript"))()
+    end)
+    if not ok then warn("[Loader] " .. tostring(err)) end
+end)
 
 local function PlayAnimation(id, startPos, stopDelay, speed)
     local anim = Instance.new("Animation")
@@ -1705,20 +4986,28 @@ task.spawn(function()
     writefile(nextSoundSavedFileName, game:HttpGet(nextSoundUrl))
     local nextSoundCustomAssetId = getcustomasset(nextSoundSavedFileName)
 
-    local rainAPI = loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/GOKU/refs/heads/main/RAIN%20MODULE"))()
+    while MenuLoads.rainPending do
+        task.wait(0.1)
+    end
+    local rainAPI = MenuLoads.rain
+    if not rainAPI then
+        rainAPI = loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/GOKU/refs/heads/main/RAIN%20MODULE"))()
+    end
     if _G.Rain == false then
         rainAPI:Disable()
     end
 
     _G.SunsetQualityState = _G.SunsetQualityState or "Max"
-    task.spawn(function()
-        local sunsetLoaded, sunsetError = pcall(function()
-            loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/Sunset"))()
+    if not MenuLoads.sunsetStarted then
+        task.spawn(function()
+            local sunsetLoaded, sunsetError = pcall(function()
+                loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/Sunset"))()
+            end)
+            if not sunsetLoaded then
+                warn("[Panel] Sunset failed to load: " .. tostring(sunsetError))
+            end
         end)
-        if not sunsetLoaded then
-            warn("[Panel] Sunset failed to load: " .. tostring(sunsetError))
-        end
-    end)
+    end
 
     local lightingService = game:GetService("Lighting")
     local tweenService = game:GetService("TweenService")
@@ -4403,7 +7692,6 @@ CharacterHooks.Add(function()
     end)
 end)
 
-local ssjFaceId     = "rbxassetid://12876975875"
 local specialFaceId = "rbxassetid://74087459345342"
 local specialFaceAnimId = "rbxassetid://12447707844"
 
@@ -4767,17 +8055,26 @@ hairLight.Brightness = 1
 hairLight.Enabled    = true
 
 CharacterHooks.Add(function()
-    if HairSystem.Model then
+    -- the saved hair is applied before the menu now, so it may already be on this
+    -- character; keep it instead of dropping it and stacking the default hair on top
+    local customHairOnCharacter = HairSystem.Model ~= nil and HairSystem.Model.Parent == character
+    if HairSystem.Model and not customHairOnCharacter then
         HairSystem.Model = nil
     end
     HairSystem.CurrentForm = "SSJ"
     ssjbActive = false
 
-    AddSSJHair()
-    if ssjHair then
-        hairLight.Color   = HairSystem.LightColors.SSJ
-        hairLight.Enabled = true
-        hairLight.Parent  = ssjHair
+    if customHairOnCharacter then
+        pcall(HairSystem.ApplyFormLook, "SSJ", false)
+        local oldDefaultHair = character:FindFirstChild("GokuSSJHair")
+        if oldDefaultHair then oldDefaultHair:Destroy() end
+    else
+        AddSSJHair()
+        if ssjHair then
+            hairLight.Color   = HairSystem.LightColors.SSJ
+            hairLight.Enabled = true
+            hairLight.Parent  = ssjHair
+        end
     end
     if CharacterHooks.dressedOnce then
         pcall(HairSystem.RefreshDefaultLight)
@@ -5053,90 +8350,6 @@ CharacterHooks.OnAnimationPlayed(function(track)
         SetSpiritBombHair("SSJ")
         StopSpiritBombAura()
     end)
-end)
-
-local function ApplyMarketplaceClothing(assetId, clothingType)
-    local ok, objects = pcall(game.GetObjects, game, "rbxassetid://" .. assetId)
-    if not ok or not objects then return end
-    for _, obj in ipairs(objects) do
-        local clothing = obj:IsA(clothingType) and obj or obj:FindFirstChildWhichIsA(clothingType)
-        if clothing then
-            local existing = character:FindFirstChildOfClass(clothingType)
-            if existing then existing:Destroy() end
-            local newCloth = Instance.new(clothingType)
-            if clothingType == "Shirt" then
-                newCloth.ShirtTemplate = clothing.ShirtTemplate
-            else
-                newCloth.PantsTemplate = clothing.PantsTemplate
-            end
-            newCloth.Parent = character
-            break
-        end
-    end
-end
-
-CharacterHooks.Add(function()
-    for _, accessory in ipairs(character:GetChildren()) do
-        if accessory:IsA("Accessory") or accessory:IsA("Hat") then
-            accessory:Destroy()
-        end
-    end
-
-    local liveFolder = Workspace:FindFirstChild("Live")
-    if liveFolder then
-        local fakeHead = liveFolder:FindFirstChild(localPlayer.Name) and liveFolder[localPlayer.Name]:FindFirstChild("FakeHead")
-        if fakeHead then
-            for _, item in ipairs(fakeHead:GetChildren()) do
-                if item:IsA("Accessory") or item:IsA("Hat") then item:Destroy() end
-            end
-            local fakeHeadFace = fakeHead:FindFirstChildWhichIsA("Decal")
-            if fakeHeadFace then fakeHeadFace.Texture = ssjFaceId end
-        end
-    end
-
-    for _, item in ipairs(character:GetChildren()) do
-        if item:IsA("Shirt") or item:IsA("Pants") then item:Destroy() end
-    end
-
-    local shirt = Instance.new("Shirt")
-    shirt.ShirtTemplate = "rbxassetid://102058923729170"
-    shirt.Parent        = character
-
-    local pants = Instance.new("Pants")
-    pants.PantsTemplate = "rbxassetid://18456843948"
-    pants.Parent        = character
-
-
-    task.spawn(function()
-        ApplyMarketplaceClothing(marketShirtId, "Shirt")
-        ApplyMarketplaceClothing(marketPantsId, "Pants")
-        local worn = ClothingSystem.Current
-        if worn and (worn.Shirt or worn.Pants) then
-            if worn.Shirt then ClothingSystem.Equip("Shirt", worn.Shirt) end
-            if worn.Pants then ClothingSystem.Equip("Pants", worn.Pants) end
-        else
-            ClothingSystem.ApplySaved()
-        end
-    end)
-
-    if CharacterHooks.dressedOnce then
-        local pickedHair = HairSystem.SelectedName
-        if pickedHair then
-            HairSystem.Equip(pickedHair)
-        end
-    else
-        HairSystem.ApplySaved()
-    end
-    CharacterHooks.dressedOnce = true
-
-    local ssjSkinColor = Color3.fromRGB(241, 194, 154)
-    for _, part in pairs(character:GetDescendants()) do
-        local isHairPart = part.Name == "GokuSSJHair" or part:FindFirstAncestor("GokuSSJHair") ~= nil
-            or part.Name == HairSystem.ModelName or part:FindFirstAncestor(HairSystem.ModelName) ~= nil
-        if part:IsA("BasePart") and not isHairPart then
-            part.Color = ssjSkinColor
-        end
-    end
 end)
 
 CharacterHooks.Add(function()
