@@ -6,7 +6,8 @@ _G.SunsetQualityState = _G.SunsetQualityState or "Max"
 local MenuLoads = { rainPending = false, sunsetStarted = false }
 local menuFinished = false
 
--- hides the game HUD (hotbar, shiftlock cursor, touch controls) until a character is selected
+local menuIntroFinished = false
+
 local MenuHud = { hidden = true, saved = {}, conns = {} }
 
 function MenuHud.hideObject(obj)
@@ -20,7 +21,7 @@ function MenuHud.hideObject(obj)
 
     table.insert(MenuHud.conns, obj:GetPropertyChangedSignal(property):Connect(function()
         if MenuHud.hidden and obj[property] then
-            -- the game turned it on itself; remember that as the value to restore
+
             MenuHud.saved[obj].value = true
             obj[property] = false
         end
@@ -237,6 +238,15 @@ local function RunMainMenu(onFinished)
         end)
     end
 
+    BackNav.introParts = { startup = false, ui = false }
+
+    function BackNav.markIntroPart(part)
+        BackNav.introParts[part] = true
+        if BackNav.introParts.startup and BackNav.introParts.ui then
+            menuIntroFinished = true
+        end
+    end
+
     BackNav.menuStartupAnimationId = "rbxassetid://15503201875"
     BackNav.menuAnimationId = "rbxassetid://15503362953"
     BackNav.menuAnimationGeneration = 0
@@ -297,19 +307,22 @@ local function RunMainMenu(onFinished)
             local function startLoop()
                 if loopStarted then return end
                 loopStarted = true
+                BackNav.markIntroPart("startup")
                 if BackNav.menuAnimationGeneration ~= generation then return end
                 loopTrack:Play(0.1)
             end
 
-            -- the loop takes over the moment the startup animation finishes
             startupTrack.Stopped:Once(startLoop)
             startupTrack:Play(0.2)
 
-            -- safety net in case the startup track never reports it stopped
             task.delay(math.max(startupTrack.Length, 0.1) + 1, startLoop)
         end)
         if not ok then
             warn("[MenuAnimation] Couldn't play the menu animation: " .. tostring(err))
+        end
+
+        if not ok or not BackNav.menuStartupTrack then
+            BackNav.markIntroPart("startup")
         end
     end
 
@@ -2798,6 +2811,16 @@ local function RunMainMenu(onFinished)
             task.delay(INTERACTIVE_AFTER, function()
                 interactive = true
             end)
+
+            local introEndsAt = math.max(
+                INTERACTIVE_AFTER,
+                TITLE_SLAM_DELAY + TITLE_SLAM_TIME + TITLE_REVEAL_TIME,
+                0.9 + 1.4,
+                1.5 + 0.6
+            )
+            task.delay(introEndsAt + 0.3, function()
+                BackNav.markIntroPart("ui")
+            end)
         end
 
         local function confirm()
@@ -3113,6 +3136,8 @@ local function RunMainMenu(onFinished)
                     camera.CFrame = baseCFrame:Lerp(baseCFrame * offset * rotation, swayAmount)
                     camera.FieldOfView = baseFov + math.sin(elapsed * 0.13) * MENU_SWAY_FOV * swayAmount
                 end)
+            else
+                BackNav.markIntroPart("startup")
             end
 
         end
@@ -3181,6 +3206,10 @@ local menuRan, menuError = pcall(RunMainMenu, function()
     MenuHud.release()
     menuFinished = true
 end)
+if not menuRan then
+
+    menuIntroFinished = true
+end
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players        = game:GetService("Players")
 local Debris         = game:GetService("Debris")
@@ -3198,6 +3227,555 @@ do
             Text = "Make sure you tell Cru Happy Birthday!",
             Duration = 10,
         })
+    end
+end
+
+do
+    local BIRTHDAY_USER = "@john_doe08772"
+    local SEEN_FILE = "Seen.json"
+    local MESSAGES = {
+        [6] = "Make sure you tell %s Happy Early Birthday!",
+        [7] = "Make sure you tell %s Happy Birthday!",
+        [8] = "Make sure you tell %s Happy Late Birthday!",
+    }
+
+    local HttpService = game:GetService("HttpService")
+
+    local function readSeen()
+        local okRead, decoded = pcall(function()
+            if isfile and readfile and isfile(SEEN_FILE) then
+                return HttpService:JSONDecode(readfile(SEEN_FILE))
+            end
+            return nil
+        end)
+        if okRead and type(decoded) == "table" then
+            return decoded
+        end
+        return {}
+    end
+
+    local function writeSeen(seenDates)
+        local okWrite, writeError = pcall(function()
+            writefile(SEEN_FILE, HttpService:JSONEncode(seenDates))
+        end)
+        if not okWrite then
+            warn("[BirthdayPopup] Could not save " .. SEEN_FILE .. ": " .. tostring(writeError))
+        end
+    end
+
+    local today = os.date("*t")
+    local testing = _G.BirthdayTestDay ~= nil
+    if testing then
+        today = { year = today.year, month = 11, day = _G.BirthdayTestDay }
+    end
+    local dateKey = string.format("%04d-%02d-%02d", today.year, today.month, today.day)
+    print("[BirthdayPopup] date seen by script: " .. dateKey .. (testing and " (test mode)" or ""))
+
+    local template = today.month == 11 and MESSAGES[today.day] or nil
+    local seenDates = {}
+    if template and not testing then
+        seenDates = readSeen()
+        if seenDates[dateKey] then
+            print("[BirthdayPopup] already dismissed for " .. dateKey .. " (delete " .. SEEN_FILE .. " to see it again)")
+            template = nil
+        end
+    end
+
+    if template then
+        task.spawn(function()
+            local built, buildError = pcall(function()
+                local PANEL_W = 420
+                local HEADER_H, BODY_H, BUTTON_H, GAP = 48, 116, 48, 6
+                local PANEL_H = HEADER_H + BODY_H + BUTTON_H + GAP * 2
+
+                local OPEN_SCALE_FROM = 0.92
+                local RISE_DISTANCE   = 18
+
+                local HEADER_COLOR   = Color3.fromRGB(232, 112, 32)
+                local HEADER_STROKE  = Color3.fromRGB(120, 48, 16)
+                local ROW_BACKGROUND = Color3.fromRGB(78, 52, 44)
+                local ROW_STROKE     = Color3.fromRGB(214, 110, 58)
+                local WHITE          = Color3.fromRGB(255, 255, 255)
+
+                local function verticalGradient(...)
+                    local colors = { ... }
+                    local keypoints = {}
+                    for i, color in ipairs(colors) do
+                        keypoints[i] = ColorSequenceKeypoint.new((i - 1) / (#colors - 1), color)
+                    end
+                    return ColorSequence.new(keypoints)
+                end
+
+                local NAME_GRADIENT   = verticalGradient(WHITE, Color3.fromRGB(255, 214, 64), Color3.fromRGB(255, 150, 40))
+                local INFO_GRADIENT   = verticalGradient(WHITE, Color3.fromRGB(255, 226, 150))
+                local BUTTON_GRADIENT = verticalGradient(WHITE, Color3.fromRGB(255, 206, 70))
+
+                local panelFont = Font.new("rbxassetid://12187375716", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+
+                local Style = Enum.EasingStyle
+                local Dir   = Enum.EasingDirection
+
+                local function info(duration, style, direction)
+                    return TweenInfo.new(duration, style, direction)
+                end
+
+                local function animate(duration, style, direction, delayTime, callback)
+                    task.spawn(function()
+                        if delayTime > 0 then
+                            task.wait(delayTime)
+                        end
+                        local startedAt = os.clock()
+                        while true do
+                            local alpha = math.clamp((os.clock() - startedAt) / duration, 0, 1)
+                            callback(TweenService:GetValue(alpha, style, direction))
+                            if alpha >= 1 then
+                                break
+                            end
+                            RunService.Heartbeat:Wait()
+                        end
+                    end)
+                end
+
+                local function styleText(label, strokeThickness, gradientColors)
+                    label.FontFace = panelFont
+                    label.TextColor3 = WHITE
+                    label.TextStrokeTransparency = 1
+
+                    local textStroke = Instance.new("UIStroke")
+                    textStroke.Name = "TextOutline"
+                    textStroke.Color = Color3.new(0, 0, 0)
+                    textStroke.Thickness = strokeThickness
+                    textStroke.LineJoinMode = Enum.LineJoinMode.Round
+                    textStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
+                    textStroke.Parent = label
+
+                    local textGradient = Instance.new("UIGradient")
+                    textGradient.Name = "TextGradient"
+                    textGradient.Rotation = 90
+                    textGradient.Color = gradientColors
+                    textGradient.Parent = label
+                end
+
+                local function makeFadeGroup(root)
+                    local entries = {}
+
+                    local function consider(instance)
+                        if instance:GetAttribute("NoFade") then return end
+                        if instance:IsA("GuiObject") then
+                            table.insert(entries, { instance, "BackgroundTransparency", instance.BackgroundTransparency })
+                            if instance:IsA("TextLabel") or instance:IsA("TextButton") then
+                                table.insert(entries, { instance, "TextTransparency", instance.TextTransparency })
+                            end
+                        elseif instance:IsA("UIStroke") then
+                            table.insert(entries, { instance, "Transparency", instance.Transparency })
+                        end
+                    end
+
+                    consider(root)
+                    for _, descendant in ipairs(root:GetDescendants()) do
+                        consider(descendant)
+                    end
+
+                    local group = { value = 1 }
+                    function group.apply(visibility)
+                        visibility = math.clamp(visibility, 0, 1)
+                        group.value = visibility
+                        for _, entry in ipairs(entries) do
+                            entry[1][entry[2]] = 1 - (1 - entry[3]) * visibility
+                        end
+                    end
+                    return group
+                end
+
+                local okParent, guiParent = pcall(function()
+                    return (gethui and gethui()) or game:GetService("CoreGui")
+                end)
+                if not okParent or not guiParent then
+                    guiParent = Players.LocalPlayer:WaitForChild("PlayerGui")
+                end
+
+                local previous = guiParent:FindFirstChild("BirthdayUpdateLogGui")
+                if previous then
+                    previous:Destroy()
+                end
+
+                local gui = Instance.new("ScreenGui")
+                gui.Name = "BirthdayUpdateLogGui"
+                gui.IgnoreGuiInset = true
+                gui.ScreenInsets = Enum.ScreenInsets.None
+                gui.ResetOnSpawn = false
+                gui.DisplayOrder = 2147483647
+                gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+                local dim = Instance.new("Frame")
+                dim.Name = "Dim"
+                dim.BackgroundColor3 = Color3.new(0, 0, 0)
+                dim.BackgroundTransparency = 1
+                dim.BorderSizePixel = 0
+                dim.Size = UDim2.new(1, 0, 1, 0)
+                dim.Active = true
+                dim.ZIndex = 1
+                dim.Parent = gui
+
+                local panel = Instance.new("Frame")
+                panel.Name = "Panel"
+                panel.BackgroundTransparency = 1
+                panel.BorderSizePixel = 0
+                panel.ZIndex = 2
+                panel.AnchorPoint = Vector2.new(0.5, 0.5)
+                panel.Position = UDim2.new(0.5, 0, 0.5, 0)
+                panel.Size = UDim2.fromOffset(PANEL_W, PANEL_H)
+                panel.Parent = gui
+
+                local fitScale = Instance.new("UIScale")
+                fitScale.Parent = panel
+
+                local content = Instance.new("Frame")
+                content.Name = "Content"
+                content.BackgroundTransparency = 1
+                content.BorderSizePixel = 0
+                content.AnchorPoint = Vector2.new(0.5, 0.5)
+                content.Position = UDim2.new(0.5, 0, 0.5, 0)
+                content.Size = UDim2.new(1, 0, 1, 0)
+                content.Parent = panel
+
+                local openScale = Instance.new("UIScale")
+                openScale.Name = "OpenScale"
+                openScale.Scale = OPEN_SCALE_FROM
+                openScale.Parent = content
+
+                local panelLayout = Instance.new("UIListLayout")
+                panelLayout.Padding = UDim.new(0, GAP)
+                panelLayout.SortOrder = Enum.SortOrder.LayoutOrder
+                panelLayout.Parent = content
+
+                local header = Instance.new("TextLabel")
+                header.Name = "Header"
+                header.BackgroundColor3 = HEADER_COLOR
+                header.BorderSizePixel = 0
+                header.Text = ""
+
+                local headerStroke = Instance.new("UIStroke")
+                headerStroke.Color = HEADER_STROKE
+                headerStroke.Thickness = 2
+                headerStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+                headerStroke.Parent = header
+
+                local headerPadding = Instance.new("UIPadding")
+                headerPadding.PaddingTop = UDim.new(0.2, 0)
+                headerPadding.PaddingBottom = UDim.new(0.2, 0)
+                headerPadding.Parent = header
+
+                local titleText = Instance.new("TextLabel")
+                titleText.Name = "TitleText"
+                titleText.BackgroundTransparency = 1
+                titleText.Size = UDim2.new(1, 0, 1, 0)
+                titleText.Text = "Update Log"
+                titleText.MaxVisibleGraphemes = 0
+                titleText.TextScaled = true
+                titleText.Parent = header
+                styleText(titleText, 2, NAME_GRADIENT)
+
+                local titleConstraint = Instance.new("UITextSizeConstraint")
+                titleConstraint.MaxTextSize = 24
+                titleConstraint.Parent = titleText
+
+                local body = Instance.new("Frame")
+                body.Name = "Body"
+                body.BackgroundColor3 = ROW_BACKGROUND
+                body.BorderSizePixel = 0
+
+                local bodyStroke = Instance.new("UIStroke")
+                bodyStroke.Color = ROW_STROKE
+                bodyStroke.Thickness = 1
+                bodyStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+                bodyStroke.Parent = body
+
+                local plainMessage = string.format(template, BIRTHDAY_USER)
+                local richMessage  = string.format(template, '<font color="#FFD640">' .. BIRTHDAY_USER .. "</font>")
+
+                local messageLabel = Instance.new("TextLabel")
+                messageLabel.Name = "Message"
+                messageLabel.BackgroundTransparency = 1
+                messageLabel.AnchorPoint = Vector2.new(0.5, 0.5)
+                messageLabel.Position = UDim2.new(0.5, 0, 0.5, 0)
+                messageLabel.Size = UDim2.new(0.92, 0, 0.8, 0)
+                messageLabel.RichText = true
+                messageLabel.Text = richMessage
+                messageLabel.MaxVisibleGraphemes = 0
+                messageLabel.TextScaled = true
+                messageLabel.TextWrapped = true
+                messageLabel.TextXAlignment = Enum.TextXAlignment.Center
+                messageLabel.TextYAlignment = Enum.TextYAlignment.Center
+                messageLabel.Parent = body
+                styleText(messageLabel, 1.5, INFO_GRADIENT)
+
+                local messageConstraint = Instance.new("UITextSizeConstraint")
+                messageConstraint.MaxTextSize = 22
+                messageConstraint.Parent = messageLabel
+
+                local buttonRow = Instance.new("Frame")
+                buttonRow.Name = "ButtonRow"
+                buttonRow.BackgroundTransparency = 1
+                buttonRow.BorderSizePixel = 0
+
+                local okButton = Instance.new("TextButton")
+                okButton.Name = "OkButton"
+                okButton.AutoButtonColor = false
+                okButton.BackgroundColor3 = HEADER_COLOR
+                okButton.BorderSizePixel = 0
+                okButton.AnchorPoint = Vector2.new(0.5, 0.5)
+                okButton.Position = UDim2.new(0.5, 0, 0.5, 0)
+                okButton.Size = UDim2.new(0.47, 0, 1, 0)
+                okButton.Text = ""
+                okButton.Parent = buttonRow
+
+                local okStroke = Instance.new("UIStroke")
+                okStroke.Color = HEADER_STROKE
+                okStroke.Thickness = 2
+                okStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+                okStroke.Parent = okButton
+
+                local lift = Instance.new("Frame")
+                lift.Name = "Lift"
+                lift.BackgroundColor3 = WHITE
+                lift.BackgroundTransparency = 1
+                lift.BorderSizePixel = 0
+                lift.Active = false
+                lift.Size = UDim2.new(1, 0, 1, 0)
+                lift.ZIndex = 2
+                lift:SetAttribute("NoFade", true)
+                lift.Parent = okButton
+
+                local sheen = Instance.new("Frame")
+                sheen.Name = "Sheen"
+                sheen.BackgroundColor3 = WHITE
+                sheen.BackgroundTransparency = 0
+                sheen.BorderSizePixel = 0
+                sheen.Active = false
+                sheen.Visible = false
+                sheen.Size = UDim2.new(1, 0, 1, 0)
+                sheen.ZIndex = 2
+                sheen:SetAttribute("NoFade", true)
+                sheen.Parent = okButton
+
+                local sheenGradient = Instance.new("UIGradient")
+                sheenGradient.Rotation = 20
+                sheenGradient.Offset = Vector2.new(-1, 0)
+                sheenGradient.Transparency = NumberSequence.new({
+                    NumberSequenceKeypoint.new(0, 1),
+                    NumberSequenceKeypoint.new(0.38, 1),
+                    NumberSequenceKeypoint.new(0.5, 0.62),
+                    NumberSequenceKeypoint.new(0.62, 1),
+                    NumberSequenceKeypoint.new(1, 1),
+                })
+                sheenGradient.Parent = sheen
+
+                local okText = Instance.new("TextLabel")
+                okText.Name = "OkText"
+                okText.BackgroundTransparency = 1
+                okText.Active = false
+                okText.Size = UDim2.new(1, 0, 1, 0)
+                okText.Text = "Okay"
+                okText.TextScaled = true
+                okText.ZIndex = 3
+                okText.Parent = okButton
+                styleText(okText, 2, BUTTON_GRADIENT)
+
+                local okTextConstraint = Instance.new("UITextSizeConstraint")
+                okTextConstraint.MaxTextSize = 18
+                okTextConstraint.Parent = okText
+
+                local pressScale = Instance.new("UIScale")
+                pressScale.Name = "PressScale"
+                pressScale.Scale = 1
+                pressScale.Parent = okButton
+
+                local REST_POSITION = UDim2.new(0.5, 0, 0.5, 0)
+                local RISE_POSITION = UDim2.new(0.5, 0, 0.5, RISE_DISTANCE)
+                local LIFT_POSITION = UDim2.new(0.5, 0, 0.32, 0)
+
+                local function makePiece(element, layoutOrder, height)
+                    local holder = Instance.new("Frame")
+                    holder.Name = element.Name .. "Holder"
+                    holder.BackgroundTransparency = 1
+                    holder.BorderSizePixel = 0
+                    holder.LayoutOrder = layoutOrder
+                    holder.Size = UDim2.new(1, 0, 0, height)
+                    holder.Parent = content
+
+                    element.AnchorPoint = Vector2.new(0.5, 0.5)
+                    element.Position = RISE_POSITION
+                    element.Size = UDim2.new(1, 0, 1, 0)
+                    element.Parent = holder
+
+                    return { element = element, fade = makeFadeGroup(element) }
+                end
+
+                local pieces = {
+                    makePiece(header, 0, HEADER_H),
+                    makePiece(body, 1, BODY_H),
+                    makePiece(buttonRow, 2, BUTTON_H),
+                }
+                for _, piece in ipairs(pieces) do
+                    piece.fade.apply(0)
+                end
+
+                local hovered = false
+                local sweeping = false
+
+                local function playSheen()
+                    if sweeping then return end
+                    sweeping = true
+                    sheen.Visible = true
+                    sheenGradient.Offset = Vector2.new(-1, 0)
+                    local sweep = TweenService:Create(sheenGradient, info(0.8, Style.Quint, Dir.InOut), {
+                        Offset = Vector2.new(1, 0),
+                    })
+                    sweep.Completed:Connect(function()
+                        sweeping = false
+                        sheen.Visible = false
+                    end)
+                    sweep:Play()
+                end
+
+                okButton.MouseEnter:Connect(function()
+                    hovered = true
+                    TweenService:Create(pressScale, info(0.2, Style.Back, Dir.Out), { Scale = 1.07 }):Play()
+                    TweenService:Create(lift, info(0.3, Style.Quad, Dir.Out), { BackgroundTransparency = 0.9 }):Play()
+                    TweenService:Create(okStroke, info(0.3, Style.Quint, Dir.Out), { Thickness = 3 }):Play()
+                    playSheen()
+                end)
+                okButton.MouseLeave:Connect(function()
+                    hovered = false
+                    TweenService:Create(pressScale, info(0.3, Style.Quad, Dir.Out), { Scale = 1 }):Play()
+                    TweenService:Create(lift, info(0.45, Style.Quad, Dir.Out), { BackgroundTransparency = 1 }):Play()
+                    TweenService:Create(okStroke, info(0.45, Style.Quint, Dir.Out), { Thickness = 2 }):Play()
+                end)
+                okButton.MouseButton1Down:Connect(function()
+                    TweenService:Create(pressScale, info(0.08, Style.Quad, Dir.Out), { Scale = 0.92 }):Play()
+                end)
+                okButton.MouseButton1Up:Connect(function()
+                    TweenService:Create(pressScale, info(0.15, Style.Quad, Dir.Out), { Scale = hovered and 1.07 or 1 }):Play()
+                end)
+
+                local camera = Workspace.CurrentCamera
+                local function refit()
+                    local viewport = camera and camera.ViewportSize or Vector2.new(1280, 720)
+                    fitScale.Scale = math.clamp(math.min((viewport.X - 40) / PANEL_W, (viewport.Y - 40) / PANEL_H), 0.5, 1.25)
+                end
+                refit()
+                if camera then
+                    local viewportConn = camera:GetPropertyChangedSignal("ViewportSize"):Connect(refit)
+                    gui.Destroying:Connect(function()
+                        viewportConn:Disconnect()
+                    end)
+                end
+
+                task.spawn(function()
+                    pcall(function()
+                        game:GetService("ContentProvider"):PreloadAsync({ titleText, messageLabel, okText })
+                    end)
+                end)
+
+                while not menuIntroFinished do
+                    task.wait(0.05)
+                end
+
+                local okSet = pcall(function()
+                    gui.Parent = guiParent
+                end)
+                if not okSet then
+                    gui.Parent = Players.LocalPlayer:WaitForChild("PlayerGui")
+                end
+
+                local closing = false
+                local ready = false
+
+                animate(0.6, Style.Sine, Dir.Out, 0, function(alpha)
+                    if closing then return end
+                    dim.BackgroundTransparency = 1 - 0.5 * alpha
+                end)
+                animate(0.85, Style.Quint, Dir.Out, 0, function(alpha)
+                    if closing then return end
+                    openScale.Scale = OPEN_SCALE_FROM + (1 - OPEN_SCALE_FROM) * alpha
+                end)
+                for index, piece in ipairs(pieces) do
+                    local startDelay = 0.05 + 0.08 * (index - 1)
+                    animate(0.85, Style.Quint, Dir.Out, startDelay, function(alpha)
+                        if closing then return end
+                        piece.element.Position = RISE_POSITION:Lerp(REST_POSITION, alpha)
+                    end)
+                    animate(0.5, Style.Sine, Dir.Out, startDelay, function(alpha)
+                        if closing then return end
+                        piece.fade.apply(alpha)
+                    end)
+                end
+
+                local function typeLabel(label, text, charDelay)
+                    local total = utf8.len(text) or #text
+                    label.MaxVisibleGraphemes = 0
+                    local startedAt = os.clock()
+                    local shown = 0
+                    while shown < total do
+                        if closing or not label.Parent then
+                            return
+                        end
+                        local due = math.min(total, math.floor((os.clock() - startedAt) / charDelay) + 1)
+                        if due ~= shown then
+                            shown = due
+                            label.MaxVisibleGraphemes = shown
+                        end
+                        if shown < total then
+                            RunService.Heartbeat:Wait()
+                        end
+                    end
+                    label.MaxVisibleGraphemes = -1
+                end
+
+                task.spawn(function()
+                    task.wait(0.5)
+                    typeLabel(titleText, "Update Log", 0.05)
+                end)
+                task.spawn(function()
+                    task.wait(0.85)
+                    typeLabel(messageLabel, plainMessage, 0.022)
+                end)
+                task.delay(1.0, function()
+                    ready = true
+                end)
+
+                okButton.Activated:Connect(function()
+                    if closing or not ready then return end
+                    closing = true
+
+                    if not testing then
+                        seenDates[dateKey] = true
+                        writeSeen(seenDates)
+                    end
+
+                    titleText.MaxVisibleGraphemes = -1
+                    messageLabel.MaxVisibleGraphemes = -1
+
+                    animate(0.4, Style.Quad, Dir.In, 0, function(alpha)
+                        dim.BackgroundTransparency = 0.5 + 0.5 * alpha
+                    end)
+                    for index, piece in ipairs(pieces) do
+                        animate(0.35, Style.Quad, Dir.In, 0.05 * (index - 1), function(alpha)
+                            piece.element.Position = REST_POSITION:Lerp(LIFT_POSITION, alpha)
+                            piece.fade.apply(1 - alpha)
+                        end)
+                    end
+
+                    task.wait(0.8)
+                    gui:Destroy()
+                end)
+            end)
+
+            if not built then
+                warn("[BirthdayPopup] Failed to show popup: " .. tostring(buildError))
+            end
+        end)
     end
 end
 
@@ -4108,10 +4686,6 @@ end
 
 task.spawn(HairSystem.Preload)
 
--- the morph runs right away (accessory/FakeHead hiding, default outfit, saved
--- clothing + hair from GokuClothingCombo.json / GokuHairSave.json, skin colour)
--- so it's already on while the menu is up instead of waiting for Select.
--- This is the script's own dress-up hook, moved up unchanged.
 local ssjFaceId     = "rbxassetid://12876975875"
 
 local function ApplyMarketplaceClothing(assetId, clothingType)
@@ -4165,7 +4739,6 @@ CharacterHooks.Add(function()
     pants.PantsTemplate = "rbxassetid://18456843948"
     pants.Parent        = character
 
-
     task.spawn(function()
         ApplyMarketplaceClothing(marketShirtId, "Shirt")
         ApplyMarketplaceClothing(marketPantsId, "Pants")
@@ -4198,8 +4771,6 @@ CharacterHooks.Add(function()
     end
 end)
 
-
--- everything below this point still waits for the menu to finish
 if menuRan then
     while not menuFinished do
         task.wait(0.1)
@@ -4946,7 +5517,6 @@ end
 if _G.Music then
     task.spawn(PlaySoundCycle)
 end
-
 
 task.delay(1, function()
     task.spawn(function()
@@ -7632,7 +8202,6 @@ CharacterHooks.OnChildAdded(function(child)
     end
 end)
 
-
 task.spawn(function()
     while task.wait() do
         local bind = character:FindFirstChild("BarrageBind")
@@ -8055,8 +8624,7 @@ hairLight.Brightness = 1
 hairLight.Enabled    = true
 
 CharacterHooks.Add(function()
-    -- the saved hair is applied before the menu now, so it may already be on this
-    -- character; keep it instead of dropping it and stacking the default hair on top
+
     local customHairOnCharacter = HairSystem.Model ~= nil and HairSystem.Model.Parent == character
     if HairSystem.Model and not customHairOnCharacter then
         HairSystem.Model = nil
@@ -8162,7 +8730,6 @@ local spiritBombAura  = {}
 
 local SPIRIT_BOMB_LIGHT_FADE = 2
 local spiritBombLightTween
-
 
 local function SetSpiritBombHair(kind)
     if spiritBombLightTween then
@@ -8437,7 +9004,6 @@ task.spawn(function()
             end
         end
 
-
         while h:IsDescendantOf(game) do
             for _, text in ipairs(texts) do
                 if not h:IsDescendantOf(game) then return end
@@ -8464,7 +9030,6 @@ task.spawn(function()
         task.wait(0.25)
     end
 end)
-
 
 do
 local REAL_LOCAL_PLAYER = localPlayer
@@ -8990,7 +9555,6 @@ end)
 local eventParticipantsStarted = false
 local EventQualify = { deadline = 0 }
 
-
 local function EventParticipants_Start()
 	eventParticipantsStarted = true
 end
@@ -9196,7 +9760,6 @@ do
 end
 
 EventQualify.ScanHistory()
-
 
 local GokuParticipants = {
 	Start = function() EventParticipants_Start() end,
