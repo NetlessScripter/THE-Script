@@ -5657,6 +5657,10 @@ task.spawn(function()
     end
     settingsState.graphicsQuality = graphicsQualityOptions[graphicsQualityIndex]
 
+    local lightingLookOptions = {"Default", "OG Lighting", "Cosmos"}
+    local lightingLookIndex = 1
+    settingsState.lightingLook = lightingLookOptions[lightingLookIndex]
+
     local musicVolumeOptions = {
         { label = "Max", value = 1.75 },
         { label = "Medium", value = 0.65 },
@@ -5742,6 +5746,7 @@ task.spawn(function()
     local regularDropdown
     local dbDropdown
     local graphicsDropdown
+    local lightingDropdown
     local volumeDropdown
     local reverbDropdown
     local allDropdowns = {}
@@ -5820,6 +5825,17 @@ task.spawn(function()
             end,
             onActivated = function()
                 graphicsDropdown.Toggle()
+            end,
+        },
+        {
+            labelText = "Lighting",
+            isDropdownRow = true,
+            dropdownKey = "lighting",
+            getValueText = function()
+                return lightingLookOptions[lightingLookIndex]
+            end,
+            onActivated = function()
+                lightingDropdown.Toggle()
             end,
         },
         {
@@ -5996,7 +6012,7 @@ task.spawn(function()
     local normalTextColor = Color3.fromRGB(255, 255, 255)
     local selectedTextColor = Color3.fromRGB(88, 56, 16)
 
-    local panelHeightScale  = 0.48
+    local panelHeightScale  = 0.5
     local panelRowScale     = 0.16 * 0.4 / panelHeightScale
     local panelPaddingScale = 0.02 * 0.4 / panelHeightScale
 
@@ -6312,7 +6328,8 @@ task.spawn(function()
 
     if _G.Graphics == false then
         for rowIndex = #settingRowDefinitions, 1, -1 do
-            if settingRowDefinitions[rowIndex].dropdownKey == "graphics" then
+            local rowKey = settingRowDefinitions[rowIndex].dropdownKey
+            if rowKey == "graphics" or rowKey == "lighting" then
                 table.remove(settingRowDefinitions, rowIndex)
             end
         end
@@ -6558,6 +6575,17 @@ task.spawn(function()
             function(optionIndex)
                 graphicsQualityIndex = optionIndex
                 settingsState.graphicsQuality = graphicsQualityOptions[graphicsQualityIndex]
+            end)
+    end
+
+    if dropdownHostButtons.lighting then
+        lightingDropdown = CreateDropdown(dropdownHostButtons.lighting, "LightingLookDropdown", lightingLookOptions,
+            function()
+                return lightingLookIndex
+            end,
+            function(optionIndex)
+                lightingLookIndex = optionIndex
+                settingsState.lightingLook = lightingLookOptions[lightingLookIndex]
             end)
     end
 
@@ -7718,6 +7746,9 @@ task.spawn(function()
         end
         if sunsetQuality.Get() ~= settingsState.graphicsQuality then
             task.spawn(sunsetQuality.Set, settingsState.graphicsQuality)
+        end
+        if sunsetQuality.SetLook and sunsetQuality.GetLook() ~= settingsState.lightingLook then
+            task.spawn(sunsetQuality.SetLook, settingsState.lightingLook)
         end
     end
 
