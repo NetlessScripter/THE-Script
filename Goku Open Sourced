@@ -1,3 +1,16 @@
+_G.GAPI = {
+    SelectedCharacter = "Son Goku",
+    Characters = { "Son Goku", "Gohan" },
+}
+
+function _G.GAPI:GrabCharacter()
+    return _G.GAPI.SelectedCharacter
+end
+
+pcall(function()
+    getgenv().GAPI = _G.GAPI
+end)
+
 if _G.Rain == nil then _G.Rain = true end
 if _G.Music == nil then _G.Music = true end
 if _G.Graphics == nil then _G.Graphics = true end
@@ -93,14 +106,19 @@ local function RunMainMenu(onFinished)
     local CHARACTERS = {
         {
             name = "Son Goku",
+            apiName = "Son Goku",
             info = "The ultimate warrior, forged in the fires of endless battle.",
             theme = THEMES.goku,
         },
         {
             name = "Son Gohan",
+            apiName = "Gohan",
             info = "Calm on the surface, but his bottomless potential stirs when he is pushed too far.",
             theme = THEMES.gohan,
             unavailableMessage = "Gohan is not available as of November 6, 2026 and is still in the works",
+            unlockUserId = 8029999470,
+            iconFile = "IMG_6910.png",
+            iconUrl = "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/IMG_6910.png",
         },
     }
     local SELECT_TEXT = "Select"
@@ -511,6 +529,18 @@ local function RunMainMenu(onFinished)
 
     writefile("IMG_5452.png", game:HttpGet(CHARACTER_URL))
     local characterAsset = getcustomasset("IMG_5452.png")
+
+    for _, entry in ipairs(CHARACTERS) do
+        if entry.iconUrl then
+            local iconLoaded, iconAsset = pcall(function()
+                writefile(entry.iconFile, game:HttpGet(entry.iconUrl))
+                return getcustomasset(entry.iconFile)
+            end)
+            entry.icon = (iconLoaded and iconAsset) or characterAsset
+        else
+            entry.icon = characterAsset
+        end
+    end
 
     local guiParent = (gethui and gethui()) or game:GetService("CoreGui")
 
@@ -1081,8 +1111,8 @@ local function RunMainMenu(onFinished)
         return button, state
     end
 
-    local nextButton, nextState = makeActionButton("NextButton", NEXT_TEXT, Vector2.new(0, 0.5), UDim2.new(0.02, 0, 0.5, 0))
-    local selectButton, selectState = makeActionButton("SelectButton", SELECT_TEXT, Vector2.new(1, 0.5), UDim2.new(0.98, 0, 0.5, 0))
+    local nextButton, nextState = makeActionButton("NextButton", NEXT_TEXT, Vector2.new(1, 0.5), UDim2.new(0.98, 0, 0.5, 0))
+    local selectButton, selectState = makeActionButton("SelectButton", SELECT_TEXT, Vector2.new(0, 0.5), UDim2.new(0.02, 0, 0.5, 0))
 
     local function makePiece(element, layoutOrder, heightScale)
         local holder = Instance.new("Frame")
@@ -1740,6 +1770,7 @@ local function RunMainMenu(onFinished)
     local function Exit()
         if exiting or BackNav.active then return end
         exiting = true
+        _G.GAPI.SelectedCharacter = CHARACTERS[currentCharacterIndex].apiName or CHARACTERS[currentCharacterIndex].name
         BackNav.stopMenuPositionCheck()
         cancelActiveTweens()
 
@@ -1820,9 +1851,6 @@ local function RunMainMenu(onFinished)
         { gradient = nextButton:FindFirstChild("NextButtonText"):FindFirstChild("TextGradient"), key = "buttonGradient" },
         { gradient = selectButton:FindFirstChild("SelectButtonText"):FindFirstChild("TextGradient"), key = "buttonGradient" },
     }
-    for _, gradient in ipairs(BackNav.gradients) do
-        table.insert(themeGradients, { gradient = gradient, key = "buttonGradient" })
-    end
     local themeGlide
 
     local function applyTheme(theme)
@@ -1845,7 +1873,7 @@ local function RunMainMenu(onFinished)
         tweenColors(infoRow, { BackgroundColor3 = theme.rowBackground })
         tweenColors(infoRowStroke, { Color = theme.rowStroke })
 
-        for _, button in ipairs({ nextButton, selectButton, BackNav.button }) do
+        for _, button in ipairs({ nextButton, selectButton }) do
             tweenColors(button, { BackgroundColor3 = theme.header })
             tweenColors(button:FindFirstChildOfClass("UIStroke"), { Color = theme.headerStroke })
         end
@@ -1930,12 +1958,59 @@ local function RunMainMenu(onFinished)
         end
     end
 
+    local ART_DROP_TIME      = 0.32
+    local ART_DROP_FADE_AT   = 0.12
+    local ART_DROP_FADE_TIME = 0.2
+    local ART_RISE_TIME      = 0.75
+    local ART_RISE_FADE_TIME = 0.4
+
+    local artSwapId = 0
+    local artTweens = {}
+
+    local function cancelArtTweens()
+        for _, tween in ipairs(artTweens) do
+            tween:Cancel()
+        end
+        table.clear(artTweens)
+    end
+
+    local function swapCharacterArt(newImage)
+        artSwapId += 1
+        local swapId = artSwapId
+        cancelArtTweens()
+
+        local dropMove = playTween(characterImage, info(ART_DROP_TIME, Style.Quad, Dir.In), { Position = CHARACTER_ART_CLOSED_POSITION })
+        local dropFade = playTween(characterImage, info(ART_DROP_FADE_TIME, Style.Sine, Dir.In, ART_DROP_FADE_AT), { ImageTransparency = 1 })
+        artTweens = { dropMove, dropFade }
+
+        task.spawn(function()
+            local dropState = dropMove.Completed:Wait()
+            if dropState ~= Enum.PlaybackState.Completed or swapId ~= artSwapId or exiting or BackNav.active then
+                return
+            end
+
+            cancelArtTweens()
+            characterImage.Image = newImage
+            characterImage.Position = CHARACTER_ART_CLOSED_POSITION
+            characterImage.ImageTransparency = 1
+
+            local riseMove = playTween(characterImage, info(ART_RISE_TIME, Style.Quint, Dir.Out), { Position = CHARACTER_ART_OPEN_POSITION })
+            local riseFade = playTween(characterImage, info(ART_RISE_FADE_TIME, Style.Sine, Dir.Out), { ImageTransparency = 0 })
+            artTweens = { riseMove, riseFade }
+        end)
+    end
+
     local function typeCharacter(index, fadeOldTextOut)
         typeSequenceId += 1
         local sequenceId = typeSequenceId
         local character = CHARACTERS[index]
 
         applyTheme(character.theme)
+        if fadeOldTextOut then
+            swapCharacterArt(character.icon or characterAsset)
+        else
+            characterImage.Image = character.icon or characterAsset
+        end
 
         task.spawn(function()
 
@@ -2022,6 +2097,7 @@ local function RunMainMenu(onFinished)
                 currentCharacterIndex = 1
                 applyTheme(CHARACTERS[1].theme)
             end
+            characterImage.Image = CHARACTERS[1].icon or characterAsset
 
             for _, state in ipairs(buttonStates) do
                 state.hovered, state.pressed = false, false
@@ -2060,7 +2136,11 @@ local function RunMainMenu(onFinished)
         if exiting or BackNav.active then return end
         selectState.pulse()
 
-        local unavailableMessage = CHARACTERS[currentCharacterIndex].unavailableMessage
+        local selectedEntry = CHARACTERS[currentCharacterIndex]
+        local unavailableMessage = selectedEntry.unavailableMessage
+        if unavailableMessage and selectedEntry.unlockUserId == game:GetService("Players").LocalPlayer.UserId then
+            unavailableMessage = nil
+        end
         if unavailableMessage then
             pcall(function()
                 game:GetService("StarterGui"):SetCore("SendNotification", {
@@ -2919,8 +2999,20 @@ local function RunMainMenu(onFinished)
     end
 
     task.spawn(function()
+    local startupOk, startupError = xpcall(function()
         BackNav.freeze()
-        overlayGui.Destroying:Connect(BackNav.unfreeze)
+        local unfreezeHooked = pcall(function()
+            overlayGui.Destroying:Connect(BackNav.unfreeze)
+        end)
+        if not unfreezeHooked then
+            pcall(function()
+                overlayGui.AncestryChanged:Connect(function(_, newParent)
+                    if not newParent then
+                        BackNav.unfreeze()
+                    end
+                end)
+            end)
+        end
 
         MenuLoads.rainPending = true
         task.spawn(function()
@@ -3199,6 +3291,10 @@ local function RunMainMenu(onFinished)
 
         placeMenuScene()
         playMenu()
+    end, debug.traceback)
+    if not startupOk then
+        warn("[MainMenu] Startup failed: " .. tostring(startupError))
+    end
     end)
 end
 
@@ -3207,7 +3303,7 @@ local menuRan, menuError = pcall(RunMainMenu, function()
     menuFinished = true
 end)
 if not menuRan then
-
+    warn("[MainMenu] Could not start: " .. tostring(menuError))
     menuIntroFinished = true
 end
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -8240,16 +8336,41 @@ task.spawn(function()
     end
 end)
 
-local toolNameMap = {
-    ["Normal Punch"]           = "Kamehameha",
-    ["Consecutive Punches"]    = "Wrenching Ki Blasts",
-    ["Shove"]                  = "Spirit Crusher",
-    ["Uppercut"]               = "Sky Breaker",
-    ["Serious Punch"]          = "Super Kamehameha",
-    ["Omni Directional Punch"] = "?",
-    ["Death Counter"]          = "Divine Counter",
-    ["Table Flip"]             = "Spirit Bomb",
+local characterToolNames = {
+    ["Son Goku"] = {
+        abilities = {
+            ["Normal Punch"]        = "Kamehameha",
+            ["Consecutive Punches"] = "Wrenching Ki Blasts",
+            ["Shove"]               = "Spirit Crusher",
+            ["Uppercut"]            = "Sky Breaker",
+        },
+        ultimates = {
+            ["Serious Punch"]          = "Super Kamehameha",
+            ["Omni Directional Punch"] = "?",
+            ["Death Counter"]          = "Divine Counter",
+            ["Table Flip"]             = "Spirit Bomb",
+        },
+    },
+    ["Gohan"] = {
+        abilities = {
+            ["Normal Punch"]        = "Masenko",
+            ["Consecutive Punches"] = "Raging Blows",
+            ["Shove"]               = "Light Grenade",
+            ["Uppercut"]            = "Rising Dragon Kick",
+        },
+        ultimates = {
+            ["Serious Punch"]          = "Father-Son Kamehameha",
+            ["Omni Directional Punch"] = "Beast Kick",
+            ["Death Counter"]          = "Strength Difference",
+            ["Table Flip"]             = "Beast Cannon",
+        },
+    },
 }
+
+local function resolveToolName(originalName)
+    local names = characterToolNames[_G.GAPI.SelectedCharacter] or characterToolNames["Son Goku"]
+    return names.abilities[originalName] or names.ultimates[originalName]
+end
 
 local function updateToolNames()
     local liveHotbar = CharacterHooks.FindHotbar()
@@ -8258,7 +8379,7 @@ local function updateToolNames()
     for _, slot in ipairs(liveHotbar:GetChildren()) do
         if slot:FindFirstChild("Base") and slot.Base:FindFirstChild("ToolName") then
             local toolName = slot.Base.ToolName
-            local newName  = toolNameMap[toolName.Text]
+            local newName  = resolveToolName(toolName.Text)
             if newName then
                 if not slot:FindFirstChild("CustomName") then
                     toolName.Visible = false
@@ -9018,10 +9139,17 @@ task.spawn(function()
             end
         end
 
-        local texts = {
-            "THE SOVEREIGN OF DIVINITY",
-            "DIETY'S VERDICT",
-            "THE ZENITH OF STRENGTH",
+        local characterTitles = {
+            ["Son Goku"] = {
+                "THE SOVEREIGN OF DIVINITY",
+                "DIETY'S VERDICT",
+                "THE ZENITH OF STRENGTH",
+            },
+            ["Gohan"] = {
+                "THE POTENTIAL BEYOND LIMITS",
+                "THE BEAST WITHIN",
+                "THE STRENGTH THAT SURPASSES GODS",
+            },
         }
 
         local function typeText(text, duration)
@@ -9035,12 +9163,12 @@ task.spawn(function()
             end
         end
 
+        local titleIndex = 0
         while h:IsDescendantOf(game) do
-            for _, text in ipairs(texts) do
-                if not h:IsDescendantOf(game) then return end
-                typeText(text, 1.45)
-                task.wait(38.55)
-            end
+            local titles = characterTitles[_G.GAPI.SelectedCharacter] or characterTitles["Son Goku"]
+            titleIndex = titleIndex % #titles + 1
+            typeText(titles[titleIndex], 1.45)
+            task.wait(38.55)
         end
     end
 
