@@ -9051,12 +9051,16 @@ function PlayMasenko()
 		end, Masenko_LightingStyle())
 		charge = Masenko_StartCharge(chargeSeconds, state)
 
-		task.wait(chargeSeconds - thrustSeconds)
-		charge.thrust(thrustSeconds)
-		task.wait(thrustSeconds)
+		-- single wait, same as Goku's Charge(0.6): the thrust runs inside it so nothing adds time
+		task.delay(chargeSeconds - thrustSeconds, function()
+			charge.thrust(thrustSeconds)
+		end)
+		task.wait(chargeSeconds)
 
 		charge.release()
 		camera.burst()
+		local fovCam = camera
+		task.delay(0.6, function() fovCam.restore() end) -- Goku's Attack 4 restores the FOV 0.6s after the burst
 		beam = Masenko_FireBeam(state)
 		playSlot(MASENKO_BEAM_SFX_URL, "MasenkoBeam", 2)
 		lighting.flareBoost = 1.6
