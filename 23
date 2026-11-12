@@ -20,6 +20,160 @@ ATTACK2_CANCEL_IDS = {
 }
 attack2LastFired = -math.huge
 ATTACK2_COOLDOWN = 3
+
+-- ============================================================================
+-- GX-GOHAN GATE
+-- Runs BEFORE any attack gets applied. If the local player said GOHAN_PHRASE in
+-- chat (before OR after this script loaded), the Goku moveset is swapped for the
+-- Gohan one: the Attack 4 trigger fires a Masenko, attacks 1/2/3/5 do nothing.
+-- If it was never said, everything below stays dormant and Goku works as usual.
+-- ============================================================================
+GOHAN_PHRASE        = "GX-Gohan"
+GOHAN_FORCE_ENABLED = false     -- true = skip the chat check (handy for testing)
+
+-- Masenko animation (fill this in when you find it)
+GOHAN_MASENKO_ANIM_ID    = ""   -- numbers only, e.g. "1234567890". Empty = the game's own Attack 4 animation keeps playing
+GOHAN_MASENKO_ANIM_START = 0    -- TimePosition to start the animation at
+GOHAN_MASENKO_ANIM_SPEED = 1
+
+-- Masenko timing
+MASENKO_CHARGE_SECONDS = 1.0    -- trigger -> beam release (line this up with the thrust in your animation)
+MASENKO_THRUST_SECONDS = 0.12   -- the orb snaps from the charge point to the muzzle in this time
+MASENKO_BEAM_SECONDS   = 1.4    -- how long the beam stays up
+MASENKO_FADE_SECONDS   = 0.4
+
+-- Masenko placement. Offsets are relative to HumanoidRootPart (-Z is forward).
+MASENKO_CHARGE_OFFSET = Vector3.new(0, 3.4, -1.6)   -- where the orb gathers (above the forehead)
+MASENKO_MUZZLE_OFFSET = Vector3.new(0, 1.4, -3.2)   -- where the beam leaves from
+MASENKO_USE_HANDS     = false   -- true = orb + muzzle follow the midpoint of both hands (turn on once the animation is in)
+
+-- Masenko look
+MASENKO_BEAM_LENGTH = 120
+MASENKO_BEAM_RADIUS = 3.2
+MASENKO_FX_QUALITY  = 1         -- 0.4 - 1
+MASENKO_FLARE_GOLD  = true      -- true = Goku's attack 4 lens flare + grade tinted gold; false = the original cyan/blue one
+MASENKO_CORE_COLOR  = Color3.fromRGB(255, 252, 226)
+MASENKO_MID_COLOR   = Color3.fromRGB(255, 212, 62)
+MASENKO_EDGE_COLOR  = Color3.fromRGB(255, 128, 16)
+
+-- Masenko sounds (direct links to an mp3, empty = silent)
+MASENKO_CHARGE_SFX_URL = ""
+MASENKO_BEAM_SFX_URL   = ""
+MASENKO_VOICE_SFX_URL  = ""
+
+GohanMode = { active = GOHAN_FORCE_ENABLED }
+
+do
+	local phraseLower = GOHAN_PHRASE:lower()
+	local textChat = game:GetService("TextChatService")
+
+	local function clean(t)
+		t = tostring(t or ""):gsub("<[^>]->", "")
+		return (t:match("^%s*(.-)%s*$"))
+	end
+
+	local function enable()
+		if GohanMode.active then return end
+		GohanMode.active = true
+		warn("[GX-Gohan] Gohan moveset on: Masenko on the Attack 4 trigger, other attacks disabled")
+	end
+
+	-- live: our own messages, sent at any time from now on
+	function GohanMode.check(userId, message)
+		if userId ~= REAL_LOCAL_PLAYER.UserId then return end
+		if clean(message):lower() == phraseLower then enable() end
+	end
+
+	if textChat.ChatVersion == Enum.ChatVersion.TextChatService then
+		textChat.MessageReceived:Connect(function(msg)
+			if msg.TextSource then
+				GohanMode.check(msg.TextSource.UserId, msg.Text)
+			end
+		end)
+	else
+		REAL_LOCAL_PLAYER.Chatted:Connect(function(msg)
+			GohanMode.check(REAL_LOCAL_PLAYER.UserId, msg)
+		end)
+	end
+
+	-- history: best-effort scan of the chat that is already on screen, so saying it
+	-- BEFORE running the script counts too. Only a message that is exactly the phrase
+	-- AND is shown next to our own name / display name is accepted.
+	local function isText(o)
+		return o:IsA("TextLabel") or o:IsA("TextButton")
+	end
+
+	local function isMe(t)
+		local c = clean(t):lower()
+		c = c:gsub("^%[", ""):gsub("%]?%s*:?%s*$", "")
+		if c == "" then return false end
+		return c == REAL_LOCAL_PLAYER.Name:lower() or c == REAL_LOCAL_PLAYER.DisplayName:lower()
+	end
+
+	local function scanRoot(root)
+		for _, d in ipairs(root:GetDescendants()) do
+			if isText(d) then
+				local low = clean(d.Text):lower()
+				local s1, e1 = low:find(phraseLower, 1, true)
+				if s1 then
+					local rem = (low:sub(1, s1 - 1) .. low:sub(e1 + 1)):match("^%s*(.-)%s*$")
+					if rem ~= "" then
+						-- "Name: GX-Gohan" in a single label
+						if isMe(rem) then return true end
+					else
+						-- body is only the phrase; look for the name label in the same message
+						local node = d.Parent
+						for _ = 1, 3 do
+							if not node or node == root then break end
+							local texts = {}
+							for _, sib in ipairs(node:GetDescendants()) do
+								if isText(sib) and sib ~= d then texts[#texts + 1] = sib end
+							end
+							-- too many labels = we climbed into the whole chat log, stop
+							if #texts > 6 then break end
+							for _, sib in ipairs(texts) do
+								if isMe(sib.Text) then return true end
+							end
+							node = node.Parent
+						end
+					end
+				end
+			end
+		end
+		return false
+	end
+
+	local function pass()
+		if GohanMode.active then return end
+		local roots = {}
+		pcall(function()
+			local expChat = game:GetService("CoreGui"):FindFirstChild("ExperienceChat")
+			if expChat then roots[#roots + 1] = expChat end
+		end)
+		pcall(function()
+			local pg = REAL_LOCAL_PLAYER:FindFirstChild("PlayerGui")
+			local oldChat = pg and pg:FindFirstChild("Chat")
+			if oldChat then roots[#roots + 1] = oldChat end
+		end)
+		for _, r in ipairs(roots) do
+			local ok, found = pcall(scanRoot, r)
+			if ok and found then
+				enable()
+				return
+			end
+		end
+	end
+
+	-- the first pass runs right now, before anything else below; the later ones catch a chat UI that was still loading
+	task.spawn(function()
+		pass()
+		task.wait(3)
+		pass()
+		task.wait(5)
+		pass()
+	end)
+end
+
 local function GetGitSoundBase(GithubSnd, SoundName, Volume)
     local url = GithubSnd
     local fileName = SoundName .. ".mp3"
@@ -2594,7 +2748,8 @@ ATTACK4_FLARE_STRENGTH        = 0.65
 
 attack4LightingController = nil
 
-function StartAttack4Lighting(focusPart, flareSourceFn)
+function StartAttack4Lighting(focusPart, flareSourceFn, style)
+	style = style or {}
 	if not ACTOR_IS_LOCAL then
 		return { finished = true, orig = {}, release = function() end, abort = function() end }
 	end
@@ -2610,16 +2765,16 @@ function StartAttack4Lighting(focusPart, flareSourceFn)
 	orig = orig or { exp = Lighting.ExposureCompensation, amb = Lighting.Ambient, oamb = Lighting.OutdoorAmbient }
 
 	local WHITE     = Color3.new(1, 1, 1)
-	local DARK_BLUE = Color3.fromRGB(25, 40, 95)
-	local TINT      = Color3.fromRGB(165, 205, 255)
+	local DARK_BLUE = style.dark or Color3.fromRGB(25, 40, 95)
+	local TINT      = style.tint or Color3.fromRGB(165, 205, 255)
 
 	local cc = Instance.new("ColorCorrectionEffect") cc.Name = "Attack4CC" cc.Parent = Lighting
 	local bloom = Instance.new("BloomEffect") bloom.Name = "Attack4Bloom" bloom.Intensity = 0 bloom.Size = 24 bloom.Threshold = 1 bloom.Parent = Lighting
 	local dof = Instance.new("DepthOfFieldEffect") dof.Name = "Attack4DOF" dof.FarIntensity = 0 dof.NearIntensity = 0 dof.FocusDistance = 20 dof.InFocusRadius = 12 dof.Parent = Lighting
 	local sun = Instance.new("SunRaysEffect") sun.Name = "Attack4Sun" sun.Intensity = 0 sun.Spread = 0.7 sun.Parent = Lighting
 
-	local CYAN = Color3.fromRGB(120, 235, 255)
-	local BLUE = Color3.fromRGB(40, 170, 255)
+	local CYAN = style.cyan or Color3.fromRGB(120, 235, 255)
+	local BLUE = style.blue or Color3.fromRGB(40, 170, 255)
 	local SPARK = "rbxasset://textures/particles/sparkles_main.dds"
 	local FLARE_DEPTH = 4
 	local FLARE_SCALE = FLARE_DEPTH / 13
@@ -2700,7 +2855,7 @@ function StartAttack4Lighting(focusPart, flareSourceFn)
 		end
 	end
 
-	local controller = { finished = false, orig = orig }
+	local controller = { finished = false, orig = orig, flareBoost = 1 }
 	attack4LightingController = controller
 
 	local conn
@@ -2764,7 +2919,7 @@ function StartAttack4Lighting(focusPart, flareSourceFn)
 	pcall(runService.UnbindFromRenderStep, runService, flareBind)
 	runService:BindToRenderStep(flareBind, Enum.RenderPriority.Last.Value, function()
 		if controller.finished then return end
-		updateFlare(ATTACK4_FLARE_STRENGTH * curGl)
+		updateFlare((style.flareStrength or ATTACK4_FLARE_STRENGTH) * curGl * (controller.flareBoost or 1))
 	end)
 
 	function controller.release()
@@ -8105,6 +8260,933 @@ end
 	end)
 end
 
+-- ============================================================================
+-- GX-GOHAN: MASENKO (fires from the Attack 4 trigger when GohanMode is active)
+-- ============================================================================
+masenkoRunning      = false
+masenkoBlockedTrack = nil
+
+-- hands midpoint (R6), used when MASENKO_USE_HANDS is on
+function Masenko_Hands()
+	local left = Character and Character:FindFirstChild("Left Arm")
+	if left and RightArm and RightArm.Parent then
+		local a = (RightArm.CFrame * CFrame.new(0, -1.35, 0)).Position
+		local b = (left.CFrame * CFrame.new(0, -1.35, 0)).Position
+		return (a + b) / 2
+	end
+	return nil
+end
+
+-- thrust: 0 = charge point (above the forehead), 1 = muzzle (in front of the chest)
+function Masenko_OrbPos(thrust)
+	if MASENKO_USE_HANDS then
+		local hands = Masenko_Hands()
+		if hands then return hands end
+	end
+	local cf = HumanoidRootPart.CFrame
+	local chargePoint = cf:PointToWorldSpace(MASENKO_CHARGE_OFFSET)
+	local muzzlePoint = cf:PointToWorldSpace(MASENKO_MUZZLE_OFFSET)
+	return chargePoint:Lerp(muzzlePoint, math.clamp(thrust or 0, 0, 1))
+end
+
+function Masenko_LightingStyle()
+	if MASENKO_FLARE_GOLD == false then return nil end
+	return {
+		cyan = Color3.fromRGB(255, 226, 120),
+		blue = Color3.fromRGB(255, 150, 40),
+		tint = Color3.fromRGB(255, 228, 175),
+		dark = Color3.fromRGB(52, 32, 10),
+	}
+end
+
+function Masenko_Dust(parent, position, color, count, speed)
+	local anchor = A4FX_Anchor("DustPuff", parent)
+	anchor.CFrame = CFrame.new(position)
+	local attachment = Instance.new("Attachment")
+	attachment.Parent = anchor
+	local emitter = Instance.new("ParticleEmitter")
+	emitter.Texture = "rbxassetid://272050333"
+	emitter.Color = ColorSequence.new(color:Lerp(Color3.fromRGB(170, 170, 170), 0.45))
+	emitter.LightEmission = 0
+	emitter.LightInfluence = 1
+	emitter.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 3), NumberSequenceKeypoint.new(1, 10) })
+	emitter.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.45), NumberSequenceKeypoint.new(1, 1) })
+	emitter.Lifetime = NumberRange.new(0.6, 1.1)
+	emitter.Speed = NumberRange.new(speed * 0.4, speed)
+	emitter.SpreadAngle = Vector2.new(75, 75)
+	emitter.EmissionDirection = Enum.NormalId.Top
+	emitter.Drag = 4
+	emitter.Rate = 0
+	emitter.Parent = attachment
+	emitter:Emit(count)
+	game:GetService("Debris"):AddItem(anchor, 1.6)
+end
+
+function Masenko_Shards(parent, rng, origin, normal, color, material, count, speedMin, speedMax)
+	local tweenService = game:GetService("TweenService")
+	local debris = game:GetService("Debris")
+	for _ = 1, count do
+		local size = rng:NextNumber(0.25, 0.7)
+		local shard = Instance.new("Part")
+		shard.Name = "Shard"
+		shard.Size = Vector3.new(size * rng:NextNumber(0.7, 1.3), size, size * rng:NextNumber(0.7, 1.3))
+		shard.Color = color
+		shard.Material = material
+		shard.Anchored = false
+		shard.CanCollide = false
+		shard.CanQuery = false
+		shard.CanTouch = false
+		shard.CastShadow = false
+		shard.CFrame = CFrame.new(origin + normal * 0.3 + Vector3.new(rng:NextNumber(-1.5, 1.5), 0, rng:NextNumber(-1.5, 1.5)))
+			* CFrame.Angles(rng:NextNumber(0, 6), rng:NextNumber(0, 6), 0)
+		shard.Parent = parent
+
+		local push = normal * rng:NextNumber(0.9, 1.5) + Vector3.new(rng:NextNumber(-1, 1), rng:NextNumber(0.2, 1), rng:NextNumber(-1, 1))
+		if push.Magnitude < 0.1 then
+			push = Vector3.yAxis
+		end
+		shard.AssemblyLinearVelocity = push.Unit * rng:NextNumber(speedMin, speedMax)
+		shard.AssemblyAngularVelocity = Vector3.new(rng:NextNumber(-20, 20), rng:NextNumber(-20, 20), rng:NextNumber(-20, 20))
+
+		tweenService:Create(shard, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.In, 0, false, 0.6), {
+			Size = Vector3.new(0.05, 0.05, 0.05),
+		}):Play()
+		debris:AddItem(shard, 1.3)
+	end
+end
+
+-- ---------------------------------------------------------------------------
+-- CHARGE: golden orb above the forehead, ki streaming in, crackling lightning, ground pulses
+-- ---------------------------------------------------------------------------
+function Masenko_StartCharge(duration, state)
+	local runService = game:GetService("RunService")
+	local tweenService = game:GetService("TweenService")
+	local debris = game:GetService("Debris")
+	local NSK = NumberSequenceKeypoint.new
+	local quality = math.clamp(MASENKO_FX_QUALITY or 1, 0.4, 1)
+	local CORE, MID, EDGE = MASENKO_CORE_COLOR, MASENKO_MID_COLOR, MASENKO_EDGE_COLOR
+	local rng = Random.new()
+	local controller = { finished = false }
+	local root = HumanoidRootPart
+
+	local folder = Instance.new("Folder")
+	folder.Name = "MasenkoChargeFX"
+	folder.Parent = workspace
+	debris:AddItem(folder, duration + 4)
+	local ignore = A4FX_IgnoreList({ folder })
+
+	local startTime = os.clock()
+	local thrustStart, thrustLength = nil, 0.12
+	local thrustAlpha = 0
+
+	-- the orb: hot white core, golden body, orange outer glow
+	local orbHalo = A4FX_Part("OrbHalo", Enum.PartType.Ball, Vector3.one, EDGE, 0.82, folder)
+	local orbShell = A4FX_Part("OrbShell", Enum.PartType.Ball, Vector3.one * 0.6, MID, 0.4, folder)
+	local orbCore = A4FX_Part("OrbCore", Enum.PartType.Ball, Vector3.one * 0.4, CORE, 0, folder)
+	local light = Instance.new("PointLight")
+	light.Color = MID
+	light.Range = 8
+	light.Brightness = 1
+	light.Shadows = false
+	light.Parent = orbCore
+
+	-- soft bloom-like halo that is re-emitted every frame so it never pops
+	local haloAnchor = A4FX_Anchor("HaloAnchor", folder)
+	local haloAttachment = Instance.new("Attachment")
+	haloAttachment.Parent = haloAnchor
+	local halo = Instance.new("ParticleEmitter")
+	halo.Texture = "rbxassetid://1084999891"
+	halo.Color = ColorSequence.new(MID, EDGE)
+	halo.LightEmission = 1
+	halo.LightInfluence = 0
+	halo.Rate = 0
+	halo.Lifetime = NumberRange.new(0.07)
+	halo.Speed = NumberRange.new(0)
+	halo.LockedToPart = true
+	halo.ZOffset = -1
+	halo.Transparency = NumberSequence.new(0.35)
+	halo.Parent = haloAttachment
+
+	-- sparks rising off the body while he powers up
+	local bodyAttachment = Instance.new("Attachment")
+	bodyAttachment.Name = "MasenkoBodyFX"
+	bodyAttachment.Parent = root
+	local risers = Instance.new("ParticleEmitter")
+	risers.Texture = "rbxassetid://1084976679"
+	risers.Color = ColorSequence.new(CORE, MID)
+	risers.LightEmission = 1
+	risers.LightInfluence = 0
+	risers.Size = NumberSequence.new({ NSK(0, 0.55), NSK(1, 0.05) })
+	risers.Transparency = NumberSequence.new({ NSK(0, 0), NSK(0.7, 0.25), NSK(1, 1) })
+	risers.Lifetime = NumberRange.new(0.5, 0.95)
+	risers.Speed = NumberRange.new(6, 16)
+	risers.SpreadAngle = Vector2.new(35, 35)
+	risers.EmissionDirection = Enum.NormalId.Top
+	risers.Acceleration = Vector3.new(0, 16, 0)
+	risers.Rate = 0
+	risers.Parent = bodyAttachment
+
+	local streaks = {}
+	local streakCount = math.floor(34 * quality)
+	local nextStreak = 1
+	local nextBolt, nextBodyBolt, nextPulse = 0, 0.15, 0
+	local pulseCount = 0
+	local connection
+
+	local function stopLoop()
+		if controller.finished then return end
+		controller.finished = true
+		if connection then connection:Disconnect() end
+		risers.Enabled = false
+		risers.Rate = 0
+		debris:AddItem(bodyAttachment, 1.2)
+	end
+
+	local function groundPulse(progress)
+		local hit = A4FX_Cast(root.Position, Vector3.new(0, -14, 0), ignore)
+		if not hit then return end
+		local color, material = A4FX_SurfaceColor(hit)
+		local frame = A4FX_Frame(hit.Position + hit.Normal * 0.15, hit.Normal)
+		A4FX_Ring(workspace, frame, 3, 20 + 14 * progress, 0.35, 0.5, MID, 0.3)
+		task.delay(0.08, function()
+			if not controller.finished then
+				A4FX_Ring(workspace, frame, 2, 13 + 9 * progress, 0.25, 0.4, CORE, 0.35)
+			end
+		end)
+		Masenko_Dust(workspace, hit.Position, color, math.floor((5 + 7 * progress) * quality + 0.5), 14 + 14 * progress)
+		if pulseCount == 1 or progress > 0.8 then
+			Masenko_Shards(workspace, rng, hit.Position, hit.Normal, color, material, math.floor(4 * quality + 0.5), 10, 26)
+		end
+	end
+
+	local function step()
+		if controller.finished then return end
+		local now = os.clock()
+		local elapsed = now - startTime
+		local progress = math.clamp(elapsed / duration, 0, 1)
+
+		if thrustStart then
+			local a = math.clamp((now - thrustStart) / thrustLength, 0, 1)
+			thrustAlpha = 1 - (1 - a) ^ 3
+		end
+		local orb = Masenko_OrbPos(thrustAlpha)
+		state.orbPos = orb
+
+		-- orb grows with a tremble + fast pulse, compresses on the thrust
+		local size = (0.5 + 3.1 * progress ^ 1.6) * (1 - 0.28 * thrustAlpha)
+		local tremble = 0.09 * progress
+		local jitter = Vector3.new(rng:NextNumber(-tremble, tremble), rng:NextNumber(-tremble, tremble), rng:NextNumber(-tremble, tremble))
+		local pulse = 1 + 0.08 * math.sin(elapsed * 62) + 0.04 * math.sin(elapsed * 23)
+		orbCore.Size = Vector3.one * (size * pulse)
+		orbCore.Position = orb + jitter
+		orbShell.Size = Vector3.one * (size * 1.65 * pulse)
+		orbShell.Position = orb + jitter
+		orbHalo.Size = Vector3.one * (size * 3.1 * (2 - pulse))
+		orbHalo.Position = orb + jitter
+		light.Range = 8 + 18 * progress
+		light.Brightness = 1.2 + 3.4 * progress
+		haloAnchor.Position = orb
+		halo.Size = NumberSequence.new(size * (5 + 3 * progress) * pulse)
+		halo:Emit(1)
+
+		risers.Rate = (26 + 120 * progress) * quality
+
+		-- ki streaming into the orb
+		while nextStreak <= streakCount and elapsed >= (nextStreak - 1) / streakCount * duration * 0.78 do
+			nextStreak = nextStreak + 1
+			local direction = Vector3.new(rng:NextNumber(-1, 1), rng:NextNumber(-0.45, 1), rng:NextNumber(-1, 1))
+			if direction.Magnitude < 0.25 then
+				direction = Vector3.yAxis
+			end
+
+			local part = A4FX_Part("Streak", Enum.PartType.Block, Vector3.new(0.2, 0.2, 0.2), CORE, 1, folder)
+			local attachment0 = Instance.new("Attachment")
+			attachment0.Position = Vector3.new(0, 0.35, 0)
+			attachment0.Parent = part
+			local attachment1 = Instance.new("Attachment")
+			attachment1.Position = Vector3.new(0, -0.35, 0)
+			attachment1.Parent = part
+
+			local trail = Instance.new("Trail")
+			trail.Attachment0 = attachment0
+			trail.Attachment1 = attachment1
+			trail.Lifetime = 0.2
+			trail.LightEmission = 1
+			trail.LightInfluence = 0
+			trail.FaceCamera = true
+			trail.Color = ColorSequence.new({ ColorSequenceKeypoint.new(0, CORE), ColorSequenceKeypoint.new(0.5, MID), ColorSequenceKeypoint.new(1, EDGE) })
+			trail.Transparency = NumberSequence.new({ NSK(0, 0), NSK(1, 1) })
+			trail.WidthScale = NumberSequence.new({ NSK(0, 1), NSK(1, 0) })
+			trail.Parent = part
+
+			table.insert(streaks, {
+				part = part,
+				direction = direction.Unit,
+				radius = rng:NextNumber(10, 19),
+				born = elapsed,
+				life = math.max(0.16, math.min(rng:NextNumber(0.24, 0.4), duration - elapsed)),
+				spin = rng:NextNumber(1.2, 2.2) * (rng:NextInteger(0, 1) == 0 and 1 or -1),
+			})
+		end
+
+		for index = #streaks, 1, -1 do
+			local streak = streaks[index]
+			local t = (elapsed - streak.born) / streak.life
+			if t >= 1 then
+				streak.part:Destroy()
+				table.remove(streaks, index)
+			else
+				local swirl = CFrame.Angles(0, t * streak.spin, 0)
+				streak.part.Position = orb + swirl:VectorToWorldSpace(streak.direction) * streak.radius * (1 - t * t)
+			end
+		end
+
+		-- lightning snapping off the orb
+		if elapsed >= nextBolt then
+			nextBolt = elapsed + 0.13 - 0.09 * progress
+			local count = 1 + math.floor(progress * 2.4 * quality)
+			for _ = 1, count do
+				local dir = Vector3.new(rng:NextNumber(-1, 1), rng:NextNumber(-1, 1), rng:NextNumber(-1, 1))
+				if dir.Magnitude < 0.2 then dir = Vector3.yAxis end
+				dir = dir.Unit
+				A4FX_Bolt(folder, orb + dir * (size * 0.5), dir, rng:NextNumber(2.5, 5.5) + 4 * progress, 0.45 + 0.3 * progress, MID, CORE, rng)
+			end
+		end
+
+		-- lightning crawling over the body (the electric look of a powered-up Gohan)
+		if progress > 0.12 and elapsed >= nextBodyBolt then
+			nextBodyBolt = elapsed + 0.075
+			local count = math.max(1, math.floor((1 + progress * 2) * quality + 0.5))
+			for _ = 1, count do
+				local offset = Vector3.new(rng:NextNumber(-1.4, 1.4), rng:NextNumber(-2.4, 2.8), rng:NextNumber(-1, 1))
+				local dir = (offset.Unit * 0.7 + Vector3.new(0, 0.5, 0))
+				if dir.Magnitude < 0.1 then dir = Vector3.yAxis end
+				A4FX_Bolt(folder, root.Position + offset, dir.Unit, rng:NextNumber(2.2, 4.4), 0.4, MID, CORE, rng)
+			end
+		end
+
+		-- shockwave rings on the floor that get bigger as the power builds
+		if elapsed >= nextPulse and not thrustStart then
+			nextPulse = elapsed + 0.3
+			pulseCount = pulseCount + 1
+			groundPulse(progress)
+		end
+	end
+
+	step()
+	connection = runService.Heartbeat:Connect(step)
+
+	-- thrust the orb from the charge point to the muzzle
+	function controller.thrust(seconds)
+		if controller.finished or thrustStart then return end
+		thrustLength = math.max(seconds or 0.12, 0.03)
+		thrustStart = os.clock()
+	end
+
+	function controller.release()
+		if controller.finished then return end
+		stopLoop()
+		for _, streak in ipairs(streaks) do
+			streak.part:Destroy()
+		end
+		table.clear(streaks)
+		local info = TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+		tweenService:Create(orbHalo, info, { Size = orbHalo.Size * 1.6, Transparency = 1 }):Play()
+		tweenService:Create(orbShell, info, { Size = orbShell.Size * 1.8, Transparency = 1 }):Play()
+		tweenService:Create(orbCore, info, { Size = orbCore.Size * 0.4, Transparency = 1 }):Play()
+		tweenService:Create(light, info, { Brightness = 0 }):Play()
+		debris:AddItem(folder, 0.5)
+	end
+
+	function controller.abort()
+		stopLoop()
+		folder:Destroy()
+	end
+
+	task.delay(duration + 1.5, controller.abort)
+	return controller
+end
+
+-- ---------------------------------------------------------------------------
+-- BEAM: three-layer golden beam, twin helix strands, traveling rings, lightning, impact
+-- ---------------------------------------------------------------------------
+function Masenko_FireBeam(state)
+	local runService = game:GetService("RunService")
+	local tweenService = game:GetService("TweenService")
+	local debris = game:GetService("Debris")
+	local lighting = game:GetService("Lighting")
+	local NSK = NumberSequenceKeypoint.new
+	local quality = math.clamp(MASENKO_FX_QUALITY or 1, 0.4, 1)
+	local CORE, MID, EDGE = MASENKO_CORE_COLOR, MASENKO_MID_COLOR, MASENKO_EDGE_COLOR
+	local rng = Random.new()
+	local controller = { finished = false }
+
+	local root = HumanoidRootPart
+	local beamLength = MASENKO_BEAM_LENGTH
+	local radius = MASENKO_BEAM_RADIUS
+
+	local folder = Instance.new("Folder")
+	folder.Name = "MasenkoBeamFX"
+	folder.Parent = workspace
+	local debrisFolder = Instance.new("Folder")
+	debrisFolder.Name = "MasenkoBeamDebris"
+	debrisFolder.Parent = workspace
+	local lifeTotal = (MASENKO_BEAM_SECONDS or 1.4) + (MASENKO_FADE_SECONDS or 0.4) + 2.5
+	debris:AddItem(folder, lifeTotal)
+	debris:AddItem(debrisFolder, lifeTotal)
+	local ignore = A4FX_IgnoreList({ folder, debrisFolder })
+
+	local muzzle0 = Masenko_OrbPos(1)
+	local aim0 = root.CFrame.LookVector
+
+	-- beam body
+	local coreDiameter = radius * 0.85
+	local midDiameter = radius * 1.6
+	local edgeDiameter = radius * 2.5
+	local ringThickness = math.max(0.35, radius * 0.12)
+	local beamCore = A4FX_Part("BeamCore", Enum.PartType.Cylinder, Vector3.new(1, coreDiameter, coreDiameter), CORE, 0.05, folder)
+	local beamMid = A4FX_Part("BeamMid", Enum.PartType.Cylinder, Vector3.new(1, midDiameter, midDiameter), MID, 0.4, folder)
+	local beamEdge = A4FX_Part("BeamEdge", Enum.PartType.Cylinder, Vector3.new(1, edgeDiameter, edgeDiameter), EDGE, 0.74, folder)
+
+	-- muzzle
+	local muzzleCore = A4FX_Part("MuzzleCore", Enum.PartType.Ball, Vector3.one * radius, CORE, 0.03, folder)
+	local muzzleShell = A4FX_Part("MuzzleShell", Enum.PartType.Ball, Vector3.one * radius * 2, MID, 0.5, folder)
+	local muzzleHalo = A4FX_Part("MuzzleHalo", Enum.PartType.Ball, Vector3.one * radius * 3.4, EDGE, 0.8, folder)
+	local muzzleLight = Instance.new("PointLight")
+	muzzleLight.Color = MID
+	muzzleLight.Range = 16 + radius * 5
+	muzzleLight.Brightness = 6
+	muzzleLight.Shadows = false
+	muzzleLight.Parent = muzzleCore
+
+	local muzzleAnchor = A4FX_Anchor("MuzzleEmitter", folder)
+	local muzzleAttachment = Instance.new("Attachment")
+	muzzleAttachment.Parent = muzzleAnchor
+
+	local sparks = Instance.new("ParticleEmitter")
+	sparks.Texture = "rbxassetid://1084976679"
+	sparks.Color = ColorSequence.new(CORE, MID)
+	sparks.LightEmission = 1
+	sparks.LightInfluence = 0
+	sparks.Size = NumberSequence.new({ NSK(0, 0.9), NSK(1, 0.1) })
+	sparks.Transparency = NumberSequence.new({ NSK(0, 0), NSK(0.7, 0.2), NSK(1, 1) })
+	sparks.Lifetime = NumberRange.new(0.25, 0.5)
+	sparks.Speed = NumberRange.new(90, 190)
+	sparks.SpreadAngle = Vector2.new(11, 11)
+	sparks.EmissionDirection = Enum.NormalId.Front
+	sparks.Rate = 190 * quality
+	sparks.LockedToPart = false
+	sparks.Parent = muzzleAttachment
+
+	local flash = Instance.new("ParticleEmitter")
+	flash.Texture = "rbxassetid://1084999891"
+	flash.Color = ColorSequence.new(CORE, MID)
+	flash.LightEmission = 1
+	flash.LightInfluence = 0
+	flash.Size = NumberSequence.new({ NSK(0, radius * 3.2), NSK(1, radius * 12) })
+	flash.Transparency = NumberSequence.new({ NSK(0, 0.05), NSK(1, 1) })
+	flash.Lifetime = NumberRange.new(0.3, 0.3)
+	flash.Speed = NumberRange.new(0, 0)
+	flash.Rate = 0
+	flash.LockedToPart = true
+	flash.Parent = muzzleAttachment
+
+	-- impact
+	local impactAnchor = A4FX_Anchor("ImpactEmitter", folder)
+	local impactAttachment = Instance.new("Attachment")
+	impactAttachment.Parent = impactAnchor
+
+	local impactSparks = Instance.new("ParticleEmitter")
+	impactSparks.Texture = "rbxassetid://1084976679"
+	impactSparks.Color = ColorSequence.new(CORE, MID)
+	impactSparks.LightEmission = 1
+	impactSparks.LightInfluence = 0
+	impactSparks.Size = NumberSequence.new({ NSK(0, 0.8), NSK(1, 0.1) })
+	impactSparks.Transparency = NumberSequence.new({ NSK(0, 0), NSK(1, 1) })
+	impactSparks.Lifetime = NumberRange.new(0.3, 0.65)
+	impactSparks.Speed = NumberRange.new(35, 95)
+	impactSparks.SpreadAngle = Vector2.new(55, 55)
+	impactSparks.EmissionDirection = Enum.NormalId.Front
+	impactSparks.Acceleration = Vector3.new(0, -55, 0)
+	impactSparks.Rate = 130 * quality
+	impactSparks.Enabled = false
+	impactSparks.Parent = impactAttachment
+
+	local impactDust = Instance.new("ParticleEmitter")
+	impactDust.Texture = "rbxassetid://272050333"
+	impactDust.LightEmission = 0
+	impactDust.LightInfluence = 1
+	impactDust.Size = NumberSequence.new({ NSK(0, 3), NSK(1, 9) })
+	impactDust.Transparency = NumberSequence.new({ NSK(0, 0.55), NSK(1, 1) })
+	impactDust.Lifetime = NumberRange.new(0.6, 1)
+	impactDust.Speed = NumberRange.new(8, 22)
+	impactDust.SpreadAngle = Vector2.new(70, 70)
+	impactDust.EmissionDirection = Enum.NormalId.Front
+	impactDust.Acceleration = Vector3.new(0, 6, 0)
+	impactDust.Rate = 40 * quality
+	impactDust.Enabled = false
+	impactDust.Parent = impactAttachment
+
+	local impactFlash = A4FX_Part("ImpactFlash", Enum.PartType.Ball, Vector3.one * radius, CORE, 1, folder)
+	local impactGlow = A4FX_Part("ImpactGlow", Enum.PartType.Ball, Vector3.one * radius * 2, MID, 1, folder)
+	local impactLight = Instance.new("PointLight")
+	impactLight.Color = MID
+	impactLight.Range = 26
+	impactLight.Brightness = 0
+	impactLight.Shadows = false
+	impactLight.Parent = impactFlash
+
+	-- ki shed off the beam body (three emitters so several can fire in one frame)
+	local sheds = {}
+	for index = 1, 3 do
+		local anchor = A4FX_Anchor("ShedAnchor" .. index, folder)
+		local attachment = Instance.new("Attachment")
+		attachment.Parent = anchor
+		local shed = Instance.new("ParticleEmitter")
+		shed.Texture = "rbxassetid://1084976679"
+		shed.Color = ColorSequence.new(CORE, MID)
+		shed.LightEmission = 1
+		shed.LightInfluence = 0
+		shed.Size = NumberSequence.new({ NSK(0, 0.85), NSK(1, 0) })
+		shed.Transparency = NumberSequence.new({ NSK(0, 0), NSK(0.6, 0.3), NSK(1, 1) })
+		shed.Lifetime = NumberRange.new(0.3, 0.6)
+		shed.Speed = NumberRange.new(5, 15)
+		shed.SpreadAngle = Vector2.new(25, 25)
+		shed.EmissionDirection = Enum.NormalId.Front
+		shed.Rate = 0
+		shed.Parent = attachment
+		sheds[index] = { anchor = anchor, emitter = shed }
+	end
+
+	-- twin helix strands winding around the beam
+	local helixCount = (quality >= 0.6) and 2 or 0
+	local helixSegments = 20
+	local helixStrands = {}
+	local helixRibbons = {}
+	for strand = 1, helixCount do
+		local anchor = A4FX_Anchor("HelixAnchor" .. strand, folder)
+		local attachments = {}
+		for index = 1, helixSegments + 1 do
+			local attachment = Instance.new("Attachment")
+			attachment.Parent = anchor
+			attachments[index] = attachment
+		end
+		for index = 1, helixSegments do
+			local ribbon = Instance.new("Beam")
+			ribbon.Attachment0 = attachments[index]
+			ribbon.Attachment1 = attachments[index + 1]
+			ribbon.FaceCamera = true
+			ribbon.LightEmission = 1
+			ribbon.LightInfluence = 0
+			ribbon.Segments = 1
+			ribbon.Color = ColorSequence.new(strand == 1 and CORE or MID)
+			local width0 = radius * 0.3 * (1 - (index - 1) / helixSegments)
+			local width1 = radius * 0.3 * (1 - index / helixSegments)
+			ribbon.Width0 = width0
+			ribbon.Width1 = width1
+			ribbon.Transparency = NumberSequence.new(0.08 + 0.6 * ((index - 1) / helixSegments))
+			ribbon.Parent = anchor
+			helixRibbons[#helixRibbons + 1] = { ribbon = ribbon, w0 = width0, w1 = width1 }
+		end
+		helixStrands[strand] = attachments
+	end
+
+	-- opening burst
+	flash:Emit(1)
+	A4FX_Ring(debrisFolder, A4FX_Frame(muzzle0 + aim0 * 1.5, aim0), radius * 1.5, radius * 13, ringThickness, 0.4, CORE, 0.1)
+	task.delay(0.06, function()
+		A4FX_Ring(debrisFolder, A4FX_Frame(muzzle0 + aim0 * 2.5, aim0), radius * 1.5, radius * 18, ringThickness, 0.5, MID, 0.25)
+	end)
+	task.delay(0.12, function()
+		A4FX_Ring(debrisFolder, A4FX_Frame(muzzle0 + aim0 * 3.5, aim0), radius * 1.5, radius * 24, ringThickness * 0.8, 0.6, EDGE, 0.4)
+	end)
+
+	-- recoil: shockwave and debris under his feet
+	local groundHit = A4FX_Cast(root.Position, Vector3.new(0, -18, 0), ignore)
+	if groundHit then
+		local color, material = A4FX_SurfaceColor(groundHit)
+		local ringFrame = A4FX_Frame(groundHit.Position + groundHit.Normal * 0.15, groundHit.Normal)
+		A4FX_Ring(debrisFolder, ringFrame, 3, 62, 0.4, 0.5, MID, 0.2)
+		task.delay(0.07, function()
+			A4FX_Ring(debrisFolder, ringFrame, 3, 40, 0.3, 0.38, CORE, 0.2)
+		end)
+		task.delay(0.14, function()
+			A4FX_Ring(debrisFolder, ringFrame, 3, 80, 0.3, 0.55, EDGE, 0.45)
+		end)
+		Masenko_Dust(debrisFolder, groundHit.Position, color, math.floor(28 * quality), 48)
+		Masenko_Shards(debrisFolder, rng, groundHit.Position, groundHit.Normal, color, material, math.floor(16 * quality), 22, 54)
+	end
+
+	-- screen: bloom pop + short warm exposure flash
+	local bloom, flashCC
+	if ACTOR_IS_LOCAL then
+		bloom = Instance.new("BloomEffect")
+		bloom.Name = "MasenkoBeamBloom"
+		bloom.Intensity = 0
+		bloom.Size = 26
+		bloom.Threshold = 0.95
+		bloom.Parent = lighting
+		tweenService:Create(bloom, TweenInfo.new(0.06, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Intensity = 1 }):Play()
+
+		flashCC = Instance.new("ColorCorrectionEffect")
+		flashCC.Name = "MasenkoFlashCC"
+		flashCC.TintColor = Color3.fromRGB(255, 240, 200)
+		flashCC.Brightness = 0.32
+		flashCC.Parent = lighting
+		tweenService:Create(flashCC, TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Brightness = 0 }):Play()
+	end
+
+	local startTime = os.clock()
+	local launchTime = 0.07
+	local fadeStart, fadeDuration
+	local rings = {}
+	local ringIndex = 0
+	local nextRing, nextBolt, nextTrail, nextImpactRing, nextShed = 0, 0, 0, 0, 0
+	local hadHit = false
+	local lastHitInstance, hitColor, hitMaterial
+	local hitIsCharacter = false
+	local connection
+
+	local function cleanup()
+		if controller.finished then return end
+		controller.finished = true
+		if connection then connection:Disconnect() end
+		if bloom then bloom:Destroy() end
+		if flashCC then flashCC:Destroy() end
+		folder:Destroy()
+	end
+
+	local function step()
+		if controller.finished then return end
+		if not root.Parent then
+			cleanup()
+			return
+		end
+
+		local now = os.clock()
+		local elapsed = now - startTime
+		local fadeAlpha = 0
+		if fadeStart then
+			fadeAlpha = math.clamp((now - fadeStart) / fadeDuration, 0, 1)
+			if fadeAlpha >= 1 then
+				cleanup()
+				return
+			end
+		end
+		local keep = 1 - fadeAlpha
+
+		local currentCF = root.CFrame
+		local aim = currentCF.LookVector
+		local muzzle = Masenko_OrbPos(1)
+		state.orbPos = muzzle
+
+		local aimRight = aim:Cross(Vector3.yAxis)
+		if aimRight.Magnitude < 0.01 then
+			aimRight = Vector3.xAxis
+		end
+		aimRight = aimRight.Unit
+		local aimUp = aimRight:Cross(aim).Unit
+
+		local hit = A4FX_Cast(muzzle, aim * beamLength, ignore)
+		local length = hit and math.max((hit.Position - muzzle).Magnitude, 1) or beamLength
+
+		local launch = math.clamp(elapsed / launchTime, 0, 1)
+		local launchEase = 1 - (1 - launch) * (1 - launch)
+		local visibleLength = math.max(length * launchEase, 0.5)
+		local flicker = 1 + math.noise(elapsed * 38, 3.1, 0.5) * 0.3
+		local breathe = 1 + 0.07 * math.sin(elapsed * 57)
+		-- the beam thins out during the fade instead of just going transparent
+		local thin = 1 - 0.55 * fadeAlpha
+
+		beamCore.Size = Vector3.new(visibleLength, coreDiameter * flicker * thin, coreDiameter * flicker * thin)
+		beamCore.CFrame = A4FX_Frame(muzzle + aim * (visibleLength / 2), aim)
+		beamCore.Transparency = 0.05 + 0.95 * fadeAlpha
+		beamMid.Size = Vector3.new(visibleLength, midDiameter * (2 - flicker) * breathe * thin, midDiameter * (2 - flicker) * breathe * thin)
+		beamMid.CFrame = beamCore.CFrame
+		beamMid.Transparency = 0.4 + 0.6 * fadeAlpha
+		beamEdge.Size = Vector3.new(visibleLength, edgeDiameter * flicker * (2 - breathe) * thin, edgeDiameter * flicker * (2 - breathe) * thin)
+		beamEdge.CFrame = beamCore.CFrame
+		beamEdge.Transparency = 0.74 + 0.26 * fadeAlpha
+
+		-- muzzle: pops big on release, then settles
+		local pop = 1 + 1.3 * math.max(0, 1 - elapsed / 0.16)
+		local orbSize = radius * 1.7 * pop * flicker * thin
+		muzzleCore.Size = Vector3.one * orbSize
+		muzzleCore.Position = muzzle
+		muzzleCore.Transparency = 0.03 + 0.97 * fadeAlpha
+		muzzleShell.Size = Vector3.one * (orbSize * 1.7)
+		muzzleShell.Position = muzzle
+		muzzleShell.Transparency = 0.5 + 0.5 * fadeAlpha
+		muzzleHalo.Size = Vector3.one * (orbSize * 2.6)
+		muzzleHalo.Position = muzzle
+		muzzleHalo.Transparency = 0.8 + 0.2 * fadeAlpha
+		muzzleLight.Brightness = 6 * keep
+		muzzleAnchor.CFrame = A4FX_LookFrame(muzzle, aim)
+
+		-- helix strands
+		if helixCount > 0 then
+			local span = math.min(visibleLength, 62)
+			for strand = 1, helixCount do
+				local attachments = helixStrands[strand]
+				for index = 0, helixSegments do
+					local distance = span * (index / helixSegments)
+					local angle = elapsed * 15 - distance * 0.4 + (strand - 1) * math.pi
+					local reach = radius * 1.3 * (1 + 0.1 * math.sin(elapsed * 31 + index * 0.6)) * thin
+					local offset = aimRight * (math.cos(angle) * reach) + aimUp * (math.sin(angle) * reach)
+					attachments[index + 1].WorldPosition = muzzle + aim * distance + offset
+				end
+			end
+			if fadeStart then
+				for _, entry in ipairs(helixRibbons) do
+					entry.ribbon.Width0 = entry.w0 * keep
+					entry.ribbon.Width1 = entry.w1 * keep
+				end
+			end
+		end
+
+		-- rings racing down the beam
+		if not fadeStart and elapsed >= nextRing then
+			nextRing = elapsed + 0.065
+			if #rings < 12 then
+				ringIndex = ringIndex + 1
+				local ringColor = (ringIndex % 3 == 0) and EDGE or ((ringIndex % 2 == 0) and CORE or MID)
+				table.insert(rings, {
+					part = A4FX_Part("PulseRing", Enum.PartType.Cylinder, Vector3.new(ringThickness, radius * 2.4, radius * 2.4), ringColor, 0.2, folder),
+					born = elapsed,
+				})
+			end
+		end
+		for index = #rings, 1, -1 do
+			local ring = rings[index]
+			local age = (elapsed - ring.born) / 0.26
+			local distance = length * age
+			if age >= 1 or distance >= length then
+				ring.part:Destroy()
+				table.remove(rings, index)
+			else
+				local diameter = radius * 2.4 * (0.85 + 0.5 * age)
+				ring.part.Size = Vector3.new(ringThickness, diameter, diameter)
+				ring.part.CFrame = A4FX_Frame(muzzle + aim * distance, aim)
+				ring.part.Transparency = math.clamp(0.2 + 0.8 * age * age + fadeAlpha, 0, 1)
+			end
+		end
+
+		-- lightning wrapping the beam
+		if not fadeStart and elapsed >= nextBolt then
+			nextBolt = elapsed + 0.045
+			for _ = 1, math.max(1, math.floor(2.5 * quality + 0.5)) do
+				local angle = rng:NextNumber(0, math.pi * 2)
+				local radial = aimRight * math.cos(angle) + aimUp * math.sin(angle)
+				local startAt = muzzle + aim * (rng:NextNumber(0.03, 0.92) * length) + radial * (radius * rng:NextNumber(0.8, 1.35))
+				local direction = (aim * rng:NextNumber(0.5, 1) + radial * rng:NextNumber(-0.1, 1)).Unit
+				A4FX_Bolt(folder, startAt, direction, rng:NextNumber(6, 16), radius * 0.4, (rng:NextInteger(0, 2) == 0) and EDGE or MID, CORE, rng)
+			end
+		end
+
+		-- ki motes peeling off the beam surface
+		if not fadeStart and elapsed >= nextShed then
+			nextShed = elapsed + 0.03
+			for index = 1, #sheds do
+				local angle = rng:NextNumber(0, math.pi * 2)
+				local radial = aimRight * math.cos(angle) + aimUp * math.sin(angle)
+				local at = muzzle + aim * (rng:NextNumber(0.02, 0.95) * length) + radial * (radius * rng:NextNumber(1, 1.5))
+				sheds[index].anchor.CFrame = A4FX_LookFrame(at, radial * 0.8 + aim * 0.45)
+				sheds[index].emitter:Emit(math.max(1, math.floor(2 * quality + 0.5)))
+			end
+		end
+
+		-- impact
+		if hit then
+			local normal = hit.Normal
+			impactAnchor.CFrame = A4FX_LookFrame(hit.Position, normal)
+
+			if hit.Instance ~= lastHitInstance then
+				lastHitInstance = hit.Instance
+				hitColor, hitMaterial = A4FX_SurfaceColor(hit)
+				local owner = hit.Instance:FindFirstAncestorOfClass("Model")
+				hitIsCharacter = owner ~= nil and owner:FindFirstChildOfClass("Humanoid") ~= nil
+				impactDust.Color = ColorSequence.new(hitColor:Lerp(Color3.fromRGB(170, 170, 170), 0.45))
+			end
+
+			impactSparks.Enabled = not fadeStart
+			impactDust.Enabled = (not fadeStart) and not hitIsCharacter
+
+			local impactSize = radius * 2.3 * flicker * thin
+			impactFlash.Size = Vector3.one * impactSize
+			impactFlash.Position = hit.Position + normal * (impactSize * 0.2)
+			impactFlash.Transparency = 0.2 + 0.8 * fadeAlpha
+			impactGlow.Size = Vector3.one * (impactSize * 1.9)
+			impactGlow.Position = impactFlash.Position
+			impactGlow.Transparency = 0.6 + 0.4 * fadeAlpha
+			impactLight.Brightness = 4.5 * keep
+
+			if not hadHit then
+				hadHit = true
+				A4FX_Ring(debrisFolder, A4FX_Frame(hit.Position + normal * 0.2, normal), radius * 1.5, radius * 15, ringThickness, 0.45, CORE, 0.1)
+				task.delay(0.08, function()
+					A4FX_Ring(debrisFolder, A4FX_Frame(hit.Position + normal * 0.25, normal), radius * 1.5, radius * 21, ringThickness * 0.8, 0.55, EDGE, 0.35)
+				end)
+				impactSparks:Emit(math.floor(48 * quality))
+				if not hitIsCharacter then
+					Masenko_Dust(debrisFolder, hit.Position, hitColor, math.floor(22 * quality), 42)
+					Masenko_Shards(debrisFolder, rng, hit.Position, normal, hitColor, hitMaterial, math.floor(14 * quality), 25, 58)
+				end
+			end
+			if not fadeStart and elapsed >= nextImpactRing then
+				nextImpactRing = elapsed + 0.14
+				A4FX_Ring(debrisFolder, A4FX_Frame(hit.Position + normal * 0.2, normal), radius, radius * 6.5, ringThickness * 0.8, 0.3, MID, 0.35)
+			end
+		else
+			impactSparks.Enabled = false
+			impactDust.Enabled = false
+			impactFlash.Transparency = 1
+			impactGlow.Transparency = 1
+			impactLight.Brightness = 0
+		end
+
+		-- ground scorch + debris along the path of the beam
+		if not fadeStart and elapsed >= nextTrail then
+			nextTrail = elapsed + 0.07
+			local low = math.min(5, length)
+			local high = math.max(low, math.min(length, 70))
+			local probe = muzzle + aim * rng:NextNumber(low, high)
+			local ground = A4FX_Cast(probe + Vector3.new(0, 4, 0), Vector3.new(0, -34, 0), ignore)
+			if ground and (probe.Y - ground.Position.Y) < 24 then
+				local owner = ground.Instance:FindFirstAncestorOfClass("Model")
+				if not (owner and owner:FindFirstChildOfClass("Humanoid")) then
+					local color, material = A4FX_SurfaceColor(ground)
+					Masenko_Dust(debrisFolder, ground.Position, color, math.floor(5 * quality + 0.5), 26)
+					Masenko_Shards(debrisFolder, rng, ground.Position, ground.Normal, color, material, math.floor(3 * quality + 0.5), 18, 40)
+				end
+			end
+		end
+	end
+
+	step()
+	connection = runService.Heartbeat:Connect(step)
+
+	function controller.fade(seconds)
+		if controller.finished or fadeStart then return end
+		fadeStart = os.clock()
+		fadeDuration = math.max(seconds or 0.3, 0.05)
+		sparks.Enabled = false
+		if bloom then
+			tweenService:Create(bloom, TweenInfo.new(fadeDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Intensity = 0 }):Play()
+		end
+	end
+
+	function controller.abort()
+		cleanup()
+	end
+
+	task.delay(lifeTotal - 0.5, cleanup)
+	return controller
+end
+
+-- ---------------------------------------------------------------------------
+-- the whole Masenko: animation -> charge -> thrust -> beam -> fade
+-- ---------------------------------------------------------------------------
+function PlayMasenko()
+	local state = { orbPos = nil }
+	local animTrack, camera, lighting, charge, beam
+
+	local function playSlot(url, name, volume)
+		if not url or url == "" then return end
+		task.spawn(function()
+			local okSound, sound = pcall(GetGitSound, url, name, volume)
+			if okSound and sound then
+				game:GetService("Debris"):AddItem(sound, 20)
+				sound:Play()
+			else
+				warn("[Masenko] sound failed to load:", name)
+			end
+		end)
+	end
+
+	local ok, err = pcall(function()
+		if GOHAN_MASENKO_ANIM_ID and GOHAN_MASENKO_ANIM_ID ~= "" then
+			local id = tostring(GOHAN_MASENKO_ANIM_ID):match("%d+")
+			if id then
+				local anim = Instance.new("Animation")
+				anim.AnimationId = "rbxassetid://" .. id
+				animTrack = Animator:LoadAnimation(anim)
+				animTrack:Play(0)
+				animTrack.TimePosition = GOHAN_MASENKO_ANIM_START or 0
+				animTrack:AdjustSpeed(GOHAN_MASENKO_ANIM_SPEED or 1)
+			end
+		end
+
+		playSlot(MASENKO_CHARGE_SFX_URL, "MasenkoCharge", 2)
+		playSlot(MASENKO_VOICE_SFX_URL, "MasenkoVoice", 2)
+
+		local chargeSeconds = math.max(MASENKO_CHARGE_SECONDS, 0.2)
+		local thrustSeconds = math.clamp(MASENKO_THRUST_SECONDS, 0.03, chargeSeconds * 0.5)
+
+		-- same camera (zoom -> FOV punch + shake) and same lighting/lens flare as Goku's Attack 4
+		camera = StartAttack4Camera()
+		lighting = StartAttack4Lighting(HumanoidRootPart, function()
+			return state.orbPos
+		end, Masenko_LightingStyle())
+		charge = Masenko_StartCharge(chargeSeconds, state)
+
+		task.wait(chargeSeconds - thrustSeconds)
+		charge.thrust(thrustSeconds)
+		task.wait(thrustSeconds)
+
+		charge.release()
+		camera.burst()
+		beam = Masenko_FireBeam(state)
+		playSlot(MASENKO_BEAM_SFX_URL, "MasenkoBeam", 2)
+		lighting.flareBoost = 1.6
+
+		task.wait(MASENKO_BEAM_SECONDS)
+		camera.restore()
+		beam.fade(MASENKO_FADE_SECONDS)
+		lighting.release()
+		task.wait(MASENKO_FADE_SECONDS)
+	end)
+
+	if not ok then
+		warn("[Masenko] Error:", err)
+		if charge then charge.abort() end
+		if beam then beam.abort() end
+		if camera then camera.restore() end
+		if lighting then lighting.abort() end
+	end
+	if animTrack then
+		pcall(function() animTrack:Stop(0.25) end)
+	end
+end
+
+-- Gohan dispatch: ONLY the Attack 4 trigger does anything (-> Masenko).
+-- Attacks 1, 2, 3 and 5 are ignored, so the game's own animations just play.
+function ScanTracksGohan(tracks)
+	local sawBlocked = false
+	for _, track in ipairs(tracks) do
+		local animationId = (track.Animation and track.Animation.AnimationId) or ""
+		if string.find(animationId, TRIGGER_ANIM_IDS.ATTACK4) then
+			if track == masenkoBlockedTrack then
+				sawBlocked = true
+			elseif not masenkoRunning then
+				masenkoRunning = true
+				masenkoBlockedTrack = track
+				sawBlocked = true
+				-- with your own Masenko animation set, the game's one is replaced; without it, it keeps playing
+				if GOHAN_MASENKO_ANIM_ID and GOHAN_MASENKO_ANIM_ID ~= "" then
+					pcall(function() track:Stop(0) end)
+				end
+				task.spawn(function()
+					PlayMasenko()
+					masenkoRunning = false
+				end)
+			end
+		end
+	end
+	if masenkoBlockedTrack and not sawBlocked then
+		masenkoBlockedTrack = nil
+	end
+end
+
 RunService = game:GetService("RunService")
 sequenceRunning = false
 attack2Running = false
@@ -8115,6 +9197,10 @@ attack4Running = false
 attack5Running = false
 
 function ScanTracks(tracks)
+	-- GX-Gohan: swap the whole moveset (checked every scan, so saying the phrase later still works)
+	if ACTOR_IS_LOCAL and GohanMode and GohanMode.active then
+		return ScanTracksGohan(tracks)
+	end
 	for _, track in ipairs(tracks) do
 		
 		if not sequenceRunning and string.find(track.Animation.AnimationId, TRIGGER_ANIM_IDS.ATTACK1) then
