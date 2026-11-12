@@ -36,10 +36,10 @@ MASENKO_ANIM_JSON_URL  = "https://raw.githubusercontent.com/NetlessScripter/THE-
 MASENKO_ANIM_JSON_FILE = "anim6d_kfcache_72050739423303.json"
 
 -- Masenko timing
-MASENKO_CHARGE_SECONDS = 0.4    -- trigger -> beam release
+MASENKO_CHARGE_SECONDS = 0.3    -- trigger -> beam release
 MASENKO_THRUST_SECONDS = 0.12   -- the orb snaps from the charge point to the muzzle in this time
-MASENKO_BEAM_SECONDS   = 0.5    -- how long the beam stays up
-MASENKO_FADE_SECONDS   = 0.4
+MASENKO_BEAM_SECONDS   = 0.3    -- how long the beam stays up
+MASENKO_FADE_SECONDS   = 0.2
 
 -- Masenko placement. Offsets are relative to HumanoidRootPart (-Z is forward).
 MASENKO_CHARGE_OFFSET = Vector3.new(0, 3.4, -1.6)   -- where the orb gathers (above the forehead)
