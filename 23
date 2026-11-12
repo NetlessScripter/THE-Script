@@ -37,7 +37,7 @@ GOHAN_MASENKO_ANIM_START = 0    -- TimePosition to start the animation at
 GOHAN_MASENKO_ANIM_SPEED = 1
 
 -- Masenko timing
-MASENKO_CHARGE_SECONDS = 1.0    -- trigger -> beam release (line this up with the thrust in your animation)
+MASENKO_CHARGE_SECONDS = 0.6    -- trigger -> beam release (same as Goku's Attack 4 charge)
 MASENKO_THRUST_SECONDS = 0.12   -- the orb snaps from the charge point to the muzzle in this time
 MASENKO_BEAM_SECONDS   = 1.4    -- how long the beam stays up
 MASENKO_FADE_SECONDS   = 0.4
