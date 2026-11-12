@@ -8351,8 +8351,8 @@ function Masenko_StartCharge(duration, state)
 	local thrustAlpha = 0
 
 	-- the orb: hot white core, golden body, orange outer glow
-	local orbHalo = A4FX_Part("OrbHalo", Enum.PartType.Ball, Vector3.one, EDGE, 0.92, folder)
-	local orbShell = A4FX_Part("OrbShell", Enum.PartType.Ball, Vector3.one * 0.6, MID, 0.6, folder)
+	local orbHalo = A4FX_Part("OrbHalo", Enum.PartType.Ball, Vector3.one, EDGE, 0.82, folder)
+	local orbShell = A4FX_Part("OrbShell", Enum.PartType.Ball, Vector3.one * 0.6, MID, 0.4, folder)
 	local orbCore = A4FX_Part("OrbCore", Enum.PartType.Ball, Vector3.one * 0.4, CORE, 0, folder)
 	local light = Instance.new("PointLight")
 	light.Color = MID
@@ -8375,7 +8375,7 @@ function Masenko_StartCharge(duration, state)
 	halo.Speed = NumberRange.new(0)
 	halo.LockedToPart = true
 	halo.ZOffset = -1
-	halo.Transparency = NumberSequence.new(0.75)
+	halo.Transparency = NumberSequence.new(0.35)
 	halo.Parent = haloAttachment
 
 	-- sparks rising off the body while he powers up
@@ -8452,12 +8452,12 @@ function Masenko_StartCharge(duration, state)
 		orbCore.Position = orb + jitter
 		orbShell.Size = Vector3.one * (size * 1.65 * pulse)
 		orbShell.Position = orb + jitter
-		orbHalo.Size = Vector3.one * (size * 2.2 * (2 - pulse))
+		orbHalo.Size = Vector3.one * (size * 3.1 * (2 - pulse))
 		orbHalo.Position = orb + jitter
-		light.Range = 8 + 10 * progress
-		light.Brightness = 0.6 + 1.4 * progress
+		light.Range = 8 + 18 * progress
+		light.Brightness = 1.2 + 3.4 * progress
 		haloAnchor.Position = orb
-		halo.Size = NumberSequence.new(size * (3 + 2 * progress) * pulse)
+		halo.Size = NumberSequence.new(size * (5 + 3 * progress) * pulse)
 		halo:Emit(1)
 
 		risers.Rate = (26 + 120 * progress) * quality
