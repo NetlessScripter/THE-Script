@@ -46,11 +46,6 @@ MASENKO_CHARGE_OFFSET = Vector3.new(0, 3.4, -1.6)   -- where the orb gathers (ab
 MASENKO_MUZZLE_OFFSET = Vector3.new(0, 1.4, -3.2)   -- where the beam leaves from
 MASENKO_USE_HANDS     = true    -- true = orb + muzzle follow the midpoint of both hands
 
--- Masenko camera FOV: zoom out while charging -> burst -> settle -> back to your normal FOV after the beam
-MASENKO_CHARGE_FOV = 90
-MASENKO_BURST_FOV  = 120
-MASENKO_SETTLE_FOV = 50
-
 -- Masenko look
 MASENKO_BEAM_LENGTH = 120
 MASENKO_BEAM_RADIUS = 3.2
@@ -2913,10 +2908,8 @@ end
 
 attack4CameraController = nil
 
-function StartAttack4Camera(cfg)
-	local zoomFov = (cfg and cfg.zoomFov) or ATTACK4_ZOOM_FOV
-	local burstFov = (cfg and cfg.burstFov) or ATTACK4_BURST_FOV
-	local settleFov = (cfg and cfg.settleFov) or ATTACK4_SETTLE_FOV
+function StartAttack4Camera(zoomSeconds)
+	zoomSeconds = zoomSeconds or ATTACK4_ZOOM_SECONDS
 	if not ACTOR_IS_LOCAL then
 		return { finished = true, burst = function() end, restore = function() end }
 	end
@@ -2969,15 +2962,15 @@ function StartAttack4Camera(cfg)
 		if not fovReleased then
 			local targetFov
 			if phase == "zoom" then
-				local alpha = math.clamp(phaseElapsed / ATTACK4_ZOOM_SECONDS, 0, 1)
-				targetFov = lerp(phaseStartFov, zoomFov, easeInOut(alpha))
+				local alpha = math.clamp(phaseElapsed / zoomSeconds, 0, 1)
+				targetFov = lerp(phaseStartFov, ATTACK4_ZOOM_FOV, easeInOut(alpha))
 			elseif phase == "burst" then
 				if phaseElapsed < ATTACK4_BURST_RISE_SECONDS then
 					local alpha = phaseElapsed / ATTACK4_BURST_RISE_SECONDS
-					targetFov = lerp(phaseStartFov, burstFov, easeOut(alpha))
+					targetFov = lerp(phaseStartFov, ATTACK4_BURST_FOV, easeOut(alpha))
 				else
 					local alpha = math.clamp((phaseElapsed - ATTACK4_BURST_RISE_SECONDS) / ATTACK4_SETTLE_SECONDS, 0, 1)
-					targetFov = lerp(burstFov, settleFov, easeOut(alpha))
+					targetFov = lerp(ATTACK4_BURST_FOV, ATTACK4_SETTLE_FOV, easeOut(alpha))
 				end
 			else
 				local alpha = math.clamp(phaseElapsed / ATTACK4_RESTORE_SECONDS, 0, 1)
@@ -9094,8 +9087,8 @@ function PlayMasenko()
 		local chargeSeconds = math.max(MASENKO_CHARGE_SECONDS, 0.2)
 		local thrustSeconds = math.clamp(MASENKO_THRUST_SECONDS, 0.03, chargeSeconds * 0.5)
 
-		-- Goku's Attack 4 camera (shake + timing) with Masenko FOVs, and the same lighting/lens flare
-		camera = StartAttack4Camera({ zoomFov = MASENKO_CHARGE_FOV, burstFov = MASENKO_BURST_FOV, settleFov = MASENKO_SETTLE_FOV })
+		-- Goku's Attack 4 camera tweens (zoom length fitted to our charge), same lighting/lens flare
+		camera = StartAttack4Camera(chargeSeconds)
 		lighting = StartAttack4Lighting(HumanoidRootPart, function()
 			return state.orbPos
 		end, Masenko_LightingStyle())
