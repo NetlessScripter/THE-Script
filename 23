@@ -31,10 +31,9 @@ ATTACK2_COOLDOWN = 3
 GOHAN_LABEL_TEXT    = "Masenko"
 GOHAN_FORCE_ENABLED = false     -- true = skip the label check (handy for testing)
 
--- Masenko animation (fill this in when you find it)
-GOHAN_MASENKO_ANIM_ID    = ""   -- numbers only, e.g. "1234567890". Empty = the game's own Attack 4 animation keeps playing
-GOHAN_MASENKO_ANIM_START = 0    -- TimePosition to start the animation at
-GOHAN_MASENKO_ANIM_SPEED = 1
+-- Masenko animation: same Animator6D system as Goku's Attack 4, just a different keyframe JSON
+MASENKO_ANIM_JSON_URL  = "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/anim6d_kfcache_72050739423303.json"
+MASENKO_ANIM_JSON_FILE = "anim6d_kfcache_72050739423303.json"
 
 -- Masenko timing
 MASENKO_CHARGE_SECONDS = 0.6    -- trigger -> beam release (same as Goku's Attack 4 charge)
@@ -46,6 +45,11 @@ MASENKO_FADE_SECONDS   = 0.4
 MASENKO_CHARGE_OFFSET = Vector3.new(0, 3.4, -1.6)   -- where the orb gathers (above the forehead)
 MASENKO_MUZZLE_OFFSET = Vector3.new(0, 1.4, -3.2)   -- where the beam leaves from
 MASENKO_USE_HANDS     = true    -- true = orb + muzzle follow the midpoint of both hands
+
+-- Masenko camera FOV: zoom out while charging -> burst -> settle -> back to your normal FOV after the beam
+MASENKO_CHARGE_FOV = 90
+MASENKO_BURST_FOV  = 120
+MASENKO_SETTLE_FOV = 50
 
 -- Masenko look
 MASENKO_BEAM_LENGTH = 120
@@ -1424,6 +1428,55 @@ do
 	end
 
 	ATTACK4_KFS = _attack4KFS
+end
+
+do
+	local _HttpService = game:GetService("HttpService")
+	local _jsonBody
+	if isfile and isfile(MASENKO_ANIM_JSON_FILE) then
+		local ok, raw = pcall(readfile, MASENKO_ANIM_JSON_FILE)
+		if ok and raw and #raw > 100 then _jsonBody = raw end
+	end
+	if not _jsonBody then
+		local ok, body = pcall(game.HttpGet, game, MASENKO_ANIM_JSON_URL)
+		if ok and body and #body > 100 then
+			_jsonBody = body
+			if writefile then writefile(MASENKO_ANIM_JSON_FILE, body) end
+		else
+			warn("[Masenko] Failed to fetch JSON cache")
+		end
+	end
+
+	MASENKO_KFS = nil
+	if _jsonBody then
+		local ok, data = pcall(_HttpService.JSONDecode, _HttpService, _jsonBody)
+		if ok and data and data.KeyframeData and data.KeyframeData.Frames then
+			local kfs = Instance.new("KeyframeSequence")
+			kfs.Loop = data.KeyframeData.Loop or false
+			kfs.Name = "MasenkoKFS"
+			for _, f in ipairs(data.KeyframeData.Frames) do
+				local kf = Instance.new("Keyframe")
+				kf.Time = f.Time
+				for boneName, poseData in pairs(f.Poses) do
+					local pose = Instance.new("Pose")
+					pose.Name = boneName
+					local cf = poseData.CFrame
+					pose.CFrame = CFrame.new(
+						cf[1],  cf[2],  cf[3],
+						cf[4],  cf[5],  cf[6],
+						cf[7],  cf[8],  cf[9],
+						cf[10], cf[11], cf[12]
+					)
+					pcall(function() pose.EasingStyle    = Enum.EasingStyle[poseData.EasingStyle or "Linear"] end)
+					pcall(function() pose.EasingDirection = Enum.EasingDirection[poseData.EasingDirection or "Out"] end)
+					pose.Parent = kf
+				end
+				kf.Parent = kfs
+			end
+			kfs.Parent = nil
+			MASENKO_KFS = kfs
+		end
+	end
 end
 
 
@@ -2860,7 +2913,10 @@ end
 
 attack4CameraController = nil
 
-function StartAttack4Camera()
+function StartAttack4Camera(cfg)
+	local zoomFov = (cfg and cfg.zoomFov) or ATTACK4_ZOOM_FOV
+	local burstFov = (cfg and cfg.burstFov) or ATTACK4_BURST_FOV
+	local settleFov = (cfg and cfg.settleFov) or ATTACK4_SETTLE_FOV
 	if not ACTOR_IS_LOCAL then
 		return { finished = true, burst = function() end, restore = function() end }
 	end
@@ -2914,14 +2970,14 @@ function StartAttack4Camera()
 			local targetFov
 			if phase == "zoom" then
 				local alpha = math.clamp(phaseElapsed / ATTACK4_ZOOM_SECONDS, 0, 1)
-				targetFov = lerp(phaseStartFov, ATTACK4_ZOOM_FOV, easeInOut(alpha))
+				targetFov = lerp(phaseStartFov, zoomFov, easeInOut(alpha))
 			elseif phase == "burst" then
 				if phaseElapsed < ATTACK4_BURST_RISE_SECONDS then
 					local alpha = phaseElapsed / ATTACK4_BURST_RISE_SECONDS
-					targetFov = lerp(phaseStartFov, ATTACK4_BURST_FOV, easeOut(alpha))
+					targetFov = lerp(phaseStartFov, burstFov, easeOut(alpha))
 				else
 					local alpha = math.clamp((phaseElapsed - ATTACK4_BURST_RISE_SECONDS) / ATTACK4_SETTLE_SECONDS, 0, 1)
-					targetFov = lerp(ATTACK4_BURST_FOV, ATTACK4_SETTLE_FOV, easeOut(alpha))
+					targetFov = lerp(burstFov, settleFov, easeOut(alpha))
 				end
 			else
 				local alpha = math.clamp(phaseElapsed / ATTACK4_RESTORE_SECONDS, 0, 1)
@@ -9010,7 +9066,7 @@ end
 -- ---------------------------------------------------------------------------
 function PlayMasenko()
 	local state = { orbPos = nil }
-	local animTrack, camera, lighting, charge, beam
+	local camera, lighting, charge, beam
 
 	local function playSlot(url, name, volume)
 		if not url or url == "" then return end
@@ -9026,16 +9082,10 @@ function PlayMasenko()
 	end
 
 	local ok, err = pcall(function()
-		if GOHAN_MASENKO_ANIM_ID and GOHAN_MASENKO_ANIM_ID ~= "" then
-			local id = tostring(GOHAN_MASENKO_ANIM_ID):match("%d+")
-			if id then
-				local anim = Instance.new("Animation")
-				anim.AnimationId = "rbxassetid://" .. id
-				animTrack = Animator:LoadAnimation(anim)
-				animTrack:Play(0)
-				animTrack.TimePosition = GOHAN_MASENKO_ANIM_START or 0
-				animTrack:AdjustSpeed(GOHAN_MASENKO_ANIM_SPEED or 1)
-			end
+		if MASENKO_KFS then
+			Animator6D(MASENKO_KFS, 1, false, Character)
+		else
+			warn("[Masenko] animation KFS not built - cannot play")
 		end
 
 		playSlot(MASENKO_CHARGE_SFX_URL, "MasenkoCharge", 2)
@@ -9044,8 +9094,8 @@ function PlayMasenko()
 		local chargeSeconds = math.max(MASENKO_CHARGE_SECONDS, 0.2)
 		local thrustSeconds = math.clamp(MASENKO_THRUST_SECONDS, 0.03, chargeSeconds * 0.5)
 
-		-- same camera (zoom -> FOV punch + shake) and same lighting/lens flare as Goku's Attack 4
-		camera = StartAttack4Camera()
+		-- Goku's Attack 4 camera (shake + timing) with Masenko FOVs, and the same lighting/lens flare
+		camera = StartAttack4Camera({ zoomFov = MASENKO_CHARGE_FOV, burstFov = MASENKO_BURST_FOV, settleFov = MASENKO_SETTLE_FOV })
 		lighting = StartAttack4Lighting(HumanoidRootPart, function()
 			return state.orbPos
 		end, Masenko_LightingStyle())
@@ -9059,8 +9109,6 @@ function PlayMasenko()
 
 		charge.release()
 		camera.burst()
-		local fovCam = camera
-		task.delay(0.6, function() fovCam.restore() end) -- Goku's Attack 4 restores the FOV 0.6s after the burst
 		beam = Masenko_FireBeam(state)
 		playSlot(MASENKO_BEAM_SFX_URL, "MasenkoBeam", 2)
 		lighting.flareBoost = 1.6
@@ -9079,9 +9127,6 @@ function PlayMasenko()
 		if camera then camera.restore() end
 		if lighting then lighting.abort() end
 	end
-	if animTrack then
-		pcall(function() animTrack:Stop(0.25) end)
-	end
 end
 
 -- Gohan dispatch: ONLY the Attack 4 trigger does anything (-> Masenko).
@@ -9097,10 +9142,8 @@ function ScanTracksGohan(tracks)
 				masenkoRunning = true
 				masenkoBlockedTrack = track
 				sawBlocked = true
-				-- with your own Masenko animation set, the game's one is replaced; without it, it keeps playing
-				if GOHAN_MASENKO_ANIM_ID and GOHAN_MASENKO_ANIM_ID ~= "" then
-					pcall(function() track:Stop(0) end)
-				end
+				-- the game's Attack 4 animation is replaced by the Masenko one
+				pcall(function() track:Stop(0) end)
 				task.spawn(function()
 					PlayMasenko()
 					masenkoRunning = false
