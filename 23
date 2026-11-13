@@ -56,7 +56,7 @@ MASENKO_MID_COLOR   = Color3.fromRGB(255, 212, 62)
 MASENKO_EDGE_COLOR  = Color3.fromRGB(255, 128, 16)
 
 -- Masenko sounds (direct links to an mp3, empty = silent)
-MASENKO_CHARGE_SFX_URL = "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/57CE2A51-621D-42AE-86B7-FB67090BAE74.mp3"
+MASENKO_CHARGE_SFX_URL = "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/3324C42D-3338-4970-B364-B619BA855EDA.mp3"
 MASENKO_BEAM_SFX_URL   = ""
 MASENKO_VOICE_SFX_URL  = ""
 
@@ -9081,7 +9081,7 @@ function PlayMasenko()
 			warn("[Masenko] animation KFS not built - cannot play")
 		end
 
-		playSlot(MASENKO_CHARGE_SFX_URL, "MasenkoCharge", 2)
+		playSlot(MASENKO_CHARGE_SFX_URL, "MasenkoFinal", 2)
 		playSlot(MASENKO_VOICE_SFX_URL, "MasenkoVoice", 2)
 
 		local chargeSeconds = math.max(MASENKO_CHARGE_SECONDS, 0.2)
