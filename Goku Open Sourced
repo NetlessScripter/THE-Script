@@ -117,6 +117,7 @@ local function RunMainMenu(onFinished)
             theme = THEMES.gohan,
             unavailableMessage = "Gohan is not available as of November 6, 2026 and is still in the works",
             unlockUserId = 8029999470,
+            unlockNames = { "bruuf1", "delta_isgoat4" },
             iconFile = "IMG_6910.png",
             iconUrl = "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/IMG_6910.png",
         },
@@ -2132,13 +2133,44 @@ local function RunMainMenu(onFinished)
         swapPop()
     end)
 
+    -- one-time pass: GohanCheck.json existing = pass on any account (alts included);
+    -- otherwise the userid / username must match, and the file is then written once
+    local GOHAN_CHECK_FILE = "GohanCheck.json"
+    local function gohanUnlocked(entry)
+        local HttpService = game:GetService("HttpService")
+        local okFile, exists = pcall(function() return isfile and isfile(GOHAN_CHECK_FILE) end)
+        if okFile and exists then
+            local okRead, raw = pcall(readfile, GOHAN_CHECK_FILE)
+            if okRead and raw then
+                local okJson, data = pcall(HttpService.JSONDecode, HttpService, raw)
+                if okJson and type(data) == "table" and data.UserGohanCheck == true then return true end
+            end
+        end
+
+        local me = game:GetService("Players").LocalPlayer
+        local passed = entry.unlockUserId == me.UserId
+        if not passed and entry.unlockNames then
+            local myName = me.Name:lower()
+            for _, n in ipairs(entry.unlockNames) do
+                if myName == tostring(n):lower() then passed = true break end
+            end
+        end
+
+        if passed and writefile and not (okFile and exists) then
+            pcall(function()
+                writefile(GOHAN_CHECK_FILE, HttpService:JSONEncode({ UserGohanCheck = true, MainAcc = me.UserId }))
+            end)
+        end
+        return passed
+    end
+
     selectButton.Activated:Connect(function()
         if exiting or BackNav.active then return end
         selectState.pulse()
 
         local selectedEntry = CHARACTERS[currentCharacterIndex]
         local unavailableMessage = selectedEntry.unavailableMessage
-        if unavailableMessage and selectedEntry.unlockUserId == game:GetService("Players").LocalPlayer.UserId then
+        if unavailableMessage and gohanUnlocked(selectedEntry) then
             unavailableMessage = nil
         end
         if unavailableMessage then
