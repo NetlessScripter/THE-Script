@@ -1362,9 +1362,14 @@ do
 		_a4model.Parent = _a4folder
 	end
 end
-loadstring(game:HttpGet(
-	"https://raw.githubusercontent.com/NetlessScripter/Universal-KJ-Port/refs/heads/main/Animation%20Module"
-))()
+do
+	local okMod, errMod = pcall(function()
+		loadstring(game:HttpGet(
+			"https://raw.githubusercontent.com/NetlessScripter/Universal-KJ-Port/refs/heads/main/Animation%20Module"
+		))()
+	end)
+	if not okMod then warn("[Anim] Animation Module failed to load: " .. tostring(errMod)) end
+end
 
 do
 	local _CACHE_URL  = "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/anim6d_kfcache_17585779478.json"
@@ -9075,10 +9080,11 @@ function PlayMasenko()
 	end
 
 	local ok, err = pcall(function()
-		if MASENKO_KFS then
-			Animator6D(MASENKO_KFS, 1, false, Character)
+		if MASENKO_KFS and Animator6D then
+			local okAnim, errAnim = pcall(Animator6D, MASENKO_KFS, 1, false, Character)
+			if not okAnim then warn("[Masenko] animation failed: " .. tostring(errAnim)) end
 		else
-			warn("[Masenko] animation KFS not built - cannot play")
+			warn("[Masenko] animation not available - cannot play")
 		end
 
 		playSlot(MASENKO_CHARGE_SFX_URL, "MasenkoFinal", 2)
