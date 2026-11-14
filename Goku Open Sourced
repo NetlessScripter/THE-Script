@@ -5689,8 +5689,12 @@ task.spawn(function()
     end
     local rainAPI = MenuLoads.rain
     if not rainAPI then
-        rainAPI = loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/GOKU/refs/heads/main/RAIN%20MODULE"))()
+        local okRain, rainRes = pcall(function()
+            return loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/GOKU/refs/heads/main/RAIN%20MODULE"))()
+        end)
+        rainAPI = okRain and rainRes or nil
     end
+    rainAPI = rainAPI or { Enable = function() end, Disable = function() end }
     if _G.Rain == false then
         rainAPI:Disable()
     end
