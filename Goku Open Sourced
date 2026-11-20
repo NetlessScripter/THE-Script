@@ -1768,9 +1768,42 @@ local function RunMainMenu(onFinished)
         playTween(lift, info(0.7, Style.Quad, Dir.Out), { BackgroundTransparency = 1 })
     end
 
+    BackNav.selectSounds = {
+        { name = "SelectUIClick",  id = "rbxassetid://6895079853" },
+        { name = "SelectHologram", id = "rbxassetid://16972859964" },
+        { name = "SelectFly",      id = "rbxassetid://199145433" },
+    }
+    do
+        local preloadList = {}
+        for _, def in ipairs(BackNav.selectSounds) do
+            local old = SoundService:FindFirstChild(def.name)
+            if old then old:Destroy() end
+            local sfx = Instance.new("Sound")
+            sfx.Name = def.name
+            sfx.SoundId = def.id
+            sfx.Volume = 1
+            sfx.Parent = SoundService
+            def.sound = sfx
+            table.insert(preloadList, sfx)
+        end
+        task.spawn(pcall, function()
+            game:GetService("ContentProvider"):PreloadAsync(preloadList)
+        end)
+    end
+
+    function BackNav.playSelectSounds()
+        for _, def in ipairs(BackNav.selectSounds) do
+            if def.sound and def.sound.Parent then
+                def.sound:Play()
+                game:GetService("Debris"):AddItem(def.sound, 15)
+            end
+        end
+    end
+
     local function Exit()
         if exiting or BackNav.active then return end
         exiting = true
+        BackNav.playSelectSounds()
         _G.GAPI.SelectedCharacter = CHARACTERS[currentCharacterIndex].apiName or CHARACTERS[currentCharacterIndex].name
         BackNav.stopMenuPositionCheck()
         cancelActiveTweens()
@@ -2125,9 +2158,25 @@ local function RunMainMenu(onFinished)
         BackNav.go()
     end)
 
+    BackNav.nextSwingTemplate = Instance.new("Sound")
+    BackNav.nextSwingTemplate.Name = "NextSwing"
+    BackNav.nextSwingTemplate.SoundId = "rbxassetid://10760302515"
+    BackNav.nextSwingTemplate.Volume = 1
+    task.spawn(pcall, function()
+        game:GetService("ContentProvider"):PreloadAsync({ BackNav.nextSwingTemplate })
+    end)
+
+    function BackNav.playNextSwing()
+        local sfx = BackNav.nextSwingTemplate:Clone()
+        sfx.Parent = SoundService
+        sfx:Play()
+        game:GetService("Debris"):AddItem(sfx, 5)
+    end
+
     nextButton.Activated:Connect(function()
         if exiting or not uiReady then return end
         nextState.pulse()
+        BackNav.playNextSwing()
         currentCharacterIndex = currentCharacterIndex % #CHARACTERS + 1
         typeCharacter(currentCharacterIndex, true)
         swapPop()
@@ -2312,6 +2361,9 @@ local function RunMainMenu(onFinished)
         local LOGO_IMAGE_CENTER     = Vector2.new(320, 92)
 
         local INTERACTIVE_AFTER = 1.6
+        local STREAK_PAD        = 10
+        local BEGIN_SOUND_ID    = "rbxassetid://8486683243"
+        local BEGIN_SOUND_VOL   = 1.25
         local CONFIRM_DELAY     = 0.28
         local DESTROY_AFTER     = 1.0
 
@@ -2703,11 +2755,14 @@ local function RunMainMenu(onFinished)
         local streakGlowGradient = Instance.new("UIGradient")
         streakGlowGradient.Transparency = NumberSequence.new({
             NumberSequenceKeypoint.new(0, 1),
-            NumberSequenceKeypoint.new(0.3, 0),
+            NumberSequenceKeypoint.new(0.25, 0),
             NumberSequenceKeypoint.new(0.75, 0),
             NumberSequenceKeypoint.new(1, 1),
         })
         streakGlowGradient.Parent = streakGlow
+        local streakGlowCorner = Instance.new("UICorner")
+        streakGlowCorner.CornerRadius = UDim.new(0.5, 0)
+        streakGlowCorner.Parent = streakGlow
         registerFrame(streakGlow, nil, 1.5, 0.86)
 
         local streak = Instance.new("Frame")
@@ -2720,13 +2775,13 @@ local function RunMainMenu(onFinished)
         local streakGradient = Instance.new("UIGradient")
         streakGradient.Color = ColorSequence.new({
             ColorSequenceKeypoint.new(0, YELLOW),
-            ColorSequenceKeypoint.new(0.45, HOT_COLOR),
+            ColorSequenceKeypoint.new(0.5, HOT_COLOR),
             ColorSequenceKeypoint.new(1, YELLOW),
         })
         streakGradient.Transparency = NumberSequence.new({
-            NumberSequenceKeypoint.new(0, 0.9),
-            NumberSequenceKeypoint.new(0.22, 0),
-            NumberSequenceKeypoint.new(0.72, 0.05),
+            NumberSequenceKeypoint.new(0, 1),
+            NumberSequenceKeypoint.new(0.2, 0),
+            NumberSequenceKeypoint.new(0.8, 0),
             NumberSequenceKeypoint.new(1, 1),
         })
         streakGradient.Parent = streak
@@ -2776,6 +2831,18 @@ local function RunMainMenu(onFinished)
 
         menuGui.Parent = guiParent
 
+        local beginSound = Instance.new("Sound")
+        beginSound.Name = "MenuBeginSound"
+        beginSound.SoundId = BEGIN_SOUND_ID
+        beginSound.Volume = BEGIN_SOUND_VOL
+        beginSound.Parent = game:GetService("SoundService")
+        beginSound.Ended:Connect(function()
+            beginSound:Destroy()
+        end)
+        task.spawn(pcall, function()
+            game:GetService("ContentProvider"):PreloadAsync({ beginSound })
+        end)
+
         local selected = 1
         local pressedIndex = nil
         local interactive = false
@@ -2784,15 +2851,18 @@ local function RunMainMenu(onFinished)
 
         local streakY = Spring.new(items[1].y, 16, 0.65)
         local shakeStart = nil
-        local streakLeft = Spring.new(items[1].leftX - 5, 14, 0.9)
-        local streakRight = Spring.new(items[1].rightX + 12, 14, 0.9)
+        local streakLeft = Spring.new(items[1].leftX - STREAK_PAD, 16, 0.9)
+        local streakRight = Spring.new(items[1].rightX + STREAK_PAD, 16, 0.9)
+        local glowHeight = Spring.new(9, 24, 0.8)
 
         local function refreshItemSprings()
             for i, item in ipairs(items) do
                 if pressedIndex == i then
-                    item.spring.target, item.spring.speed, item.spring.damper = 0.93, 38, 0.85
+                    item.spring.target, item.spring.speed, item.spring.damper = 0.9, 45, 1
+                    glowHeight.target = 15
                 elseif selected == i then
-                    item.spring.target, item.spring.speed, item.spring.damper = 1.07, 22, 0.5
+                    item.spring.target, item.spring.speed, item.spring.damper = 1.06, 24, 0.6
+                    glowHeight.target = 9
                 else
                     item.spring.target, item.spring.speed, item.spring.damper = 1, 18, 0.6
                 end
@@ -2827,8 +2897,13 @@ local function RunMainMenu(onFinished)
             local item = items[selected]
 
             streakY.target = item.y
-            streakLeft.target = item.leftX - 5
-            streakRight.target = confirmed and (item.rightX + 150) or (item.rightX + 12)
+            streakLeft.target = item.leftX - (confirmed and 90 or STREAK_PAD)
+            streakRight.target = item.rightX + (confirmed and 90 or STREAK_PAD)
+
+            for _, entry in ipairs(items) do
+                entry.scale.Scale = math.max(0.01, entry.spring:step(deltaTime))
+            end
+            local textScale = item.scale.Scale
 
             local cy = streakY:step(deltaTime)
 
@@ -2851,15 +2926,12 @@ local function RunMainMenu(onFinished)
 
             local left = streakLeft:step(deltaTime)
             local right = streakRight:step(deltaTime)
-            local width = math.max(right - left, 1)
-            streak.Position = UDim2.fromOffset((left + right) / 2, cy + 1)
+            local width = math.max((right - left) * textScale, 1)
+            local centerX = (left + right) / 2
+            streak.Position = UDim2.fromOffset(centerX, cy)
             streak.Size = UDim2.fromOffset(width, 1.4)
-            streakGlow.Position = UDim2.fromOffset((left + right) / 2, cy + 1)
-            streakGlow.Size = UDim2.fromOffset(width, 9)
-
-            for _, entry in ipairs(items) do
-                entry.scale.Scale = math.max(0.01, entry.spring:step(deltaTime))
-            end
+            streakGlow.Position = UDim2.fromOffset(centerX, cy)
+            streakGlow.Size = UDim2.fromOffset(width, math.max(glowHeight:step(deltaTime), 1))
         end)
 
         local function showEntryText(entry)
@@ -2940,7 +3012,15 @@ local function RunMainMenu(onFinished)
             confirmed = true
             pressedIndex = nil
             refreshItemSprings()
-            items[selected].spring.vel -= 4
+
+            local pressedItem = items[selected]
+            pressedItem.spring.target, pressedItem.spring.speed, pressedItem.spring.damper = 1.2, 26, 0.55
+            glowHeight.target = 24
+            glide(pressedItem.button, 0.1, Style.Sine, Dir.Out, 0, { TextColor3 = WHITE })
+
+            if beginSound then
+                beginSound:Play()
+            end
 
             shakeStart = nil
 
@@ -2991,19 +3071,19 @@ local function RunMainMenu(onFinished)
                 if item.disabled or confirmed then return end
                 pressedIndex = i
                 refreshItemSprings()
+                glide(item.button, 0.08, Style.Sine, Dir.Out, 0, { TextColor3 = HOT_COLOR })
             end)
-            item.button.MouseButton1Up:Connect(function()
+            local function releasePress()
                 if pressedIndex == i then
                     pressedIndex = nil
                     refreshItemSprings()
+                    if not confirmed then
+                        glide(item.button, 0.2, Style.Sine, Dir.Out, 0, { TextColor3 = (selected == i) and YELLOW or WHITE })
+                    end
                 end
-            end)
-            item.button.MouseLeave:Connect(function()
-                if pressedIndex == i then
-                    pressedIndex = nil
-                    refreshItemSprings()
-                end
-            end)
+            end
+            item.button.MouseButton1Up:Connect(releasePress)
+            item.button.MouseLeave:Connect(releasePress)
             item.button.Activated:Connect(function()
                 activate(i)
             end)
@@ -3022,6 +3102,9 @@ local function RunMainMenu(onFinished)
         end)
 
         menuGui.Destroying:Connect(function()
+            if not confirmed then
+                beginSound:Destroy()
+            end
             frameConnection:Disconnect()
             inputConnection:Disconnect()
             viewportConnection:Disconnect()
@@ -4175,6 +4258,7 @@ local ClothingSystem = {
         { name = "Gogeta",      shirt = 16028355781,     pants = 17388088112 },
         { name = "Xeno Goku",   shirt = 9110513486,      pants = 7464019656 },
         { name = "Future Gohan", shirt = 14832093352,    pants = 14832078259 },
+        { name = "Bardock",      shirt = 17486736402,    pants = 14556629554 },
     },
 }
 
@@ -4870,11 +4954,19 @@ end
 HairSystem.Accessories = {
     ModelName    = "GokuCustomAccessory",
     SaveFile     = "GokuAccessorySave.json",
-    Names        = { "Gohan Cape" },
+    Names        = { "Gohan Cape", "Bardock Armor", "Cape" },
     Options      = {
         ["Gohan Cape"] = {
             MeshId = "rbxassetid://114987838981736", TextureId = "rbxassetid://105685860461085",
             AttachTo = "Torso", YOffset = -0.850, ZOffset = 0.450, RotationY = 90,
+        },
+        ["Bardock Armor"] = {
+            MeshId = "rbxassetid://91942307413883", TextureId = "rbxassetid://87587468814464",
+            AttachTo = "Torso", YOffset = -0.550, ZOffset = 0.000, RotationY = 0,
+        },
+        ["Cape"] = {
+            MeshId = "rbxassetid://74296008166470", TextureId = "rbxassetid://109899928426304",
+            AttachTo = "Torso", YOffset = 0.150, ZOffset = 0.000, RotationY = 0,
         },
     },
     SelectedName = nil,
@@ -5077,84 +5169,26 @@ do
     end
 
     function Look.ShowPrompt()
-        local guiHost = (gethui and gethui()) or game:GetService("CoreGui")
-        local oldPrompt = guiHost:FindFirstChild("GohanLookPromptGui")
-        if oldPrompt then oldPrompt:Destroy() end
-
-        local promptGui = Instance.new("ScreenGui")
-        promptGui.Name = "GohanLookPromptGui"
-        promptGui.ResetOnSpawn = false
-        promptGui.IgnoreGuiInset = true
-        promptGui.DisplayOrder = 1000
-        promptGui.Parent = guiHost
-
-        local panel = Instance.new("Frame")
-        panel.AnchorPoint = Vector2.new(0.5, 0.5)
-        panel.Position = UDim2.new(0.5, 0, 0.5, 0)
-        panel.Size = UDim2.fromOffset(380, 190)
-        panel.BackgroundColor3 = Color3.fromRGB(52, 36, 82)
-        panel.BorderSizePixel = 0
-        panel.Parent = promptGui
-
-        local panelCorner = Instance.new("UICorner")
-        panelCorner.CornerRadius = UDim.new(0, 10)
-        panelCorner.Parent = panel
-
-        local panelStroke = Instance.new("UIStroke")
-        panelStroke.Color = Color3.fromRGB(160, 110, 230)
-        panelStroke.Thickness = 2
-        panelStroke.Parent = panel
-
-        local titleLabel = Instance.new("TextLabel")
-        titleLabel.BackgroundTransparency = 1
-        titleLabel.Position = UDim2.fromOffset(14, 10)
-        titleLabel.Size = UDim2.new(1, -28, 0, 30)
-        titleLabel.Font = Enum.Font.GothamBold
-        titleLabel.Text = "Gohan look equipped"
-        titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-        titleLabel.TextSize = 22
-        titleLabel.Parent = panel
-
-        local bodyLabel = Instance.new("TextLabel")
-        bodyLabel.BackgroundTransparency = 1
-        bodyLabel.Position = UDim2.fromOffset(14, 46)
-        bodyLabel.Size = UDim2.new(1, -28, 0, 70)
-        bodyLabel.Font = Enum.Font.Gotham
-        bodyLabel.Text = "Your Gohan hair, cape and clothes are on. You also have your own saved hair, clothes or accessories. Do you want to go back to what you chose?"
-        bodyLabel.TextColor3 = Color3.fromRGB(225, 205, 255)
-        bodyLabel.TextSize = 16
-        bodyLabel.TextWrapped = true
-        bodyLabel.TextYAlignment = Enum.TextYAlignment.Top
-        bodyLabel.Parent = panel
-
-        local function CreatePromptButton(buttonText, horizontalAlignment, onPressed)
-            local promptButton = Instance.new("TextButton")
-            promptButton.AnchorPoint = Vector2.new(horizontalAlignment, 1)
-            promptButton.Position = UDim2.new(horizontalAlignment, horizontalAlignment == 0 and 14 or -14, 1, -14)
-            promptButton.Size = UDim2.new(0.5, -21, 0, 42)
-            promptButton.BackgroundColor3 = Color3.fromRGB(140, 70, 210)
-            promptButton.BorderSizePixel = 0
-            promptButton.Font = Enum.Font.GothamBold
-            promptButton.Text = buttonText
-            promptButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-            promptButton.TextSize = 17
-            promptButton.AutoButtonColor = true
-            promptButton.Parent = panel
-
-            local promptButtonCorner = Instance.new("UICorner")
-            promptButtonCorner.CornerRadius = UDim.new(0, 8)
-            promptButtonCorner.Parent = promptButton
-
-            promptButton.Activated:Connect(function()
-                promptGui:Destroy()
-                onPressed()
-            end)
+        local choiceCallback = Instance.new("BindableFunction")
+        choiceCallback.OnInvoke = function(buttonPressed)
+            if buttonPressed == "Yes" then
+                Look.UseOwn()
+            end
         end
 
-        CreatePromptButton("Use my choices", 0, function()
-            Look.UseOwn()
+        local sent = pcall(function()
+            game:GetService("StarterGui"):SetCore("SendNotification", {
+                Title    = "?",
+                Text     = "Revert To Saved Outfit",
+                Duration = 60,
+                Button1  = "Yes",
+                Button2  = "No",
+                Callback = choiceCallback,
+            })
         end)
-        CreatePromptButton("Keep Gohan", 1, function() end)
+        if not sent then
+            choiceCallback:Destroy()
+        end
     end
 
     -- asks once, and only when there is something of theirs to go back to
@@ -8435,7 +8469,7 @@ task.spawn(function()
     local panelOpenTweenInfo = TweenInfo.new(0.9, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out, 0, false, 0.35)
     local panelCloseTweenInfo = TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.In)
 
-    local openFieldOfView = 80
+    local openFieldOfViewBoost = 10
     local originalFieldOfView = nil
 
     local activeTweens = {}
@@ -8485,7 +8519,7 @@ task.spawn(function()
             originalFieldOfView = currentCamera.FieldOfView
         end
         playTween(currentCamera, fovOpenTweenInfo, {
-            FieldOfView = openFieldOfView,
+            FieldOfView = math.min(120, originalFieldOfView + openFieldOfViewBoost),
         })
     end
 
