@@ -4342,7 +4342,7 @@ local HairOffsets = {
 	["Eleventh Hair"] = {AssetId = "rbxassetid://119570391860313", YOffset = 0.250, ZOffset = 0.400, RotationY = 0},
 	["Twelfth Hair"] = {AssetId = "rbxassetid://119182614796017", YOffset = 0.550, ZOffset = 0.063, RotationY = 0},
 	-- TextureId is optional: it is only used while "Include Texture" is on in the Hair window
-	["Gohan Base"] = {AssetId = "rbxassetid://80247147125777", TextureId = "rbxassetid://93430399183494", YOffset = 0.700, ZOffset = 0.050, RotationY = 0},
+	["Gohan Base"] = {AssetId = "rbxassetid://80247147125777", TextureId = "rbxassetid://93430399183494", YOffset = 0.800, ZOffset = 0.067, RotationY = 0},
 }
 
 local HairSystem = {
@@ -4874,7 +4874,7 @@ HairSystem.Accessories = {
     Options      = {
         ["Gohan Cape"] = {
             MeshId = "rbxassetid://114987838981736", TextureId = "rbxassetid://105685860461085",
-            AttachTo = "Torso", YOffset = -0.80, ZOffset = 0.500, RotationY = 90,
+            AttachTo = "Torso", YOffset = -0.850, ZOffset = 0.450, RotationY = 90,
         },
     },
     SelectedName = nil,
