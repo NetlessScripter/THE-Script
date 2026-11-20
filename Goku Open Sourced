@@ -4954,21 +4954,23 @@ end
 HairSystem.Accessories = {
     ModelName    = "GokuCustomAccessory",
     SaveFile     = "GokuAccessorySave.json",
-    Names        = { "Gohan Cape", "Bardock Armor", "Cape" },
+    Names        = { "Piccolo's Cape", "Bardock's Armor", "Vegeta's Armor" },
     Options      = {
-        ["Gohan Cape"] = {
+        ["Piccolo's Cape"] = {
             MeshId = "rbxassetid://114987838981736", TextureId = "rbxassetid://105685860461085",
             AttachTo = "Torso", YOffset = -0.850, ZOffset = 0.450, RotationY = 90,
         },
-        ["Bardock Armor"] = {
+        ["Bardock's Armor"] = {
             MeshId = "rbxassetid://91942307413883", TextureId = "rbxassetid://87587468814464",
             AttachTo = "Torso", YOffset = -0.550, ZOffset = 0.000, RotationY = 0,
         },
-        ["Cape"] = {
+        ["Vegeta's Armor"] = {
             MeshId = "rbxassetid://74296008166470", TextureId = "rbxassetid://109899928426304",
             AttachTo = "Torso", YOffset = 0.150, ZOffset = 0.000, RotationY = 0,
         },
     },
+    -- old names from earlier saves -> current names
+    LegacyNames  = { ["Gohan Cape"] = "Piccolo's Cape", ["Bardock Armor"] = "Bardock's Armor", ["Cape"] = "Vegeta's Armor" },
     SelectedName = nil,
     Model        = nil,
 }
@@ -5069,8 +5071,9 @@ do
         end)
         if not readOk or type(decoded) ~= "table" then return nil end
 
-        if Accessories.Options[decoded.accessory] then
-            return decoded.accessory
+        local savedName = Accessories.LegacyNames[decoded.accessory] or decoded.accessory
+        if Accessories.Options[savedName] then
+            return savedName
         end
         return nil
     end
@@ -5101,7 +5104,7 @@ end
 -- a prompt asks whether to go back to it.
 HairSystem.GohanLook = {
     Hair       = "Gohan Base",
-    Accessory  = "Gohan Cape",
+    Accessory  = "Piccolo's Cape",
     Outfit     = "Gohan",
     UsingOwn   = false, -- true once "Use my choices" was picked
     PromptDone = false,
