@@ -4874,7 +4874,7 @@ HairSystem.Accessories = {
     Options      = {
         ["Gohan Cape"] = {
             MeshId = "rbxassetid://114987838981736", TextureId = "rbxassetid://105685860461085",
-            AttachTo = "Torso", YOffset = -1.550, ZOffset = 0.500, RotationY = 90,
+            AttachTo = "Torso", YOffset = -0.80, ZOffset = 0.500, RotationY = 90,
         },
     },
     SelectedName = nil,
