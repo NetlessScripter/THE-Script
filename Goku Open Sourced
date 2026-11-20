@@ -7408,7 +7408,7 @@ task.spawn(function()
         clothingColumn.Parent = clothingBody
 
         local clothingColumnLayout = Instance.new("UIListLayout")
-        clothingColumnLayout.Padding = UDim.new(0.0666, 0)
+        clothingColumnLayout.Padding = UDim.new(0.05, 0)
         clothingColumnLayout.SortOrder = Enum.SortOrder.LayoutOrder
         clothingColumnLayout.Parent = clothingColumn
 
@@ -7420,7 +7420,7 @@ task.spawn(function()
             pickerRow.Text = ""
             pickerRow.BackgroundColor3 = rowBackgroundColor
             pickerRow.BorderSizePixel = 0
-            pickerRow.Size = UDim2.new(1, 0, 0.2, 0)
+            pickerRow.Size = UDim2.new(1, 0, 0.16, 0)
             pickerRow.ZIndex = rowZIndex
             pickerRow.Parent = clothingColumn
 
@@ -7519,6 +7519,46 @@ task.spawn(function()
             clothingPantsDropdown.Toggle()
         end)
 
+        -- Accessories: every accessory in HairSystem.Accessories.Options, plus None
+        local accessoryNames = {}
+        for accessoryIndex, accessoryName in ipairs(HairSystem.Accessories.Names) do
+            accessoryNames[accessoryIndex] = accessoryName
+        end
+        table.insert(accessoryNames, "None")
+        local accessoryNoneIndex = #accessoryNames
+
+        local accessoryRow, accessoryValueLabel = CreateClothingPickerRow("AccessoriesRow", "Accessories", 3, 10)
+        local function GetPickedAccessoryIndex()
+            for accessoryIndex, accessoryName in ipairs(HairSystem.Accessories.Names) do
+                if accessoryName == HairSystem.Accessories.SelectedName then
+                    return accessoryIndex
+                end
+            end
+            return accessoryNoneIndex
+        end
+        local function RefreshAccessoryRow()
+            accessoryValueLabel.Text = HairSystem.Accessories.SelectedName or "None"
+        end
+        RefreshAccessoryRow()
+
+        local accessoryDropdown = CreateDropdown(accessoryRow, "AccessoriesDropdown", accessoryNames,
+            function()
+                return GetPickedAccessoryIndex()
+            end,
+            function(accessoryIndex)
+                if accessoryIndex == accessoryNoneIndex then
+                    HairSystem.Accessories.Reset()
+                else
+                    HairSystem.Accessories.Equip(accessoryNames[accessoryIndex])
+                end
+                RefreshAccessoryRow()
+            end)
+
+        accessoryRow.Activated:Connect(function()
+            playNextSound()
+            accessoryDropdown.Toggle()
+        end)
+
         local function CreateClothingButton(buttonName, buttonText, layoutOrder)
             local clothingButton = Instance.new("TextButton")
             clothingButton.Name = buttonName
@@ -7526,7 +7566,7 @@ task.spawn(function()
             clothingButton.AutoButtonColor = false
             clothingButton.BackgroundColor3 = headerColor
             clothingButton.BorderSizePixel = 0
-            clothingButton.Size = UDim2.new(1, 0, 0.2, 0)
+            clothingButton.Size = UDim2.new(1, 0, 0.16, 0)
             clothingButton.FontFace = settingsFont
             clothingButton.Text = buttonText
             clothingButton.TextColor3 = normalTextColor
@@ -7548,8 +7588,8 @@ task.spawn(function()
             return clothingButton
         end
 
-        local clothingSaveButton = CreateClothingButton("SaveButton", "Save", 3)
-        local clothingCloseButton = CreateClothingButton("CloseClothingButton", "Close", 4)
+        local clothingSaveButton = CreateClothingButton("SaveButton", "Save", 4)
+        local clothingCloseButton = CreateClothingButton("CloseClothingButton", "Close", 5)
 
         local clothingSaveToken = 0
         clothingSaveButton.Activated:Connect(function()
@@ -7557,6 +7597,7 @@ task.spawn(function()
             CloseAllDropdowns()
 
             local saved = ClothingSystem.WriteSaved(clothingShirtIndex, clothingPantsIndex)
+                and HairSystem.Accessories.WriteSaved(HairSystem.Accessories.SelectedName)
             clothingSaveToken = clothingSaveToken + 1
             local myToken = clothingSaveToken
             clothingSaveButton.Text = saved and "Saved!" or "Failed"
@@ -7567,9 +7608,24 @@ task.spawn(function()
             end)
         end)
 
+        -- accessory changes (picked here, or by the Gohan look) refresh the row + the spin preview
+        local baseClothingOnChanged = HairSystem.OnChanged
+        HairSystem.OnChanged = function()
+            if baseClothingOnChanged then
+                baseClothingOnChanged()
+            end
+            if clothingWindowOpen then
+                RefreshAccessoryRow()
+                local keepYaw = clothingYaw
+                BuildClothingPreview()
+                SetClothingYaw(keepYaw)
+            end
+        end
+
         local function ShowClothingWindow()
             CloseAllDropdowns()
             RefreshClothingLabels()
+            RefreshAccessoryRow()
             BuildClothingPreview()
             clothingWindowOpen = true
             clothingWindow.Visible = true
@@ -7805,7 +7861,7 @@ task.spawn(function()
         hairColumn.Parent = hairBody
 
         local hairColumnLayout = Instance.new("UIListLayout")
-        hairColumnLayout.Padding = UDim.new(0.0435, 0) -- six rows: Hair, Base Hair color, Ultimate Color, Include Texture, Accessories, Save + Close
+        hairColumnLayout.Padding = UDim.new(0.05, 0) -- five rows: Hair, Base Hair color, Ultimate Color, Include Texture, Save + Close
         hairColumnLayout.SortOrder = Enum.SortOrder.LayoutOrder
         hairColumnLayout.Parent = hairColumn
 
@@ -7816,7 +7872,7 @@ task.spawn(function()
         hairPickerRow.Text = ""
         hairPickerRow.BackgroundColor3 = rowBackgroundColor
         hairPickerRow.BorderSizePixel = 0
-        hairPickerRow.Size = UDim2.new(1, 0, 0.1304, 0)
+        hairPickerRow.Size = UDim2.new(1, 0, 0.16, 0)
         hairPickerRow.ZIndex = 12
         hairPickerRow.Parent = hairColumn
 
@@ -7940,7 +7996,7 @@ task.spawn(function()
             colorRow.Text = ""
             colorRow.BackgroundColor3 = rowBackgroundColor
             colorRow.BorderSizePixel = 0
-            colorRow.Size = UDim2.new(1, 0, 0.1304, 0)
+            colorRow.Size = UDim2.new(1, 0, 0.16, 0)
             colorRow.ZIndex = rowZIndex
             colorRow.Parent = hairColumn
 
@@ -8045,7 +8101,7 @@ task.spawn(function()
             RefreshUltimateColorRow()
         end
 
-        -- ----- Include Texture + Accessories rows (under the colour rows) -------
+        -- ----- Include Texture row (under the colour rows) -------
         local RefreshHairExtraRows
         do
             -- one row of the same look as the rows above: label on the left, value box on the right
@@ -8057,7 +8113,7 @@ task.spawn(function()
                 valueRow.Text = ""
                 valueRow.BackgroundColor3 = rowBackgroundColor
                 valueRow.BorderSizePixel = 0
-                valueRow.Size = UDim2.new(1, 0, 0.1304, 0)
+                valueRow.Size = UDim2.new(1, 0, 0.16, 0)
                 valueRow.ZIndex = rowZIndex
                 valueRow.Parent = hairColumn
 
@@ -8130,48 +8186,8 @@ task.spawn(function()
                 RefreshTextureRow()
             end)
 
-            -- Accessories: None / Gohan Cape (more can be added to HairSystem.Accessories.Options)
-            local accessoryNames = {}
-            for accessoryIndex, accessoryName in ipairs(HairSystem.Accessories.Names) do
-                accessoryNames[accessoryIndex] = accessoryName
-            end
-            table.insert(accessoryNames, "None")
-            local accessoryNoneIndex = #accessoryNames
-
-            local accessoryRow, accessoryValueLabel = CreateHairValueRow("AccessoriesRow", "Accessories", 5, 8)
-            local function GetPickedAccessoryIndex()
-                for accessoryIndex, accessoryName in ipairs(HairSystem.Accessories.Names) do
-                    if accessoryName == HairSystem.Accessories.SelectedName then
-                        return accessoryIndex
-                    end
-                end
-                return accessoryNoneIndex
-            end
-            local function RefreshAccessoryRow()
-                accessoryValueLabel.Text = HairSystem.Accessories.SelectedName or "None"
-            end
-
-            local accessoryDropdown = CreateDropdown(accessoryRow, "AccessoriesDropdown", accessoryNames,
-                function()
-                    return GetPickedAccessoryIndex()
-                end,
-                function(accessoryIndex)
-                    if accessoryIndex == accessoryNoneIndex then
-                        HairSystem.Accessories.Reset()
-                    else
-                        HairSystem.Accessories.Equip(accessoryNames[accessoryIndex])
-                    end
-                    RefreshAccessoryRow()
-                end)
-
-            accessoryRow.Activated:Connect(function()
-                playNextSound()
-                accessoryDropdown.Toggle()
-            end)
-
             RefreshHairExtraRows = function()
                 RefreshTextureRow()
-                RefreshAccessoryRow()
             end
             RefreshHairExtraRows()
         end
@@ -8181,7 +8197,7 @@ task.spawn(function()
         hairButtonRow.LayoutOrder = 6
         hairButtonRow.BackgroundTransparency = 1
         hairButtonRow.BorderSizePixel = 0
-        hairButtonRow.Size = UDim2.new(1, 0, 0.1304, 0)
+        hairButtonRow.Size = UDim2.new(1, 0, 0.16, 0)
         hairButtonRow.Parent = hairColumn
 
         local function CreateHairButton(buttonName, buttonText, horizontalAlignment)
@@ -8223,7 +8239,6 @@ task.spawn(function()
             CloseAllDropdowns()
 
             local saved = HairSystem.WriteSaved(pickedHairName)
-                and HairSystem.Accessories.WriteSaved(HairSystem.Accessories.SelectedName)
             hairSaveToken = hairSaveToken + 1
             local myToken = hairSaveToken
             hairSaveButton.Text = saved and "Saved!" or "Failed"
