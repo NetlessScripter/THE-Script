@@ -4341,6 +4341,8 @@ local HairOffsets = {
 	["Tenth Hair"] = {AssetId = "rbxassetid://107039956325024", YOffset = 0.450, ZOffset = 0.250, RotationY = 90},
 	["Eleventh Hair"] = {AssetId = "rbxassetid://119570391860313", YOffset = 0.250, ZOffset = 0.400, RotationY = 0},
 	["Twelfth Hair"] = {AssetId = "rbxassetid://119182614796017", YOffset = 0.550, ZOffset = 0.063, RotationY = 0},
+	-- TextureId is optional: it is only used while "Include Texture" is on in the Hair window
+	["Gohan Base"] = {AssetId = "rbxassetid://80247147125777", TextureId = "rbxassetid://93430399183494", YOffset = 0.700, ZOffset = 0.050, RotationY = 0},
 }
 
 local HairSystem = {
@@ -4349,7 +4351,7 @@ local HairSystem = {
     HairNames = {
         "First Hair", "Second Hair", "Third Hair", "Fourth Hair", "Fifth Hair",
         "Sixth Hair", "Seventh Hair", "Eighth Hair", "Ninth Hair", "Tenth Hair",
-        "Eleventh Hair", "Twelfth Hair",
+        "Eleventh Hair", "Twelfth Hair", "Gohan Base",
     },
     Colors = {
         Base = Color3.fromRGB(15, 15, 15),
@@ -4384,6 +4386,7 @@ local HairSystem = {
     },
     BaseColorName      = "Super Saiyan",
     UltimateColorName  = "SS Blue",
+    IncludeTexture     = false, -- the Hair window's "Include Texture" option (off by default)
     SelectedName       = nil,
     Model              = nil,
     CurrentForm        = "SSJ",
@@ -4479,6 +4482,8 @@ do
         if not LoadHairTemplate(hairName) then return nil end
 
         local hairSettings = HairOffsets[hairName]
+        -- a hair that has a texture shows it only while "Include Texture" is on
+        local useTexture = HairSystem.IncludeTexture and hairSettings.TextureId ~= nil
 
         local handle = Instance.new("Part")
         handle.Name = "Handle"
@@ -4487,7 +4492,7 @@ do
         local hairMesh = Instance.new("SpecialMesh")
         hairMesh.MeshType    = Enum.MeshType.FileMesh
         hairMesh.MeshId      = GetMeshId(hairName)
-        hairMesh.TextureId   = ""
+        hairMesh.TextureId   = useTexture and hairSettings.TextureId or ""
         hairMesh.Scale       = Vector3.new(1, 1, 1)
         hairMesh.VertexColor = Vector3.new(1, 1, 1)
         hairMesh.Parent      = handle
@@ -4504,8 +4509,15 @@ do
         handle.Massless     = true
         handle.CastShadow   = false
         handle.Transparency = 0
-        handle.Material     = Enum.Material.Neon
-        handle.Color        = HairSystem.Colors[HairSystem.CurrentForm]
+        if useTexture then
+            -- textured: plain white so the texture shows as it is (no hair colour tint)
+            handle.Material = Enum.Material.SmoothPlastic
+            handle.Color    = Color3.new(1, 1, 1)
+            handle:SetAttribute("KeepColor", true)
+        else
+            handle.Material = Enum.Material.Neon
+            handle.Color    = HairSystem.Colors[HairSystem.CurrentForm]
+        end
 
         local customHairLight = Instance.new("PointLight")
         customHairLight.Color      = HairSystem.LightColors[HairSystem.CurrentForm]
@@ -4548,7 +4560,9 @@ do
         for _, descendant in ipairs(customHairModel:GetDescendants()) do
             local targetColor
             if descendant:IsA("BasePart") then
-                targetColor = formColor
+                if not descendant:GetAttribute("KeepColor") then
+                    targetColor = formColor
+                end
             elseif descendant:IsA("PointLight") then
                 targetColor = lightColor
             end
@@ -4685,6 +4699,17 @@ do
         end
     end
 
+    -- Turns the Include Texture option on/off. A hair that has a texture is rebuilt at once.
+    function HairSystem.SetIncludeTexture(enabled)
+        HairSystem.IncludeTexture = enabled and true or false
+        local selectedName = HairSystem.SelectedName
+        if selectedName and HairOffsets[selectedName] and HairOffsets[selectedName].TextureId then
+            HairSystem.Equip(selectedName)
+        elseif HairSystem.OnChanged then
+            HairSystem.OnChanged()
+        end
+    end
+
     function HairSystem.Equip(hairName)
         if not HairOffsets[hairName] then
             warn("[Hair] Unknown hair: " .. tostring(hairName))
@@ -4782,12 +4807,27 @@ do
         return savedBase, savedUltimate
     end
 
+    function HairSystem.ReadSavedTexture()
+        if not isfile(HairSystem.SaveFile) then return nil end
+
+        local readOk, decoded = pcall(function()
+            return HttpService:JSONDecode(readfile(HairSystem.SaveFile))
+        end)
+        if not readOk or type(decoded) ~= "table" then return nil end
+
+        if type(decoded.includeTexture) == "boolean" then
+            return decoded.includeTexture
+        end
+        return nil
+    end
+
     function HairSystem.WriteSaved(hairName)
         local writeOk, writeError = pcall(function()
             writefile(HairSystem.SaveFile, HttpService:JSONEncode({
                 hair = hairName or "Default",
                 baseColor = HairSystem.BaseColorName,
                 ultimateColor = HairSystem.UltimateColorName,
+                includeTexture = HairSystem.IncludeTexture,
             }))
         end)
         if not writeOk then
@@ -4796,7 +4836,8 @@ do
         return writeOk
     end
 
-    function HairSystem.ApplySaved()
+    -- the saved colours + Include Texture (the settings, not which hair is worn)
+    function HairSystem.ApplySavedSettings()
         local savedBaseColor, savedUltimateColor = HairSystem.ReadSavedColors()
         if savedBaseColor then
             HairSystem.SetBaseColor(savedBaseColor)
@@ -4804,11 +4845,328 @@ do
         if savedUltimateColor then
             HairSystem.SetUltimateColor(savedUltimateColor)
         end
+        local savedTexture = HairSystem.ReadSavedTexture()
+        if savedTexture ~= nil then
+            HairSystem.IncludeTexture = savedTexture
+        end
+    end
+
+    function HairSystem.ApplySaved()
+        HairSystem.ApplySavedSettings()
 
         local savedHairName = HairSystem.ReadSaved()
         if savedHairName then
             HairSystem.Equip(savedHairName)
         end
+    end
+end
+
+-- ============================================================
+--  ACCESSORIES (Hair window > Accessories)  +  GOHAN LOOK
+--  Accessories are single meshes worn on the body (the cape is on the torso: UpperTorso on
+--  R15, Torso on R6). The Gohan look is the hair + cape + shirt + pants that are put on
+--  automatically while the selected character is Gohan.
+-- ============================================================
+HairSystem.Accessories = {
+    ModelName    = "GokuCustomAccessory",
+    SaveFile     = "GokuAccessorySave.json",
+    Names        = { "Gohan Cape" },
+    Options      = {
+        ["Gohan Cape"] = {
+            MeshId = "rbxassetid://114987838981736", TextureId = "rbxassetid://105685860461085",
+            AttachTo = "Torso", YOffset = -1.550, ZOffset = 0.500, RotationY = 90,
+        },
+    },
+    SelectedName = nil,
+    Model        = nil,
+}
+
+do
+    local Accessories = HairSystem.Accessories
+    local HttpService = game:GetService("HttpService")
+
+    local function GetAttachPart(attachTo)
+        if attachTo == "Head" then
+            return headPart
+        end
+        return character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso") or rootPart
+    end
+
+    local function BuildAccessoryModel(accessoryName)
+        local settings   = Accessories.Options[accessoryName]
+        local attachPart = GetAttachPart(settings.AttachTo)
+
+        local handle = Instance.new("Part")
+        handle.Name = "Handle"
+        handle.Size = Vector3.new(1, 1, 1)
+
+        local accessoryMesh = Instance.new("SpecialMesh")
+        accessoryMesh.MeshType  = Enum.MeshType.FileMesh
+        accessoryMesh.MeshId    = settings.MeshId
+        accessoryMesh.TextureId = settings.TextureId or ""
+        accessoryMesh.Scale     = Vector3.new(1, 1, 1)
+        accessoryMesh.Parent    = handle
+
+        local accessoryModel = Instance.new("Model")
+        accessoryModel.Name = Accessories.ModelName
+        handle.Parent = accessoryModel
+        accessoryModel.PrimaryPart = handle
+
+        handle.Anchored   = false
+        handle.CanCollide = false
+        handle.CanQuery   = false
+        handle.CanTouch   = false
+        handle.Massless   = true
+        handle.CastShadow = false
+        handle.Material   = Enum.Material.SmoothPlastic
+        handle.Color      = Color3.new(1, 1, 1)
+
+        accessoryModel.Parent = character
+        handle.CFrame = attachPart.CFrame
+            * CFrame.new(0, settings.YOffset, settings.ZOffset)
+            * CFrame.Angles(0, math.rad(settings.RotationY), 0)
+
+        local attachWeld = Instance.new("WeldConstraint")
+        attachWeld.Part0  = attachPart
+        attachWeld.Part1  = handle
+        attachWeld.Parent = handle
+
+        return accessoryModel
+    end
+
+    local function Changed()
+        if HairSystem.OnChanged then
+            HairSystem.OnChanged()
+        end
+    end
+
+    function Accessories.Equip(accessoryName)
+        if not Accessories.Options[accessoryName] then
+            warn("[Accessory] Unknown accessory: " .. tostring(accessoryName))
+            return
+        end
+
+        local buildOk, builtModel = pcall(BuildAccessoryModel, accessoryName)
+        if not buildOk or not builtModel then
+            warn("[Accessory] Couldn't build " .. accessoryName .. ": " .. tostring(builtModel))
+            return
+        end
+
+        if Accessories.Model then
+            Accessories.Model:Destroy()
+        end
+        Accessories.Model        = builtModel
+        Accessories.SelectedName = accessoryName
+        Changed()
+    end
+
+    function Accessories.Reset()
+        if Accessories.Model then
+            Accessories.Model:Destroy()
+        end
+        Accessories.Model        = nil
+        Accessories.SelectedName = nil
+        Changed()
+    end
+
+    function Accessories.ReadSaved()
+        if not isfile(Accessories.SaveFile) then return nil end
+
+        local readOk, decoded = pcall(function()
+            return HttpService:JSONDecode(readfile(Accessories.SaveFile))
+        end)
+        if not readOk or type(decoded) ~= "table" then return nil end
+
+        if Accessories.Options[decoded.accessory] then
+            return decoded.accessory
+        end
+        return nil
+    end
+
+    -- Writes the worn accessory by name (nil = None). Returns true when the file was written.
+    function Accessories.WriteSaved(accessoryName)
+        local writeOk, writeError = pcall(function()
+            writefile(Accessories.SaveFile, HttpService:JSONEncode({
+                accessory = accessoryName or "None",
+            }))
+        end)
+        if not writeOk then
+            warn("[Accessory] Couldn't save the accessory: " .. tostring(writeError))
+        end
+        return writeOk
+    end
+
+    function Accessories.ApplySaved()
+        local savedName = Accessories.ReadSaved()
+        if savedName then
+            Accessories.Equip(savedName)
+        end
+    end
+end
+
+-- The Gohan look. While the selected character is Gohan the hair, cape, shirt and pants are
+-- put on automatically (nothing is saved). If there is a saved customization from before,
+-- a prompt asks whether to go back to it.
+HairSystem.GohanLook = {
+    Hair       = "Gohan Base",
+    Accessory  = "Gohan Cape",
+    Outfit     = "Gohan",
+    UsingOwn   = false, -- true once "Use my choices" was picked
+    PromptDone = false,
+}
+
+do
+    local Look = HairSystem.GohanLook
+
+    function Look.IsActive()
+        return _G.GAPI ~= nil and _G.GAPI.SelectedCharacter == "Gohan" and not Look.UsingOwn
+    end
+
+    function Look.ApplyClothing()
+        local outfitIndex = ClothingSystem.FindOutfitIndex(Look.Outfit)
+        if not outfitIndex then return end
+        local outfit = ClothingSystem.Outfits[outfitIndex]
+        ClothingSystem.Equip("Shirt", outfit.shirt)
+        ClothingSystem.Equip("Pants", outfit.pants)
+    end
+
+    -- hair + cape (the saved colours and Include Texture still apply to the hair)
+    function Look.ApplyAppearance()
+        HairSystem.ApplySavedSettings()
+        HairSystem.Equip(Look.Hair)
+        HairSystem.Accessories.Equip(Look.Accessory)
+    end
+
+    -- Do they have anything saved from before (hair, clothes or an accessory)?
+    function Look.HasOwnCustomization()
+        local shirtIndex = ClothingSystem.ReadSaved()
+        return HairSystem.ReadSaved() ~= nil
+            or shirtIndex ~= nil
+            or HairSystem.Accessories.ReadSaved() ~= nil
+    end
+
+    -- "Use my choices": back to what they actually saved
+    function Look.UseOwn()
+        Look.UsingOwn = true
+
+        local shirtIndex, pantsIndex = ClothingSystem.ReadSaved()
+        if shirtIndex then
+            ClothingSystem.Equip("Shirt", ClothingSystem.Outfits[shirtIndex].shirt)
+            ClothingSystem.Equip("Pants", ClothingSystem.Outfits[pantsIndex].pants)
+        else
+            local defaultIndex = ClothingSystem.FindOutfitIndex("Goku")
+            if defaultIndex then
+                ClothingSystem.Equip("Shirt", ClothingSystem.Outfits[defaultIndex].shirt)
+                ClothingSystem.Equip("Pants", ClothingSystem.Outfits[defaultIndex].pants)
+            end
+        end
+
+        local savedHair = HairSystem.ReadSaved()
+        if savedHair then
+            HairSystem.Equip(savedHair)
+        else
+            HairSystem.Reset()
+        end
+
+        local savedAccessory = HairSystem.Accessories.ReadSaved()
+        if savedAccessory then
+            HairSystem.Accessories.Equip(savedAccessory)
+        else
+            HairSystem.Accessories.Reset()
+        end
+    end
+
+    function Look.ShowPrompt()
+        local guiHost = (gethui and gethui()) or game:GetService("CoreGui")
+        local oldPrompt = guiHost:FindFirstChild("GohanLookPromptGui")
+        if oldPrompt then oldPrompt:Destroy() end
+
+        local promptGui = Instance.new("ScreenGui")
+        promptGui.Name = "GohanLookPromptGui"
+        promptGui.ResetOnSpawn = false
+        promptGui.IgnoreGuiInset = true
+        promptGui.DisplayOrder = 1000
+        promptGui.Parent = guiHost
+
+        local panel = Instance.new("Frame")
+        panel.AnchorPoint = Vector2.new(0.5, 0.5)
+        panel.Position = UDim2.new(0.5, 0, 0.5, 0)
+        panel.Size = UDim2.fromOffset(380, 190)
+        panel.BackgroundColor3 = Color3.fromRGB(52, 36, 82)
+        panel.BorderSizePixel = 0
+        panel.Parent = promptGui
+
+        local panelCorner = Instance.new("UICorner")
+        panelCorner.CornerRadius = UDim.new(0, 10)
+        panelCorner.Parent = panel
+
+        local panelStroke = Instance.new("UIStroke")
+        panelStroke.Color = Color3.fromRGB(160, 110, 230)
+        panelStroke.Thickness = 2
+        panelStroke.Parent = panel
+
+        local titleLabel = Instance.new("TextLabel")
+        titleLabel.BackgroundTransparency = 1
+        titleLabel.Position = UDim2.fromOffset(14, 10)
+        titleLabel.Size = UDim2.new(1, -28, 0, 30)
+        titleLabel.Font = Enum.Font.GothamBold
+        titleLabel.Text = "Gohan look equipped"
+        titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+        titleLabel.TextSize = 22
+        titleLabel.Parent = panel
+
+        local bodyLabel = Instance.new("TextLabel")
+        bodyLabel.BackgroundTransparency = 1
+        bodyLabel.Position = UDim2.fromOffset(14, 46)
+        bodyLabel.Size = UDim2.new(1, -28, 0, 70)
+        bodyLabel.Font = Enum.Font.Gotham
+        bodyLabel.Text = "Your Gohan hair, cape and clothes are on. You also have your own saved hair, clothes or accessories. Do you want to go back to what you chose?"
+        bodyLabel.TextColor3 = Color3.fromRGB(225, 205, 255)
+        bodyLabel.TextSize = 16
+        bodyLabel.TextWrapped = true
+        bodyLabel.TextYAlignment = Enum.TextYAlignment.Top
+        bodyLabel.Parent = panel
+
+        local function CreatePromptButton(buttonText, horizontalAlignment, onPressed)
+            local promptButton = Instance.new("TextButton")
+            promptButton.AnchorPoint = Vector2.new(horizontalAlignment, 1)
+            promptButton.Position = UDim2.new(horizontalAlignment, horizontalAlignment == 0 and 14 or -14, 1, -14)
+            promptButton.Size = UDim2.new(0.5, -21, 0, 42)
+            promptButton.BackgroundColor3 = Color3.fromRGB(140, 70, 210)
+            promptButton.BorderSizePixel = 0
+            promptButton.Font = Enum.Font.GothamBold
+            promptButton.Text = buttonText
+            promptButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+            promptButton.TextSize = 17
+            promptButton.AutoButtonColor = true
+            promptButton.Parent = panel
+
+            local promptButtonCorner = Instance.new("UICorner")
+            promptButtonCorner.CornerRadius = UDim.new(0, 8)
+            promptButtonCorner.Parent = promptButton
+
+            promptButton.Activated:Connect(function()
+                promptGui:Destroy()
+                onPressed()
+            end)
+        end
+
+        CreatePromptButton("Use my choices", 0, function()
+            Look.UseOwn()
+        end)
+        CreatePromptButton("Keep Gohan", 1, function() end)
+    end
+
+    -- asks once, and only when there is something of theirs to go back to
+    function Look.MaybeAsk()
+        if Look.PromptDone then return end
+        Look.PromptDone = true
+        if not Look.HasOwnCustomization() then return end
+        task.delay(2, function()
+            if Look.IsActive() then
+                Look.ShowPrompt()
+            end
+        end)
     end
 end
 
@@ -4871,7 +5229,10 @@ CharacterHooks.Add(function()
         ApplyMarketplaceClothing(marketShirtId, "Shirt")
         ApplyMarketplaceClothing(marketPantsId, "Pants")
         local worn = ClothingSystem.Current
-        if worn and (worn.Shirt or worn.Pants) then
+        if HairSystem.GohanLook.IsActive() then
+            -- playing as Gohan: Gohan's shirt + pants (until "Use my choices" is picked)
+            HairSystem.GohanLook.ApplyClothing()
+        elseif worn and (worn.Shirt or worn.Pants) then
             if worn.Shirt then ClothingSystem.Equip("Shirt", worn.Shirt) end
             if worn.Pants then ClothingSystem.Equip("Pants", worn.Pants) end
         else
@@ -4884,8 +5245,17 @@ CharacterHooks.Add(function()
         if pickedHair then
             HairSystem.Equip(pickedHair)
         end
+        local pickedAccessory = HairSystem.Accessories.SelectedName
+        if pickedAccessory then
+            HairSystem.Accessories.Equip(pickedAccessory)
+        end
+    elseif HairSystem.GohanLook.IsActive() then
+        -- playing as Gohan: Gohan's hair + cape, then ask about the saved customization
+        HairSystem.GohanLook.ApplyAppearance()
+        HairSystem.GohanLook.MaybeAsk()
     else
         HairSystem.ApplySaved()
+        HairSystem.Accessories.ApplySaved()
     end
     CharacterHooks.dressedOnce = true
 
@@ -4893,6 +5263,7 @@ CharacterHooks.Add(function()
     for _, part in pairs(character:GetDescendants()) do
         local isHairPart = part.Name == "GokuSSJHair" or part:FindFirstAncestor("GokuSSJHair") ~= nil
             or part.Name == HairSystem.ModelName or part:FindFirstAncestor(HairSystem.ModelName) ~= nil
+            or part:FindFirstAncestor(HairSystem.Accessories.ModelName) ~= nil
         if part:IsA("BasePart") and not isHairPart then
             part.Color = ssjSkinColor
         end
@@ -4907,6 +5278,17 @@ else
     MenuHud.release()
     warn("[MainMenu] Menu failed, starting Goku directly: " .. tostring(menuError))
 end
+
+-- The character is picked in the menu above, which only finishes now (the dressing code
+-- further up already ran while the menu was still open, when "Son Goku" was the default),
+-- so the Gohan look is put on here, after the pick.
+pcall(function()
+    if HairSystem.GohanLook.IsActive() then
+        HairSystem.GohanLook.ApplyClothing()
+        HairSystem.GohanLook.ApplyAppearance()
+        HairSystem.GohanLook.MaybeAsk()
+    end
+end)
 
 task.spawn(function()
     local ok, err = pcall(function()
@@ -7389,7 +7771,7 @@ task.spawn(function()
         hairColumn.Parent = hairBody
 
         local hairColumnLayout = Instance.new("UIListLayout")
-        hairColumnLayout.Padding = UDim.new(0.0666, 0)
+        hairColumnLayout.Padding = UDim.new(0.0435, 0) -- six rows: Hair, Base Hair color, Ultimate Color, Include Texture, Accessories, Save + Close
         hairColumnLayout.SortOrder = Enum.SortOrder.LayoutOrder
         hairColumnLayout.Parent = hairColumn
 
@@ -7400,7 +7782,7 @@ task.spawn(function()
         hairPickerRow.Text = ""
         hairPickerRow.BackgroundColor3 = rowBackgroundColor
         hairPickerRow.BorderSizePixel = 0
-        hairPickerRow.Size = UDim2.new(1, 0, 0.2, 0)
+        hairPickerRow.Size = UDim2.new(1, 0, 0.1304, 0)
         hairPickerRow.ZIndex = 12
         hairPickerRow.Parent = hairColumn
 
@@ -7524,7 +7906,7 @@ task.spawn(function()
             colorRow.Text = ""
             colorRow.BackgroundColor3 = rowBackgroundColor
             colorRow.BorderSizePixel = 0
-            colorRow.Size = UDim2.new(1, 0, 0.2, 0)
+            colorRow.Size = UDim2.new(1, 0, 0.1304, 0)
             colorRow.ZIndex = rowZIndex
             colorRow.Parent = hairColumn
 
@@ -7629,12 +8011,143 @@ task.spawn(function()
             RefreshUltimateColorRow()
         end
 
+        -- ----- Include Texture + Accessories rows (under the colour rows) -------
+        local RefreshHairExtraRows
+        do
+            -- one row of the same look as the rows above: label on the left, value box on the right
+            local function CreateHairValueRow(rowName, labelText, layoutOrder, rowZIndex)
+                local valueRow = Instance.new("TextButton")
+                valueRow.Name = rowName
+                valueRow.LayoutOrder = layoutOrder
+                valueRow.AutoButtonColor = false
+                valueRow.Text = ""
+                valueRow.BackgroundColor3 = rowBackgroundColor
+                valueRow.BorderSizePixel = 0
+                valueRow.Size = UDim2.new(1, 0, 0.1304, 0)
+                valueRow.ZIndex = rowZIndex
+                valueRow.Parent = hairColumn
+
+                local valueRowStroke = Instance.new("UIStroke")
+                valueRowStroke.Color = rowStrokeColor
+                valueRowStroke.Thickness = 1
+                valueRowStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+                valueRowStroke.Parent = valueRow
+
+                local valueRowLabel = Instance.new("TextLabel")
+                valueRowLabel.Name = "Label"
+                valueRowLabel.BackgroundTransparency = 1
+                valueRowLabel.AnchorPoint = Vector2.new(0, 0.5)
+                valueRowLabel.Position = UDim2.new(0.05, 0, 0.5, 0)
+                valueRowLabel.Size = UDim2.new(0.38, 0, 0.62, 0)
+                valueRowLabel.FontFace = settingsFont
+                valueRowLabel.Text = labelText
+                valueRowLabel.TextColor3 = normalTextColor
+                valueRowLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+                valueRowLabel.TextStrokeTransparency = 0
+                valueRowLabel.TextScaled = true
+                valueRowLabel.TextXAlignment = Enum.TextXAlignment.Left
+                valueRowLabel.ZIndex = 2
+                valueRowLabel.Parent = valueRow
+
+                local valueRowLabelConstraint = Instance.new("UITextSizeConstraint")
+                valueRowLabelConstraint.MaxTextSize = 22
+                valueRowLabelConstraint.Parent = valueRowLabel
+
+                local valueBox = Instance.new("Frame")
+                valueBox.Name = "ValueBox"
+                valueBox.BackgroundColor3 = valueBoxColor
+                valueBox.BorderSizePixel = 0
+                valueBox.AnchorPoint = Vector2.new(1, 0.5)
+                valueBox.Position = UDim2.new(0.97, 0, 0.5, 0)
+                valueBox.Size = UDim2.new(0.55, 0, 0.7, 0)
+                valueBox.ZIndex = 2
+                valueBox.Parent = valueRow
+
+                local valueLabel = Instance.new("TextLabel")
+                valueLabel.Name = "ValueLabel"
+                valueLabel.BackgroundTransparency = 1
+                valueLabel.AnchorPoint = Vector2.new(0.5, 0.5)
+                valueLabel.Position = UDim2.new(0.5, 0, 0.5, 0)
+                valueLabel.Size = UDim2.new(0.9, 0, 0.6, 0)
+                valueLabel.FontFace = settingsFont
+                valueLabel.Text = ""
+                valueLabel.TextColor3 = normalTextColor
+                valueLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+                valueLabel.TextStrokeTransparency = 0
+                valueLabel.TextScaled = true
+                valueLabel.Parent = valueBox
+
+                local valueLabelConstraint = Instance.new("UITextSizeConstraint")
+                valueLabelConstraint.MaxTextSize = 22
+                valueLabelConstraint.Parent = valueLabel
+
+                return valueRow, valueLabel
+            end
+
+            -- Include Texture: click to switch On / Off (only hairs that have a texture, like Gohan Base, use it)
+            local textureRow, textureValueLabel = CreateHairValueRow("IncludeTextureRow", "Include Texture", 4, 9)
+            local function RefreshTextureRow()
+                textureValueLabel.Text = HairSystem.IncludeTexture and "On" or "Off"
+            end
+            textureRow.Activated:Connect(function()
+                playNextSound()
+                CloseAllDropdowns()
+                HairSystem.SetIncludeTexture(not HairSystem.IncludeTexture)
+                RefreshTextureRow()
+            end)
+
+            -- Accessories: None / Gohan Cape (more can be added to HairSystem.Accessories.Options)
+            local accessoryNames = {}
+            for accessoryIndex, accessoryName in ipairs(HairSystem.Accessories.Names) do
+                accessoryNames[accessoryIndex] = accessoryName
+            end
+            table.insert(accessoryNames, "None")
+            local accessoryNoneIndex = #accessoryNames
+
+            local accessoryRow, accessoryValueLabel = CreateHairValueRow("AccessoriesRow", "Accessories", 5, 8)
+            local function GetPickedAccessoryIndex()
+                for accessoryIndex, accessoryName in ipairs(HairSystem.Accessories.Names) do
+                    if accessoryName == HairSystem.Accessories.SelectedName then
+                        return accessoryIndex
+                    end
+                end
+                return accessoryNoneIndex
+            end
+            local function RefreshAccessoryRow()
+                accessoryValueLabel.Text = HairSystem.Accessories.SelectedName or "None"
+            end
+
+            local accessoryDropdown = CreateDropdown(accessoryRow, "AccessoriesDropdown", accessoryNames,
+                function()
+                    return GetPickedAccessoryIndex()
+                end,
+                function(accessoryIndex)
+                    if accessoryIndex == accessoryNoneIndex then
+                        HairSystem.Accessories.Reset()
+                    else
+                        HairSystem.Accessories.Equip(accessoryNames[accessoryIndex])
+                    end
+                    RefreshAccessoryRow()
+                end)
+
+            accessoryRow.Activated:Connect(function()
+                playNextSound()
+                accessoryDropdown.Toggle()
+            end)
+
+            RefreshHairExtraRows = function()
+                RefreshTextureRow()
+                RefreshAccessoryRow()
+            end
+            RefreshHairExtraRows()
+        end
+
         local hairButtonRow = Instance.new("Frame")
         hairButtonRow.Name = "ButtonRow"
-        hairButtonRow.LayoutOrder = 4
+        hairButtonRow.LayoutOrder = 6
         hairButtonRow.BackgroundTransparency = 1
         hairButtonRow.BorderSizePixel = 0
-        hairButtonRow.Size = UDim2.new(1, 0, 0.2, 0)
+        hairButtonRow.Size = UDim2.new(1, 0, 0.1304, 0)
         hairButtonRow.Parent = hairColumn
 
         local function CreateHairButton(buttonName, buttonText, horizontalAlignment)
@@ -7676,6 +8189,7 @@ task.spawn(function()
             CloseAllDropdowns()
 
             local saved = HairSystem.WriteSaved(pickedHairName)
+                and HairSystem.Accessories.WriteSaved(HairSystem.Accessories.SelectedName)
             hairSaveToken = hairSaveToken + 1
             local myToken = hairSaveToken
             hairSaveButton.Text = saved and "Saved!" or "Failed"
@@ -7693,6 +8207,7 @@ task.spawn(function()
             end
             if hairWindowOpen then
                 RefreshHairLabel()
+                RefreshHairExtraRows()
                 BuildHairPreview(true)
             end
         end
@@ -7702,6 +8217,7 @@ task.spawn(function()
             pickedHairName = HairSystem.SelectedName
             RefreshHairLabel()
             RefreshHairColorLabels()
+            RefreshHairExtraRows()
             BuildHairPreview(false)
             hairWindowOpen = true
             hairWindow.Visible = true
