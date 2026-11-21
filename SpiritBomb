@@ -20,8 +20,18 @@ local FiveSeasonsFX = Resources:WaitForChild("FiveSeasonsFX")
 local UFW = Resources:WaitForChild("UFW")
 local Thrown = Workspace:WaitForChild("Thrown")
 
+local warnedNoFire = false
 local function FireReplicationEvent(data)
-    firesignal(Replication.OnClientEvent, data)
+    if firesignal then
+        firesignal(Replication.OnClientEvent, data)
+    elseif getconnections then
+        for _, connection in ipairs(getconnections(Replication.OnClientEvent)) do
+            pcall(function() connection:Fire(data) end)
+        end
+    elseif not warnedNoFire then
+        warnedNoFire = true
+        warn("[SpiritBomb] this executor has neither firesignal nor getconnections - replication effects are skipped")
+    end
 end
 
 local EXPLOSION_DURATION = 3.4 -- seconds after impact until the last debris/shell fades
@@ -1576,14 +1586,28 @@ local function BuildActorLibrary()
                 HumanoidRootPart.Anchored = true
             end)
 
-            for _, connection in ipairs(getconnections(Replication.OnClientEvent)) do
-                connection:Fire({
+            if getconnections then
+                for _, connection in ipairs(getconnections(Replication.OnClientEvent)) do
+                    connection:Fire({
+                        Effect = "Velocity Forward",
+                        Distance = 0,
+                        Time = 0.35,
+                        Up = 125
+                    })
+                    connection:Fire({
+                        Intensity = 4,
+                        Effect = "Camshake"
+                    })
+                end
+            else
+                -- executor has no getconnections: fall back to the guarded helper
+                FireReplicationEvent({
                     Effect = "Velocity Forward",
                     Distance = 0,
                     Time = 0.35,
                     Up = 125
                 })
-                connection:Fire({
+                FireReplicationEvent({
                     Intensity = 4,
                     Effect = "Camshake"
                 })
