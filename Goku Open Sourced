@@ -1451,7 +1451,8 @@ local function RunMainMenu(onFinished)
         end)
     end
 
-    local MUSIC_URL    = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/safe%20room.mp3"
+    local MUSIC_URL    = "https://raw.githubusercontent.com/ChosenSkibidi/DBSZ-Songs/refs/heads/main/DRAGON%20BALL%20Sparking!%20ZERO%20BGM%20%20OST%20(HQ)%20-%20DRAGON%20BALL%20Sparking!%20ZERO%20(Battle%20Version).mp3"
+    local MUSIC_FILE   = "DBPack_SparkingBattle.mp3"
     local MUSIC_VOLUME = 0.6
     local MUSIC_FADE_IN_TIME  = 3.5
     local MUSIC_FADE_OUT_TIME = 1.9
@@ -1470,8 +1471,15 @@ local function RunMainMenu(onFinished)
         musicCancelled = false
         local ok, err = pcall(function()
             if not BackNav.musicAsset then
-                writefile("SafeRoom.mp3", game:HttpGet(MUSIC_URL))
-                BackNav.musicAsset = getcustomasset("SafeRoom.mp3")
+                local needsDownload = not isfile(MUSIC_FILE)
+                if not needsDownload then
+                    local readOk, contents = pcall(readfile, MUSIC_FILE)
+                    needsDownload = not readOk or #contents < 10240
+                end
+                if needsDownload then
+                    writefile(MUSIC_FILE, game:HttpGet(MUSIC_URL))
+                end
+                BackNav.musicAsset = getcustomasset(MUSIC_FILE)
             end
             local musicAsset = BackNav.musicAsset
             if musicCancelled then return end
@@ -5560,6 +5568,7 @@ local musicSongs = {
     { name = "still love you - GLM-RST", file = "sly.mp3", url = "https://raw.githubusercontent.com/ChosenSkibidi/Goku-Update-Testing-/refs/heads/main/still%20love%20you%20(Slowed).mp3" },
     { name = "Warmpop", file = "Warmpop.mp3", url = "https://raw.githubusercontent.com/ChosenSkibidi/Goku-Update-Testing-/refs/heads/main/ESPRIT%20%E7%A9%BA%E6%83%B3%2C%20George%20Clanton%20-%20Warmpop.mp3" },
     { name = "I can't handle change - ROAR", file = "ICantHandleChange.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/I%20can%27t%20handle%20change%20-%20ROAR.mp3" },
+    { name = "Safe Room", file = "SafeRoom.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/safe%20room.mp3" },
 }
 
 local dbSongs = {
@@ -5571,6 +5580,7 @@ local dbSongs = {
     { name = "Super Saiyan Blue", file = "DBPack_SuperSaiyanBlue.mp3", url = "https://raw.githubusercontent.com/ChosenSkibidi/DBSZ-Songs/refs/heads/main/Dragon%20Ball%20Super%20OST%20Blue%20Saiyan.mp3" },
     { name = "The Earth's Fate", file = "DBPack_TheEarthsFate.mp3", url = "https://raw.githubusercontent.com/ChosenSkibidi/DBSZ-Songs/refs/heads/main/The%20Earths%20Fate.mp3" },
     { name = "Trouble Erupts", file = "DBPack_TroubleErupts.mp3", url = "https://raw.githubusercontent.com/ChosenSkibidi/DBSZ-Songs/refs/heads/main/Dragon%20ball%20Super%20OST%20-%20Trouble%20Erupts!%20(Goku%20vs%20Hit).mp3" },
+    { name = "Main Menu Theme", file = "MainMenuOST.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/Dragon%20Ball%20Z%20Divine%20Clash!%20(Main%20Menu%20OST).mp3" },
 }
 
 local function DownloadSongFile(url, filename)
