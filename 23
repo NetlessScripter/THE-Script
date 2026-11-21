@@ -95,18 +95,35 @@ do
 	end)
 end
 
+local warnedNoFileApi = false
 local function GetGitSoundBase(GithubSnd, SoundName, Volume)
     local url = GithubSnd
     local fileName = SoundName .. ".mp3"
 
-    if not isfile(fileName) then
-        writefile(fileName, game:HttpGet(url))
-    end
-
     local sound = Instance.new("Sound")
-    sound.SoundId = (getcustomasset or getsynasset)(fileName)
     sound.Volume = Volume or 1
     sound.Name = "HAGAH"
+
+    -- isfile / writefile / getcustomasset are executor functions: if one is missing (or the download
+    -- fails) the sound stays silent instead of throwing "attempt to call a nil value"
+    local getAsset = getcustomasset or getsynasset
+    if isfile and writefile and getAsset then
+        local ok, assetId = pcall(function()
+            if not isfile(fileName) then
+                writefile(fileName, game:HttpGet(url))
+            end
+            return getAsset(fileName)
+        end)
+        if ok and assetId then
+            sound.SoundId = assetId
+        else
+            warn("[GetGitSoundBase] could not load " .. fileName .. ":", assetId)
+        end
+    elseif not warnedNoFileApi then
+        warnedNoFileApi = true
+        warn("[GetGitSoundBase] this executor lacks isfile/writefile/getcustomasset - custom sounds are silent")
+    end
+
     sound.Parent = workspace
 
     return sound
@@ -7070,7 +7087,7 @@ sound:Play()
 			pcall(function()
 				ReplicatedStorage = game:GetService("ReplicatedStorage")
 				Replication = ReplicatedStorage.Replication
-				for _, conn in ipairs((ACTOR_IS_LOCAL and getconnections(Replication.OnClientEvent) or {})) do
+				for _, conn in ipairs((ACTOR_IS_LOCAL and getconnections and getconnections(Replication.OnClientEvent) or {})) do
 					fn = conn.Function
 					if fn then
 						task.spawn(fn, {
@@ -11008,7 +11025,7 @@ end)
 					pcall(function()
 						ReplicatedStorage = game:GetService("ReplicatedStorage")
 						Replication = ReplicatedStorage.Replication
-						for _, conn in ipairs((ACTOR_IS_LOCAL and getconnections(Replication.OnClientEvent) or {})) do
+						for _, conn in ipairs((ACTOR_IS_LOCAL and getconnections and getconnections(Replication.OnClientEvent) or {})) do
 							fn = conn.Function
 							if fn then
 								task.spawn(fn, {
