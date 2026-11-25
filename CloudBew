@@ -1,0 +1,3270 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+local AssetService = game:GetService("AssetService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+
+local Config = {
+	StartHour = "GoldenHour",
+	StartPlaying = true,
+	StartSpeedIndex = 1,
+	Speeds = { 1, 60, 600 },
+	SpeedLabels = { "1\u{00D7} real time", "60\u{00D7}", "600\u{00D7}" },
+	StudsPerMeter = 1 / 0.28,
+	Sky = {
+		HalfSize = 3000,
+		FaceResolution = 192,
+		StarResolution = 768,
+		LutElevations = 160,
+		LutAzimuths = 96,
+		SliceBudgetSeconds = 0.0025,
+		MinRefreshInterval = 0.6,
+		NightGrain = 0,
+		StarsEnabled = true,
+		SunSpriteSize = 192,
+		SunSpriteHalfAngle = 3.5,
+		MoonSpriteSize = 192,
+		MoonSpriteHalfAngle = 2,
+		HaloSpriteSize = 384,
+		HaloSpriteHalfAngle = 26,
+		HaloDistance = 2000,
+		CelestialDistanceFraction = 0.97,
+		CubeThickness = 4,
+		TileOverlap = 4,
+	},
+	Lighting = {
+		Enabled = true,
+		AlignEngineSun = true,
+		ManageAtmosphere = true,
+		ManageEffects = true,
+		AmbientScale = 1,
+		BrightnessScale = 1,
+		AtmosphereDensityScale = 1,
+		UpdateInterval = 0.1,
+	},
+	Clouds = {
+		Enabled = true,
+		Resolution = 146,
+		Steps = 22,
+		BudgetSeconds = 0.003,
+		InitialBudgetSeconds = 0.008,
+		RefreshDriftMeters = 120,
+		EarlyOut = true,
+		FadeSeconds = 2.5,
+	},
+	Hud = {
+		Enabled = true,
+	},
+}
+
+if UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled then
+	Config.Sky.FaceResolution = 160
+	Config.Sky.StarResolution = 512
+	Config.Sky.LutElevations = 128
+	Config.Sky.LutAzimuths = 80
+	Config.Sky.SunSpriteSize = 128
+	Config.Sky.MoonSpriteSize = 128
+	Config.Sky.HaloSpriteSize = 256
+	Config.Clouds.Resolution = 64
+	Config.Clouds.BudgetSeconds = 0.002
+	Config.Clouds.InitialBudgetSeconds = 0.005
+end
+
+local function getSharedEnvironment()
+	local ok, environment = pcall(function()
+		return getgenv()
+	end)
+	if ok and type(environment) == "table" then
+		return environment
+	end
+	return _G
+end
+
+local sharedEnvironment = getSharedEnvironment()
+if sharedEnvironment.GeorgiaSkyPort and type(sharedEnvironment.GeorgiaSkyPort.Destroy) == "function" then
+	pcall(sharedEnvironment.GeorgiaSkyPort.Destroy)
+	sharedEnvironment.GeorgiaSkyPort = nil
+end
+
+local Cleanup = { tasks = {} }
+
+function Cleanup.add(callback)
+	Cleanup.tasks[#Cleanup.tasks + 1] = callback
+end
+
+function Cleanup.run()
+	for index = #Cleanup.tasks, 1, -1 do
+		pcall(Cleanup.tasks[index])
+	end
+	table.clear(Cleanup.tasks)
+end
+
+local function track(instance)
+	Cleanup.add(function()
+		instance:Destroy()
+	end)
+	return instance
+end
+
+local function connect(signal, callback)
+	local connection = signal:Connect(callback)
+	Cleanup.add(function()
+		connection:Disconnect()
+	end)
+	return connection
+end
+
+local function notify(message)
+	warn("[GeorgiaSky] " .. message)
+end
+
+local STUDS_PER_METER = Config.StudsPerMeter
+
+local Core = (function()
+local Core = {}
+
+local sqrt, exp, abs, floor, sin, cos, tan, asin, acos, atan2, log, min, max = math.sqrt, math.exp, math.abs, math.floor, math.sin, math.cos, math.tan, math.asin, math.acos, math.atan2, math.log, math.min, math.max
+local PI = math.pi
+local DEG = PI / 180
+
+local function clamp(x, lo, hi)
+	if x < lo then return lo elseif x > hi then return hi end
+	return x
+end
+
+local function smoothstep(e0, e1, x)
+	local t = (x - e0) / (e1 - e0)
+	if t < 0 then t = 0 elseif t > 1 then t = 1 end
+	return t * t * (3 - 2 * t)
+end
+
+local function mix(a, b, t)
+	return a + (b - a) * t
+end
+
+local function fract(x)
+	return x - floor(x)
+end
+
+local f32buffer = buffer.create(4)
+local function f32(x)
+	buffer.writef32(f32buffer, 0, x)
+	return buffer.readf32(f32buffer, 0)
+end
+local C1, C2 = f32(123.34), f32(456.21)
+local function hash2(px, py)
+	px = f32(px * C1)
+	py = f32(py * C2)
+	px = px - floor(px)
+	py = py - floor(py)
+	local d = px * (px + 45.32) + py * (py + 45.32)
+	px = px + d
+	py = py + d
+	local v = px * py
+	return v - floor(v)
+end
+
+local function valueNoise(px, py)
+	local ix, iy = floor(px), floor(py)
+	local fx, fy = px - ix, py - iy
+	fx = fx * fx * (3 - 2 * fx)
+	fy = fy * fy * (3 - 2 * fy)
+	local a = hash2(ix, iy)
+	local b = hash2(ix + 1, iy)
+	local c = hash2(ix, iy + 1)
+	local d = hash2(ix + 1, iy + 1)
+	return mix(mix(a, b, fx), mix(c, d, fx), fy)
+end
+
+Core.clamp = clamp
+Core.smoothstep = smoothstep
+Core.mix = mix
+Core.fract = fract
+Core.hash2 = hash2
+Core.valueNoise = valueNoise
+
+local function aces(x)
+	local v = (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14)
+	if v < 0 then return 0 elseif v > 1 then return 1 end
+	return v
+end
+Core.aces = aces
+
+local SRGB_TABLE_SIZE = 4096
+local srgbTable = table.create(SRGB_TABLE_SIZE + 1)
+for i = 0, SRGB_TABLE_SIZE do
+	local x = i / SRGB_TABLE_SIZE
+	if x <= 0.0031308 then
+		srgbTable[i + 1] = x * 12.92
+	else
+		srgbTable[i + 1] = 1.055 * x ^ (1 / 2.4) - 0.055
+	end
+end
+
+local function srgbEncode(x)
+	if x <= 0 then return 0 end
+	if x >= 1 then return 1 end
+	local f = x * SRGB_TABLE_SIZE
+	local i = floor(f)
+	local t = f - i
+	local a = srgbTable[i + 1]
+	local b = srgbTable[i + 2]
+	return a + (b - a) * t
+end
+Core.srgbEncode = srgbEncode
+
+local function srgbDecode(x)
+	if x <= 0.04045 then return x / 12.92 end
+	return ((x + 0.055) / 1.055) ^ 2.4
+end
+Core.srgbDecode = srgbDecode
+
+local function acesInverse(y)
+	if y <= 0 then return 0 end
+	if y > 0.9995 then y = 0.9995 end
+	local a = 2.43 * y - 2.51
+	local b = 0.59 * y - 0.03
+	local c = 0.14 * y
+	local discriminant = b * b - 4 * a * c
+	if discriminant < 0 then discriminant = 0 end
+	return (-b - sqrt(discriminant)) / (2 * a)
+end
+Core.acesInverse = acesInverse
+
+local function exposeToDisplay(r, g, b, exposure)
+	r, g, b = r * exposure, g * exposure, b * exposure
+	local luminance = r * 0.2126 + g * 0.7152 + b * 0.0722
+	local sk = 1 - smoothstep(0.004, 0.12, luminance)
+	local rod = (r * 0.06 + g * 0.6 + b * 0.34)
+	local mixAmount = sk * 0.8
+	r = r + (rod * 0.72 - r) * mixAmount
+	g = g + (rod * 0.9 - g) * mixAmount
+	b = b + (rod * 1.25 - b) * mixAmount
+	return srgbEncode(aces(r)), srgbEncode(aces(g)), srgbEncode(aces(b)), sk
+end
+Core.exposeToDisplay = exposeToDisplay
+
+Core.DEG = DEG
+Core.PI = PI
+
+return Core
+end)()
+local Astro = (function()
+local Astro = {}
+
+local floor, sin, cos, tan, asin, acos, atan2, sqrt, pow, min, max, abs = math.floor, math.sin, math.cos, math.tan, math.asin, math.acos, math.atan2, math.sqrt, math.pow or function(a, b) return a ^ b end, math.min, math.max, math.abs
+local PI = math.pi
+local DEG = PI / 180
+
+local LATITUDE = 33.749
+local LONGITUDE = -84.388
+
+Astro.Latitude = LATITUDE
+Astro.Longitude = LONGITUDE
+
+local function daysFromCivil(year, month, day)
+	local y = year
+	local m = month
+	if m <= 2 then
+		y = y - 1
+	end
+	local era = floor(y / 400)
+	local yoe = y - era * 400
+	local mp = (m + 9) % 12
+	local doyShifted = floor((153 * mp + 2) / 5) + day - 1
+	local doe = yoe * 365 + floor(yoe / 4) - floor(yoe / 100) + doyShifted
+	return era * 146097 + doe - 719468
+end
+
+local function easternOffsetHours(year, month, day)
+	local marchFirst = daysFromCivil(year, 3, 1)
+	local marchFirstWeekday = (marchFirst + 4) % 7
+	local secondSundayMarch = 1 + ((7 - marchFirstWeekday) % 7) + 7
+	local novemberFirst = daysFromCivil(year, 11, 1)
+	local novemberFirstWeekday = (novemberFirst + 4) % 7
+	local firstSundayNovember = 1 + ((7 - novemberFirstWeekday) % 7)
+	local isDaylight
+	if month > 3 and month < 11 then
+		isDaylight = true
+	elseif month == 3 then
+		isDaylight = day >= secondSundayMarch
+	elseif month == 11 then
+		isDaylight = day < firstSundayNovember
+	else
+		isDaylight = false
+	end
+	if isDaylight then
+		return -4, true
+	end
+	return -5, false
+end
+
+Astro.easternOffsetHours = easternOffsetHours
+
+function Astro.setDate(year, month, day, overrideTimezone)
+	local days = daysFromCivil(year, month, day)
+	local jan0 = daysFromCivil(year, 1, 1) - 1
+	Astro.DayOfYear = days - jan0
+	Astro.JulianDayAtMidnight = days + 2440587.5
+	Astro.Year = year
+	local tz, isDaylight = easternOffsetHours(year, month, day)
+	if overrideTimezone then
+		tz = overrideTimezone
+	end
+	Astro.Timezone = tz
+	Astro.IsDaylightTime = isDaylight
+	Astro.YearsSince2000 = year + Astro.DayOfYear / 365 - 2000
+end
+
+local function refraction(elevationDegrees)
+	if elevationDegrees < -2 then
+		return elevationDegrees
+	end
+	local r = 1.02 / tan((elevationDegrees + 10.3 / (elevationDegrees + 5.11)) * DEG) / 60
+	return elevationDegrees + r * min(1, elevationDegrees + 2)
+end
+Astro.refraction = refraction
+
+function Astro.sunAt(hour)
+	local doy = Astro.DayOfYear
+	local tz = Astro.Timezone
+	local g = 2 * PI / 365 * (doy - 1 + (hour - 12) / 24)
+	local eq = 229.18 * (0.000075 + 0.001868 * cos(g) - 0.032077 * sin(g) - 0.014615 * cos(2 * g) - 0.040849 * sin(2 * g))
+	local dc = 0.006918 - 0.399912 * cos(g) + 0.070257 * sin(g) - 0.006758 * cos(2 * g) + 0.000907 * sin(2 * g) - 0.002697 * cos(3 * g) + 0.00148 * sin(3 * g)
+	local ha = ((hour * 60 + eq + 4 * LONGITUDE - 60 * tz) / 4 - 180) * DEG
+	local la = LATITUDE * DEG
+	local el = asin(sin(la) * sin(dc) + cos(la) * cos(dc) * cos(ha)) / DEG
+	local az = (atan2(sin(ha), cos(ha) * sin(la) - tan(dc) * cos(la)) / DEG + 180) % 360
+	return refraction(el), az
+end
+
+function Astro.sunDirection(hour)
+	local el, az = Astro.sunAt(hour)
+	local ce = cos(el * DEG)
+	return sin(az * DEG) * ce, sin(el * DEG), -cos(az * DEG) * ce, el, az
+end
+
+function Astro.siderealAngle(hour)
+	local jd = Astro.JulianDayAtMidnight + (hour - Astro.Timezone) / 24
+	return ((280.46061837 + 360.98564736629 * (jd - 2451545) + LONGITUDE) % 360 + 360) % 360
+end
+
+function Astro.moonAt(hour, siderealDegrees)
+	local jd = Astro.JulianDayAtMidnight + (hour - Astro.Timezone) / 24
+	local T = (jd - 2451545) / 36525
+	local function s(a, b)
+		return sin((a + b * T) * DEG)
+	end
+	local lo = (218.32 + 481267.881 * T + 6.29 * s(135, 477198.87) - 1.27 * s(259.3, -413335.36) + 0.66 * s(235.7, 890534.22) + 0.21 * s(269.9, 954397.74) - 0.19 * s(357.5, 35999.05) - 0.11 * s(186.5, 966404.03)) * DEG
+	local la = (5.13 * s(93.3, 483202.02) + 0.28 * s(228.2, 960400.89) - 0.28 * s(318.3, 6003.15) - 0.17 * s(217.6, -407332.21)) * DEG
+	local hp = 0.9508 + 0.0518 * cos((135 + 477198.87 * T) * DEG)
+	local e = (23.439 - 0.013 * T) * DEG
+	local X = cos(la) * cos(lo)
+	local Y = cos(la) * sin(lo)
+	local Z = sin(la)
+	local Yq = Y * cos(e) - Z * sin(e)
+	local Zq = Y * sin(e) + Z * cos(e)
+	local ra = atan2(Yq, X) / DEG
+	local dc = asin(Zq)
+	local H = (siderealDegrees - ra) * DEG
+	local cd = cos(dc)
+	local cl = cos(LATITUDE * DEG)
+	local sl = sin(LATITUDE * DEG)
+	local vx = -cd * sin(H)
+	local vy = cd * cos(H) * cl + Zq * sl
+	local vz = cd * cos(H) * sl - Zq * cl
+	local e0 = asin(vy) / DEG
+	local el = refraction(e0 - hp * cos(e0 * DEG))
+	local horizontal = sqrt(vx * vx + vz * vz)
+	if horizontal == 0 then horizontal = 1 end
+	local k = cos(el * DEG) / horizontal
+	local d = jd - 2451545
+	local ls = (280.46 + 0.9856474 * d + 1.915 * sin((357.528 + 0.9856003 * d) * DEG)) * DEG
+	local phaseAngle = 180 - acos(cos(la) * cos(lo - ls)) / DEG
+	return vx * k, sin(el * DEG), vz * k, el, phaseAngle
+end
+
+function Astro.moonIntensity(phaseAngle, moonElevation)
+	local a = phaseAngle
+	local magnitudeTerm = 0.026 * a + 4e-9 * a ^ 4
+	local horizonFade = min(1, max(0, (moonElevation + 1) / 3))
+	return 3e-3 * 10 ^ (-0.4 * magnitudeTerm) * horizonFade
+end
+
+function Astro.exposureTarget(sunElevation)
+	local a = min(1, max(0, (30 - sunElevation) / 30))
+	local b = min(1, max(0, -sunElevation / 12))
+	return math.log(0.3 * 2 ^ (1.8 * a ^ 1.3) * 10 ^ (b * 3), 2)
+end
+
+function Astro.humidityState(hour)
+	local rh = 0.70 + 0.17 * cos((hour - 5) / 12 * PI)
+	local hz = min(2.2, max(1, ((1 - rh) / 0.6) ^ -0.7))
+	local aerosol = 4e-5 * hz
+	local cloudBase = max(300, 2500 * (1 - rh))
+	local convection = max(0, sin((hour - 8) / 14 * PI))
+	return rh, aerosol, cloudBase, convection
+end
+
+function Astro.windOffset(windTime)
+	return -windTime * 6.7, windTime * 1.8
+end
+
+Astro.STAR_DATA = '6.752,-16.72,-1.46,0;14.261,19.18,-.05,12;18.616,38.78,.03,0;5.278,46,.08,8;5.242,-8.2,.13,0;7.655,5.22,.34,4;5.919,7.41,.45,18;19.846,8.87,.76,2;4.599,16.51,.86,15;16.49,-26.43,1.06,18;13.42,-11.16,.97,-2;7.755,28.03,1.14,10;22.961,-29.62,1.16,1;20.69,45.28,1.25,1;10.14,11.97,1.35,-1;7.577,31.89,1.58,0;17.56,-37.1,1.62,-2;5.419,6.35,1.64,-2;5.438,28.61,1.65,-1;5.604,-1.2,1.69,-2;5.679,-1.94,1.77,-2;12.9,55.96,1.77,0;11.062,61.75,1.79,10;3.405,49.86,1.8,5;7.14,-26.39,1.83,7;18.403,-34.38,1.85,0;13.792,49.31,1.86,-1;5.992,44.95,1.9,0;6.629,16.4,1.93,0;6.378,-17.96,1.98,-2;2.53,89.26,1.98,6;9.46,-8.66,1.98,14;2.12,23.46,2,11;.726,-17.99,2.04,10;13.399,54.93,2.04,2;18.921,-26.3,2.05,-2;.139,29.09,2.06,-1;5.796,-9.67,2.07,-2;17.582,12.56,2.07,2;14.845,74.16,2.08,15;11.818,14.57,2.14,1;3.136,40.96,2.1,0;2.065,42.33,2.1,12;.675,56.54,2.24,12;20.37,40.26,2.23,7;17.943,51.49,2.23,15;16.005,-22.62,2.32,-1;.153,59.15,2.27,4;5.533,-.3,2.23,-2;11.031,56.38,2.37,0;.945,60.72,2.47,0;11.897,53.69,2.44,0;1.43,60.24,2.68,1;12.257,57.03,3.31,1'
+
+local function mixColor(a, b, t)
+	t = min(1, max(0, t))
+	return a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, a[3] + (b[3] - a[3]) * t
+end
+
+function Astro.buildStars()
+	local stars = {}
+	local yearsSince2000 = Astro.YearsSince2000
+	for row in string.gmatch(Astro.STAR_DATA, "[^;]+") do
+		local fields = {}
+		for value in string.gmatch(row, "[^,]+") do
+			fields[#fields + 1] = tonumber(value)
+		end
+		local raHours, decDegrees, magnitude, bvTimesTen = fields[1], fields[2], fields[3], fields[4]
+		local a = raHours * 15 * DEG
+		local d = decDegrees * DEG
+		local bv = bvTimesTen / 10
+		local amplitude = 0.04 * 10 ^ (-0.4 * (magnitude - 1))
+		local r1, g1, b1 = mixColor({ 0.7, 0.8, 1 }, { 1, 0.97, 0.9 }, (bv + 0.1) / 0.7)
+		local r2, g2, b2 = mixColor({ r1, g1, b1 }, { 1, 0.55, 0.3 }, (bv - 0.6) / 1.2)
+		stars[#stars + 1] = {
+			raDegrees = raHours * 15 + yearsSince2000 / 3600 * (46.125 + 20.04 * sin(a) * tan(d)),
+			decDegrees = decDegrees + yearsSince2000 / 3600 * 20.04 * cos(a),
+			colorR = r2 * amplitude,
+			colorG = g2 * amplitude,
+			colorB = b2 * amplitude,
+			magnitude = magnitude,
+		}
+	end
+	Astro.Stars = stars
+	return stars
+end
+
+function Astro.starDirection(star, siderealDegrees)
+	local H = (siderealDegrees - star.raDegrees) * DEG
+	local dc = star.decDegrees * DEG
+	local cd, ch, sd = cos(dc), cos(H), sin(dc)
+	local cl = cos(LATITUDE * DEG)
+	local sl = sin(LATITUDE * DEG)
+	return -cd * sin(H), cd * ch * cl + sd * sl, cd * ch * sl - sd * cl
+end
+
+function Astro.formatClock(hour)
+	local h = floor(hour)
+	local m = floor((hour - h) * 60)
+	local suffix = h < 12 and "AM" or "PM"
+	local display = h % 12
+	if display == 0 then display = 12 end
+	return string.format("%d:%02d %s %s", display, m, suffix, Astro.Timezone == -4 and "EDT" or "EST")
+end
+
+return Astro
+end)()
+local Atmos = (function()
+local Atmos = {}
+
+local sqrt, exp, abs, floor, sin, cos, atan2, asin, acos, min, max = math.sqrt, math.exp, math.abs, math.floor, math.sin, math.cos, math.atan2, math.asin, math.acos, math.min, math.max
+local PI = math.pi
+
+local R = 6371e3
+local HA = 100e3
+local SG = 0.02
+local E0 = 20
+local MIE_G = 0.64
+local BR_R, BR_G, BR_B = 5.8e-6, 13.5e-6, 33.1e-6
+local BO_R, BO_G, BO_B = 0.65e-6, 1.881e-6, 0.085e-6
+local GLOW_R, GLOW_G, GLOW_B = 0.3 * 4e-5, 0.5 * 4e-5, 0.6 * 4e-5
+
+Atmos.R = R
+Atmos.HA = HA
+Atmos.SG = SG
+Atmos.E0 = E0
+Atmos.GLOW = { GLOW_R, GLOW_G, GLOW_B }
+
+local sunX, sunY, sunZ = 0, 1, 0
+local aerosol = 4e-5
+local cameraHeight = 1.7
+local fillScale = 0
+
+function Atmos.configure(newSunX, newSunY, newSunZ, newAerosol, newCameraHeight)
+	sunX, sunY, sunZ = newSunX, newSunY, newSunZ
+	aerosol = newAerosol
+	cameraHeight = newCameraHeight
+	local t = (sunY + 0.12) / 0.47
+	if t < 0 then t = 0 elseif t > 1 then t = 1 end
+	fillScale = t * t * (3 - 2 * t) * 0.032
+end
+
+local function sunTransmittance(px, py, pz)
+	local b = px * sunX + py * sunY + pz * sunZ
+	local len = sqrt(px * px + py * py + pz * pz)
+	local c = (len - R) * (len + R)
+	if c > 0 and b < 0 and b * b > c then
+		return 0, 0, 0
+	end
+	local cA = (len - R - HA) * (len + R + HA)
+	local disc = b * b - cA
+	if disc < 0 then disc = 0 end
+	local tl = -b + sqrt(disc)
+	local dt = tl / 6
+	local odR, odG, odB = 0, 0, 0
+	local mieScaled = aerosol * 1.11
+	for i = 0, 5 do
+		local f = (i + 0.5) * dt
+		local qx, qy, qz = px + sunX * f, py + sunY * f, pz + sunZ * f
+		local a = sqrt(qx * qx + qy * qy + qz * qz) - R
+		local rd = exp(-a / 8e3)
+		local md = exp(-a / 1.5e3)
+		local oz = 1 - abs(a - 25e3) / 15e3
+		if oz < 0 then oz = 0 end
+		local mieTerm = mieScaled * md
+		odR = odR + (BR_R * rd + mieTerm + BO_R * oz) * dt
+		odG = odG + (BR_G * rd + mieTerm + BO_G * oz) * dt
+		odB = odB + (BR_B * rd + mieTerm + BO_B * oz) * dt
+	end
+	return exp(-odR), exp(-odG), exp(-odB)
+end
+Atmos.sunTransmittance = sunTransmittance
+
+local function scatter(dx, dy, dz, tmax, steps)
+	local h = cameraHeight
+	local oy = R + h
+	local b = oy * dy
+	local disc = b * b - (h - HA) * (2 * R + h + HA)
+	local tExit = -b + sqrt(disc)
+	if tExit < tmax then tmax = tExit end
+	local mu = dx * sunX + dy * sunY + dz * sunZ
+	local mu2 = mu * mu
+	local g2 = MIE_G * MIE_G
+	local pR = 3 / (16 * PI) * (1 + mu2)
+	local pM = 3 / (8 * PI) * (1 - g2) * (1 + mu2) / ((2 + g2) * (1 + g2 - 2 * MIE_G * mu) ^ 1.5)
+	local odR, odG, odB = 0, 0, 0
+	local sR, sG, sB = 0, 0, 0
+	local fillR = BR_R * 8e3 + aerosol * 1.5e3
+	local fillG = BR_G * 8e3 + aerosol * 1.5e3
+	local fillB = BR_B * 8e3 + aerosol * 1.5e3
+	local mieScaled = aerosol * 1.11
+	for i = 0, steps - 1 do
+		local f0 = i / steps
+		local f1 = (i + 1) / steps
+		local t0 = tmax * f0 * f0
+		local t1 = tmax * f1 * f1
+		local dt = t1 - t0
+		local tm = (t0 + t1) * 0.5
+		local px, py, pz = dx * tm, oy + dy * tm, dz * tm
+		local a = sqrt(px * px + py * py + pz * pz) - R
+		if a < 0 then a = 0 end
+		local rd = exp(-a / 8e3)
+		local md = exp(-a / 1.5e3)
+		local oz = 1 - abs(a - 25e3) / 15e3
+		if oz < 0 then oz = 0 end
+		local mieTerm = mieScaled * md
+		local eR = (BR_R * rd + mieTerm + BO_R * oz) * dt
+		local eG = (BR_G * rd + mieTerm + BO_G * oz) * dt
+		local eB = (BR_B * rd + mieTerm + BO_B * oz) * dt
+		local trR = exp(-(odR + eR * 0.5))
+		local trG = exp(-(odG + eG * 0.5))
+		local trB = exp(-(odB + eB * 0.5))
+		odR, odG, odB = odR + eR, odG + eG, odB + eB
+		local mieDensity = aerosol * md
+		if fillScale > 0 then
+			local rayleighColumn = rd * 8e3
+			local mieColumn = aerosol * 1.665e3 * md
+			sR = sR + trR * (BR_R * rd + mieDensity) * dt * fillR * exp(-(BR_R * rayleighColumn + mieColumn)) * fillScale
+			sG = sG + trG * (BR_G * rd + mieDensity) * dt * fillG * exp(-(BR_G * rayleighColumn + mieColumn)) * fillScale
+			sB = sB + trB * (BR_B * rd + mieDensity) * dt * fillB * exp(-(BR_B * rayleighColumn + mieColumn)) * fillScale
+		end
+		local stR, stG, stB = sunTransmittance(px, py, pz)
+		if stR + stG + stB > 0 then
+			sR = sR + stR * trR * (BR_R * rd * pR + mieDensity * pM) * dt
+			sG = sG + stG * trG * (BR_G * rd * pR + mieDensity * pM) * dt
+			sB = sB + stB * trB * (BR_B * rd * pR + mieDensity * pM) * dt
+		end
+	end
+	return sR * E0, sG * E0, sB * E0, exp(-odR), exp(-odG), exp(-odB)
+end
+Atmos.scatter = scatter
+
+local function aerialTransmittance(altitude, dy)
+	local d = dy
+	if d < 0.04 then d = 0.04 end
+	local rayleighColumn = 8e3 * (1 - exp(-altitude / 8e3))
+	local mieColumn = aerosol * 1.665e3 * (1 - exp(-altitude / 1.5e3))
+	return exp(-(BR_R * rayleighColumn + mieColumn) / d), exp(-(BR_G * rayleighColumn + mieColumn) / d), exp(-(BR_B * rayleighColumn + mieColumn) / d)
+end
+Atmos.aerialTransmittance = aerialTransmittance
+
+local function henyeyGreenstein(g, m)
+	return (1 - g * g) / (4 * PI * (1 + g * g - 2 * g * m) ^ 1.5)
+end
+Atmos.henyeyGreenstein = henyeyGreenstein
+
+local function cloudPhase(g, m)
+	local a = henyeyGreenstein(g, m)
+	local b = henyeyGreenstein(-0.3 * g, m)
+	return a + (b - a) * 0.2
+end
+Atmos.cloudPhase = cloudPhase
+
+local function multipleScattering(opticalDepth, p1, p2, p3)
+	local e = exp(-opticalDepth)
+	local e1 = sqrt(e)
+	return 1.5 * (p1 * e + 0.5 * p2 * e1 + 0.25 * p3 * sqrt(e1))
+end
+Atmos.multipleScattering = multipleScattering
+
+local function fresnel(c, n)
+	local s = sqrt(max(1 - c * c, 0)) / n
+	local k = sqrt(max(1 - s * s, 0))
+	local rs = (c - n * k) / (c + n * k)
+	local rp = (n * c - k) / (n * c + k)
+	return 0.5 * (rs * rs + rp * rp)
+end
+Atmos.fresnel = fresnel
+
+function Atmos.aerosolValue()
+	return aerosol
+end
+
+function Atmos.wetness()
+	local t = (aerosol / 4e-5 - 1.7) / (2.15 - 1.7)
+	if t < 0 then t = 0 elseif t > 1 then t = 1 end
+	return t * t * (3 - 2 * t)
+end
+
+function Atmos.groundContext(moonX, moonY, moonZ, moonIntensity)
+	local zr, zg, zb = scatter(0, 1, 0, 1e7, 8)
+	local context = {
+		ambientR = zr * 1.4 + GLOW_R,
+		ambientG = zg * 1.4 + GLOW_G,
+		ambientB = zb * 1.4 + GLOW_B,
+		wet = Atmos.wetness(),
+	}
+	context.moonR, context.moonG, context.moonB = 0, 0, 0
+	if moonIntensity > 0 and moonY > 0 then
+		local tr, tg, tb = aerialTransmittance(1e5, moonY)
+		local moonTerm = moonIntensity * 0.1 * moonY
+		context.moonR, context.moonG, context.moonB = moonTerm * tr, moonTerm * tg, moonTerm * tb
+	end
+	return context
+end
+
+local GROUND_ALBEDO_R, GROUND_ALBEDO_G, GROUND_ALBEDO_B = 0.34 * 0.9 * 1.03 * 1.0, 0.33 * 0.9 * 1.03 * 1.0, 0.31 * 0.9 * 1.03 * 1.0
+
+function Atmos.groundRadiance(dx, dy, dz, context, reflectedR, reflectedG, reflectedB)
+	local h = cameraHeight
+	local t = h / -dy
+	local px, pz = dx * t, dz * t
+	local stR, stG, stB = sunTransmittance(px, R, pz)
+	local wet = context.wet
+	local nv = -dy
+	if nv < 0.01 then nv = 0.01 end
+	local nl = sunY
+	if nl < 0.01 then nl = 0.01 end
+	local hx, hy, hz = sunX - dx, sunY - dy, sunZ - dz
+	local hl = sqrt(hx * hx + hy * hy + hz * hz)
+	hx, hy, hz = hx / hl, hy / hl, hz / hl
+	local nh = hy
+	local a2 = (0.09 + (0.0144 - 0.09) * wet)
+	local ndh = -(dx * hx + dy * hy + dz * hz)
+	if ndh < 0.001 then ndh = 0.001 elseif ndh > 1 then ndh = 1 end
+	local dg = a2 / (PI * (nh * nh * (a2 - 1) + 1) ^ 2)
+	local ior = 1.5 + (1.33 - 1.5) * wet
+	local fr = fresnel(ndh, ior)
+	local specular = dg * fr * (2 * nl / (nl + sqrt(a2 + (1 - a2) * nl * nl))) * 0.5 / (nv + sqrt(a2 + (1 - a2) * nv * nv))
+	local fn = fresnel(nv, ior) * (0.35 + (0.85 - 0.35) * wet)
+	local sunUp = sunY
+	if sunUp < 0 then sunUp = 0 end
+	local gR = GROUND_ALBEDO_R * (E0 * stR * sunUp / PI + context.ambientR + context.moonR)
+	local gG = GROUND_ALBEDO_G * (E0 * stG * sunUp / PI + context.ambientG + context.moonG)
+	local gB = GROUND_ALBEDO_B * (E0 * stB * sunUp / PI + context.ambientB + context.moonB)
+	local sR, sG, sB, tR, tG, tB = scatter(dx, dy, dz, t, 24)
+	local wetFactor = 1 - 0.35 * wet
+	local oneMinusFn = 1 - fn
+	local r = sR + tR * (gR * oneMinusFn * wetFactor + (E0 * stR * specular * 0.4 + reflectedR * fn))
+	local g = sG + tG * (gG * oneMinusFn * wetFactor + (E0 * stG * specular * 0.4 + reflectedG * fn))
+	local b = sB + tB * (gB * oneMinusFn * wetFactor + (E0 * stB * specular * 0.4 + reflectedB * fn))
+	return r, g, b
+end
+
+function Atmos.moonSky(dx, dy, dz, moonX, moonY, moonZ, intensity)
+	if intensity <= 0 then
+		return 0, 0, 0
+	end
+	local mm = dx * moonX + dy * moonY + dz * moonZ
+	local tr, tg, tb = aerialTransmittance(1e5, moonY)
+	local mie = aerosol * 1.5e3 * henyeyGreenstein(0.7, mm)
+	local rayleighPhase = 3 / (16 * PI) * (1 + mm * mm)
+	local k = intensity / (dy + 0.15)
+	return k * tr * (BR_R * 8e3 * rayleighPhase + mie), k * tg * (BR_G * 8e3 * rayleighPhase + mie), k * tb * (BR_B * 8e3 * rayleighPhase + mie)
+end
+
+
+function Atmos.cloudShadowCorrection(dx, dy, dz, steps, deckHeight, coverageAt)
+	local h = cameraHeight
+	local oy = R + h
+	local b = oy * dy
+	local disc = b * b - (h - HA) * (2 * R + h + HA)
+	local tmax = -b + sqrt(disc)
+	if tmax > 1e7 then tmax = 1e7 end
+	local mu = dx * sunX + dy * sunY + dz * sunZ
+	local mu2 = mu * mu
+	local g2 = MIE_G * MIE_G
+	local pR = 3 / (16 * PI) * (1 + mu2)
+	local pM = 3 / (8 * PI) * (1 - g2) * (1 + mu2) / ((2 + g2) * (1 + g2 - 2 * MIE_G * mu) ^ 1.5)
+	local odR, odG, odB = 0, 0, 0
+	local deltaR, deltaG, deltaB = 0, 0, 0
+	local mieScaled = aerosol * 1.11
+	local deckRadius = R + deckHeight
+	for i = 0, steps - 1 do
+		local f0 = i / steps
+		local f1 = (i + 1) / steps
+		local t0 = tmax * f0 * f0
+		local t1 = tmax * f1 * f1
+		local dt = t1 - t0
+		local tm = (t0 + t1) * 0.5
+		local px, py, pz = dx * tm, oy + dy * tm, dz * tm
+		local len = sqrt(px * px + py * py + pz * pz)
+		if len - R >= deckHeight then
+			break
+		end
+		local a = len - R
+		if a < 0 then a = 0 end
+		local rd = exp(-a / 8e3)
+		local md = exp(-a / 1.5e3)
+		local oz = 1 - abs(a - 25e3) / 15e3
+		if oz < 0 then oz = 0 end
+		local mieTerm = mieScaled * md
+		local eR = (BR_R * rd + mieTerm + BO_R * oz) * dt
+		local eG = (BR_G * rd + mieTerm + BO_G * oz) * dt
+		local eB = (BR_B * rd + mieTerm + BO_B * oz) * dt
+		local trR = exp(-(odR + eR * 0.5))
+		local trG = exp(-(odG + eG * 0.5))
+		local trB = exp(-(odB + eB * 0.5))
+		odR, odG, odB = odR + eR, odG + eG, odB + eB
+		local stR, stG, stB = sunTransmittance(px, py, pz)
+		if stR + stG + stB > 0 then
+			local bp = px * sunX + py * sunY + pz * sunZ
+			local inner = bp * bp - (len - deckRadius) * (len + deckRadius)
+			if inner < 0 then inner = 0 end
+			local s = -bp + sqrt(inner)
+			local coverage = coverageAt(px + sunX * s, pz + sunZ * s)
+			local shadow = 1 + (exp(-coverage * 1.2) - 1) * 0.4
+			local mieDensity = aerosol * md
+			local scatterTerm = dt * (shadow - 1)
+			deltaR = deltaR + stR * trR * (BR_R * rd * pR + mieDensity * pM) * scatterTerm
+			deltaG = deltaG + stG * trG * (BR_G * rd * pR + mieDensity * pM) * scatterTerm
+			deltaB = deltaB + stB * trB * (BR_B * rd * pR + mieDensity * pM) * scatterTerm
+		end
+	end
+	return deltaR * E0, deltaG * E0, deltaB * E0
+end
+
+return Atmos
+end)()
+local CloudField = (function()
+local CloudField = {}
+
+local sqrt, exp, abs, floor, sin, min, max = math.sqrt, math.exp, math.abs, math.floor, math.sin, math.min, math.max
+local valueNoise = Core.valueNoise
+local hash2 = Core.hash2
+
+local windX, windZ = 0, 0
+local convection = 0
+local cloudBase = 300
+local cameraX, cameraZ = 0, 0
+local cameraHeight = 1.7
+local sunX, sunY, sunZ = 0, 1, 0
+
+local R = 6371e3
+local E0 = 20
+local SG = 0.02
+
+local function smoothstep(e0, e1, x)
+	local t = (x - e0) / (e1 - e0)
+	if t < 0 then t = 0 elseif t > 1 then t = 1 end
+	return t * t * (3 - 2 * t)
+end
+
+function CloudField.configure(newWindX, newWindZ, newConvection, newCloudBase, newCameraX, newCameraZ, newCameraHeight, newSunX, newSunY, newSunZ)
+	windX, windZ = newWindX, newWindZ
+	convection = newConvection
+	cloudBase = newCloudBase
+	cameraX, cameraZ = newCameraX, newCameraZ
+	cameraHeight = newCameraHeight
+	sunX, sunY, sunZ = newSunX, newSunY, newSunZ
+end
+
+local function fbm(px, py, octaves)
+	local amplitude, sum = 0.5, 0
+	local drift = windX * 3e-5
+	for i = 0, octaves - 1 do
+		sum = sum + amplitude * valueNoise(px + 0.9 * drift * i, py - 0.6 * drift * i)
+		px = px * 2.03 + 17.1
+		py = py * 2.03 + 17.1
+		amplitude = amplitude * 0.5
+	end
+	return sum / (1 - 0.5 ^ octaves)
+end
+
+local function coverage(x, z, octaves)
+	local qx = (x + windX) / 3800
+	local qz = (z + windZ) / 3800
+	local warpX = valueNoise(qx * 0.7 + 3.1, qz * 0.7 + 3.1)
+	local warpZ = valueNoise(qx * 0.7 - 5.2, qz * 0.7 - 5.2)
+	qx = qx + 0.35 * warpX
+	qz = qz + 0.35 * warpZ
+	return smoothstep(0.52 - 0.1 * convection, 0.7 - 0.1 * convection, fbm(qx, qz, octaves))
+end
+
+local function density(x, z, altitude, octaves)
+	local c = coverage(x, z, octaves)
+	if c <= 0 then
+		return 0
+	end
+	local h = (altitude - cloudBase) / (700 + 2300 * convection * c)
+	local e = valueNoise((x + windX) / 350 + windX * 1.5e-4, (z + windZ) / 350 - windX * 1.5e-4) * 0.35
+	local d = c * smoothstep(0, 0.12, h) * (1 - smoothstep(0.55, 1, h + e * h))
+	local n3 = 0.3 * valueNoise((x + windX) / 130 + altitude * 0.013, (z + windZ) / 130 + altitude * 0.013)
+	local v = (d - n3) / (1 - n3)
+	if v < 0 then return 0 elseif v > 1 then return 1 end
+	return v
+end
+
+local function altoField(x, z)
+	local wx, wz = x + windX * 1.5, z + windZ * 1.5
+	return smoothstep(0.42, 0.62, fbm(wx / 50000, wz / 50000, 2)) * smoothstep(0.5, 0.72, fbm(wx / 1800, wz / 1800, 3))
+end
+
+local function cirrusField(x, z)
+	local wx, wz = x + windX * 4, z + windZ * 4
+	local px = (wx * 0.966 + wz * -0.259) / 14000
+	local py = (wx * 0.259 + wz * 0.966) / 5200
+	py = py + 0.4 * sin(px * 2.1)
+	return 0.4 * smoothstep(0.5, 0.85, fbm(px, py, 4))
+end
+
+CloudField.coverage = coverage
+CloudField.density = density
+CloudField.alto = altoField
+CloudField.cirrus = cirrusField
+
+function CloudField.shadowCoverage(qx, qz)
+	return coverage(cameraX + qx, cameraZ + qz, 2)
+end
+
+function CloudField.deckHeight()
+	return cloudBase + 450
+end
+
+function CloudField.groundShadow()
+	local sunUp = sunY
+	if sunUp <= 0 then
+		return 1
+	end
+	local deck = cloudBase + 450
+	local radius = R + cameraHeight
+	local bp = radius * sunY
+	local inner = bp * bp - (radius - (R + deck)) * (radius + (R + deck))
+	if inner < 0 then inner = 0 end
+	local s = -bp + sqrt(inner)
+	local c = coverage(cameraX + sunX * s, cameraZ + sunZ * s, 2)
+	return 1 + (exp(-c * 1.2) - 1) * 0.4
+end
+
+local function multipleScattering(opticalDepth, p1, p2, p3)
+	local e = exp(-opticalDepth)
+	local e1 = sqrt(e)
+	return 1.5 * (p1 * e + 0.5 * p2 * e1 + 0.25 * p3 * sqrt(e1))
+end
+
+function CloudField.evaluate(dx, dy, dz, skyR, skyG, skyB, jitter, earlyOut, steps)
+	local h = cameraHeight
+	local sunTransmittance = Atmos.sunTransmittance
+	local aerialTransmittance = Atmos.aerialTransmittance
+	local cloudPhase = Atmos.cloudPhase
+	local mu = dx * sunX + dy * sunY + dz * sunZ
+	local p1, p2, p3 = cloudPhase(0.8, mu), cloudPhase(0.4, mu), cloudPhase(0.2, mu)
+	local vR, vG, vB = 1, 1, 1
+	local cR, cG, cB = 0, 0, 0
+	local visibility = 1
+	local sunHorizontalScale = 1 / max(sunY, 0.2)
+	for sheetIndex = 1, 2 do
+		local isCirrus = sheetIndex == 1
+		local altitude = isCirrus and 9500 or 4600
+		local b = (R + h) * dy
+		local t = -b + sqrt(b * b - (h - altitude) * (2 * R + h + altitude))
+		local pcx, pcy, pcz = dx * t, R + h + dy * t, dz * t
+		local x, z = cameraX + pcx, cameraZ + pcz
+		local n = isCirrus and cirrusField(x, z) or altoField(x, z)
+		if n > 0 then
+			local offset = isCirrus and 1500 or 500
+			local ox, oz = sunX * sunHorizontalScale * offset, sunZ * sunHorizontalScale * offset
+			local nShadow = isCirrus and cirrusField(x + ox, z + oz) or altoField(x + ox, z + oz)
+			local tl = nShadow * (isCirrus and 1.5 or 5)
+			local A = n * (isCirrus and 0.55 or 0.92)
+			visibility = visibility * (1 - A)
+			local tapR, tapG, tapB = aerialTransmittance(altitude, dy)
+			local stR, stG, stB = sunTransmittance(pcx, pcy, pcz)
+			local msv = multipleScattering(tl, p1, p2, p3)
+			local ambient = isCirrus and 1 or 1.5
+			local keepR, keepG, keepB = 1 - A * tapR, 1 - A * tapG, 1 - A * tapB
+			local addR = (E0 * stR * msv + skyR * ambient) * A * tapR
+			local addG = (E0 * stG * msv + skyG * ambient) * A * tapG
+			local addB = (E0 * stB * msv + skyB * ambient) * A * tapB
+			vR, vG, vB = vR * keepR, vG * keepG, vB * keepB
+			cR, cG, cB = cR * keepR + addR, cG * keepG + addG, cB * keepB + addB
+		end
+	end
+	local cloudTop = cloudBase + 700 + 2300 * convection
+	local b = (R + h) * dy
+	local t0 = -b + sqrt(b * b - (h - cloudBase) * (2 * R + h + cloudBase))
+	if t0 <= 6e4 then
+		local t1 = -b + sqrt(b * b - (h - cloudTop) * (2 * R + h + cloudTop))
+		if t1 > t0 + 22e3 then t1 = t0 + 22e3 end
+		local present = true
+		if earlyOut then
+			present = false
+			for k = 0, 6 do
+				local t = t0 + (t1 - t0) * k / 6
+				if coverage(cameraX + dx * t, cameraZ + dz * t, 3) > 0 then
+					present = true
+					break
+				end
+			end
+		end
+		if present then
+			local scR, scG, scB = sunTransmittance(dx * t0, R + h + dy * t0, dz * t0)
+			scR, scG, scB = scR * E0, scG * E0, scB * E0
+			local lit = max(scR, scG, scB) > 1e-4
+			local dt = (t1 - t0) / steps
+			local transmittance = 1
+			local lightStep = (cloudTop - cloudBase) / max(sunY, 0.25) / 4
+			if lightStep < 150 then lightStep = 150 elseif lightStep > 900 then lightStep = 900 end
+			local accR, accG, accB = 0, 0, 0
+			for i = 0, steps - 1 do
+				local t = t0 + (i + jitter) * dt
+				local px, py, pz = dx * t, R + h + dy * t, dz * t
+				local a = sqrt(px * px + py * py + pz * pz) - R
+				local x, z = cameraX + px, cameraZ + pz
+				local dn = density(x, z, a, 3)
+				if dn >= 0.003 then
+					local tl = 1e3
+					if lit then
+						tl = 0
+						for k = 0, 3 do
+							local s = (k + 0.5) * lightStep
+							tl = tl + density(x + sunX * s, z + sunZ * s, a + sunY * s, 2)
+						end
+						tl = tl * lightStep * SG
+					end
+					local hh = (a - cloudBase) / (cloudTop - cloudBase)
+					if hh < 0 then hh = 0 elseif hh > 1 then hh = 1 end
+					local tr = exp(-dn * SG * dt)
+					local msv = multipleScattering(tl, p1, p2, p3) * (0.6 + 0.4 * (1 - exp(-3 * dn)))
+					local ambient = 1.2 * (0.35 + 0.65 * hh)
+					local w = transmittance * (1 - tr)
+					accR = accR + w * (scR * msv + skyR * ambient)
+					accG = accG + w * (scG * msv + skyG * ambient)
+					accB = accB + w * (scB * msv + skyB * ambient)
+					transmittance = transmittance * tr
+					if transmittance < 0.02 then
+						break
+					end
+				end
+			end
+			local tapR, tapG, tapB = aerialTransmittance(1800, dy)
+			local A = 1 - transmittance
+			visibility = visibility * transmittance
+			local keepR, keepG, keepB = 1 - A * tapR, 1 - A * tapG, 1 - A * tapB
+			vR, vG, vB = vR * keepR, vG * keepG, vB * keepB
+			cR, cG, cB = cR * keepR + accR * tapR, cG * keepG + accG * tapG, cB * keepB + accB * tapB
+		end
+	end
+	return vR, vG, vB, cR, cG, cB, 1 - visibility
+end
+
+return CloudField
+end)()
+local Sky = (function()
+local Sky = {}
+
+local sqrt, exp, abs, floor, sin, cos, atan2, min, max = math.sqrt, math.exp, math.abs, math.floor, math.sin, math.cos, math.atan2, math.min, math.max
+local PI = math.pi
+local HALF_PI = PI / 2
+
+function Sky.newLut(elevationCount, azimuthCount)
+	return {
+		elevationCount = elevationCount,
+		azimuthCount = azimuthCount,
+		data = table.create(elevationCount * azimuthCount * 3, 0),
+		ready = false,
+	}
+end
+
+function Sky.beginBuild(lut, sunDirX, sunDirY, sunDirZ, aerosol, cameraHeight, moonX, moonY, moonZ, moonIntensity)
+	local horizontal = sqrt(max(0, 1 - sunDirY * sunDirY))
+	local state = {
+		lut = lut,
+		sunHorizontalX = sunDirX,
+		sunHorizontalZ = sunDirZ,
+		sunY = sunDirY,
+		rotatedSunX = horizontal,
+		aerosol = aerosol,
+		cameraHeight = cameraHeight,
+		moonX = moonX, moonY = moonY, moonZ = moonZ, moonIntensity = moonIntensity,
+		cursor = 0,
+		order = {},
+		total = lut.elevationCount * lut.azimuthCount,
+		finished = false,
+	}
+	local half = floor(lut.elevationCount / 2)
+	local count = 0
+	for iE = lut.elevationCount - 1, half, -1 do
+		for iA = 0, lut.azimuthCount - 1 do
+			count = count + 1
+			state.order[count] = iE * lut.azimuthCount + iA
+		end
+	end
+	for iE = half - 1, 0, -1 do
+		for iA = 0, lut.azimuthCount - 1 do
+			count = count + 1
+			state.order[count] = iE * lut.azimuthCount + iA
+		end
+	end
+	state.groundContextReady = false
+	return state
+end
+
+local function cellDirection(lut, iE, iA)
+	local s = -1 + 2 * iE / (lut.elevationCount - 1)
+	local elevation = HALF_PI * s * abs(s)
+	local dy = sin(elevation)
+	local ch = cos(elevation)
+	local v = iA / (lut.azimuthCount - 1)
+	local phi = PI * v * v
+	return ch * cos(phi), dy, ch * sin(phi)
+end
+
+function Sky.buildStep(state, Atmos, deadline)
+	local lut = state.lut
+	local data = state.data or lut.pendingData
+	if not state.pending then
+		state.pending = table.create(state.total * 3, 0)
+	end
+	local pending = state.pending
+	Atmos.configure(state.rotatedSunX, state.sunY, 0, state.aerosol, state.cameraHeight)
+	if not state.groundContextReady then
+		state.groundContext = Atmos.groundContext(state.moonX, state.moonY, state.moonZ, state.moonIntensity)
+		state.groundContextReady = true
+		local count = 48
+		local tableR, tableG, tableB = table.create(count, 1), table.create(count, 1), table.create(count, 1)
+		for i = 0, count - 1 do
+			local s = i / (count - 1)
+			local elevation = HALF_PI * s * s
+			local _, _, _, tr, tg, tb = Atmos.scatter(cos(elevation), sin(elevation), 0, 1e7, 16)
+			tableR[i + 1], tableG[i + 1], tableB[i + 1] = tr, tg, tb
+		end
+		state.transmittance = { count = count, r = tableR, g = tableG, b = tableB }
+		local sunTr, sunTg, sunTb = Atmos.sunTransmittance(0, Atmos.R + state.cameraHeight, 0)
+		state.sunAtGround = { sunTr, sunTg, sunTb }
+	end
+	local order = state.order
+	local cursor = state.cursor
+	local total = state.total
+	local azimuthCount = lut.azimuthCount
+	local elevationCount = lut.elevationCount
+	local groundContext = state.groundContext
+	local clock = os.clock
+	while cursor < total do
+		cursor = cursor + 1
+		local cellIndex = order[cursor]
+		local iE = floor(cellIndex / azimuthCount)
+		local iA = cellIndex - iE * azimuthCount
+		local dx, dy, dz = cellDirection(lut, iE, iA)
+		local r, g, b
+		if iE >= floor(elevationCount / 2) then
+			r, g, b = Atmos.scatter(dx, max(dy, 0), dz, 1e7, 24)
+		else
+			local mirrorIndex = ((elevationCount - 1 - iE) * azimuthCount + iA) * 3
+			local reflectedR, reflectedG, reflectedB = pending[mirrorIndex + 1], pending[mirrorIndex + 2], pending[mirrorIndex + 3]
+			r, g, b = Atmos.groundRadiance(dx, dy, dz, groundContext, reflectedR, reflectedG, reflectedB)
+		end
+		local base = cellIndex * 3
+		pending[base + 1] = r
+		pending[base + 2] = g
+		pending[base + 3] = b
+		if cursor % 16 == 0 and clock() >= deadline then
+			break
+		end
+	end
+	state.cursor = cursor
+	if cursor >= total then
+		lut.data, state.pending = pending, nil
+		lut.sunHorizontalX = state.sunHorizontalX
+		lut.sunHorizontalZ = state.sunHorizontalZ
+		lut.sunY = state.sunY
+		lut.groundContext = state.groundContext
+		lut.transmittance = state.transmittance
+		lut.sunAtGround = state.sunAtGround
+		lut.aerosol = state.aerosol
+		lut.cameraHeight = state.cameraHeight
+		lut.ready = true
+		state.finished = true
+	end
+	return state.finished
+end
+
+function Sky.sample(lut, dx, dy, dz)
+	local horizontal = sqrt(dx * dx + dz * dz)
+	local elevation = atan2(dy, horizontal)
+	local s = sqrt(abs(elevation) / HALF_PI)
+	if elevation < 0 then s = -s end
+	local sIndex = (s + 1) * 0.5 * (lut.elevationCount - 1)
+	local sunX, sunZ = lut.sunHorizontalX, lut.sunHorizontalZ
+	local dot = dx * sunX + dz * sunZ
+	local cross = dx * sunZ - dz * sunX
+	local phi = atan2(abs(cross), dot)
+	local v = sqrt(phi / PI)
+	local aIndex = v * (lut.azimuthCount - 1)
+	local e0 = floor(sIndex)
+	local a0 = floor(aIndex)
+	if e0 >= lut.elevationCount - 1 then e0 = lut.elevationCount - 2 end
+	if a0 >= lut.azimuthCount - 1 then a0 = lut.azimuthCount - 2 end
+	local fe = sIndex - e0
+	local fa = aIndex - a0
+	local data = lut.data
+	local stride = lut.azimuthCount
+	local i00 = (e0 * stride + a0) * 3
+	local i01 = i00 + 3
+	local i10 = i00 + stride * 3
+	local i11 = i10 + 3
+	local w00 = (1 - fe) * (1 - fa)
+	local w01 = (1 - fe) * fa
+	local w10 = fe * (1 - fa)
+	local w11 = fe * fa
+	return data[i00 + 1] * w00 + data[i01 + 1] * w01 + data[i10 + 1] * w10 + data[i11 + 1] * w11,
+		data[i00 + 2] * w00 + data[i01 + 2] * w01 + data[i10 + 2] * w10 + data[i11 + 2] * w11,
+		data[i00 + 3] * w00 + data[i01 + 3] * w01 + data[i10 + 3] * w10 + data[i11 + 3] * w11
+end
+
+function Sky.transmittanceAt(lut, dy)
+	local info = lut.transmittance
+	if dy < 0 then dy = 0 elseif dy > 1 then dy = 1 end
+	local elevation = math.asin(dy)
+	local s = sqrt(elevation / HALF_PI)
+	local f = s * (info.count - 1)
+	local i0 = floor(f)
+	if i0 >= info.count - 1 then i0 = info.count - 2 end
+	local t = f - i0
+	local a, b, c = info.r, info.g, info.b
+	return a[i0 + 1] + (a[i0 + 2] - a[i0 + 1]) * t, b[i0 + 1] + (b[i0 + 2] - b[i0 + 1]) * t, c[i0 + 1] + (c[i0 + 2] - c[i0 + 1]) * t
+end
+
+return Sky
+end)()
+local CloudPass = (function()
+local CloudPass = {}
+
+local sqrt, floor, min, max = math.sqrt, math.floor, math.min, math.max
+local FLOATS = 10
+CloudPass.FLOATS = FLOATS
+
+function CloudPass.newBuffer(size)
+	local data = buffer.create(6 * size * size * FLOATS * 4)
+	for index = 0, 6 * size * size - 1 do
+		local base = index * FLOATS * 4
+		buffer.writef32(data, base, 1)
+		buffer.writef32(data, base + 4, 1)
+		buffer.writef32(data, base + 8, 1)
+	end
+	return data
+end
+
+function CloudPass.begin(job, params)
+	job.params = params
+	job.faceIndex = 1
+	job.row = 0
+	job.column = 0
+	job.active = true
+	job.configured = false
+end
+
+function CloudPass.step(job, deadline, faces, lut)
+	local params = job.params
+	local size = params.size
+	local target = params.target
+	Atmos.configure(params.sunX, params.sunY, params.sunZ, params.aerosol, params.cameraHeight)
+	CloudField.configure(params.windX, params.windZ, params.convection, params.cloudBase, params.cameraX, params.cameraZ, params.cameraHeight, params.sunX, params.sunY, params.sunZ)
+	local sample = Sky.sample
+	local moonSky = Atmos.moonSky
+	local shadowCorrection = Atmos.cloudShadowCorrection
+	local evaluate = CloudField.evaluate
+	local coverageAt = CloudField.shadowCoverage
+	local deckHeight = CloudField.deckHeight()
+	local hash2 = Core.hash2
+	local clock = os.clock
+	local moonIntensity = params.moonIntensity
+	local steps, earlyOut = params.steps, params.earlyOut
+	local invSize2 = 2 / size
+	local writef32 = buffer.writef32
+	while job.faceIndex <= 6 do
+		local face = faces[job.faceIndex]
+		local nx, ny, nz = face.nx, face.ny, face.nz
+		local ux, uy, uz = face.ux, face.uy, face.uz
+		local rx, ry, rz = face.rx, face.ry, face.rz
+		local faceBase = (job.faceIndex - 1) * size * size
+		while job.row < size do
+			local py = job.row
+			local v = 1 - (py + 0.5) * invSize2
+			while job.column < size do
+				local px = job.column
+				local u = (px + 0.5) * invSize2 - 1
+				local dx = nx + ux * v + rx * u
+				local dy = ny + uy * v + ry * u
+				local dz = nz + uz * v + rz * u
+				local inv = 1 / sqrt(dx * dx + dy * dy + dz * dz)
+				dx, dy, dz = dx * inv, dy * inv, dz * inv
+				local vR, vG, vB, cR, cG, cB, sR, sG, sB, alpha = 1, 1, 1, 0, 0, 0, 0, 0, 0, 0
+				if dy > 0 then
+					local s0r, s0g, s0b = sample(lut, dx, dy, dz)
+					if moonIntensity > 0 then
+						local mr, mg, mb = moonSky(dx, dy, dz, params.moonX, params.moonY, params.moonZ, moonIntensity)
+						s0r, s0g, s0b = s0r + mr, s0g + mg, s0b + mb
+					end
+					sR, sG, sB = shadowCorrection(dx, dy, dz, 24, deckHeight, coverageAt)
+					if dy > 0.012 then
+						local jitter = hash2(px + 7.5 + job.faceIndex * 64, py + 7.5)
+						vR, vG, vB, cR, cG, cB, alpha = evaluate(dx, dy, dz, s0r + sR, s0g + sG, s0b + sB, jitter, earlyOut, steps)
+					end
+				end
+				local base = (faceBase + py * size + px) * FLOATS * 4
+				writef32(target, base, vR)
+				writef32(target, base + 4, vG)
+				writef32(target, base + 8, vB)
+				writef32(target, base + 12, cR)
+				writef32(target, base + 16, cG)
+				writef32(target, base + 20, cB)
+				writef32(target, base + 24, sR)
+				writef32(target, base + 28, sG)
+				writef32(target, base + 32, sB)
+				writef32(target, base + 36, alpha)
+				job.column = px + 1
+				if clock() >= deadline then
+					return false
+				end
+			end
+			job.column = 0
+			job.row = py + 1
+		end
+		job.row = 0
+		job.faceIndex = job.faceIndex + 1
+	end
+	job.active = false
+	return true
+end
+
+function CloudPass.opacityAt(data, size, faces, dx, dy, dz)
+	if dy <= 0 then
+		return 0
+	end
+	local ax, ay, az = math.abs(dx), math.abs(dy), math.abs(dz)
+	local faceIndex
+	if ax >= ay and ax >= az then
+		faceIndex = dx > 0 and 1 or 2
+	elseif az >= ay then
+		faceIndex = dz > 0 and 3 or 4
+	else
+		faceIndex = dy > 0 and 5 or 6
+	end
+	local face = faces[faceIndex]
+	local along = dx * face.nx + dy * face.ny + dz * face.nz
+	local u = (dx * face.rx + dy * face.ry + dz * face.rz) / along
+	local v = (dx * face.ux + dy * face.uy + dz * face.uz) / along
+	local fx = (u + 1) * 0.5 * size - 0.5
+	local fy = (1 - v) * 0.5 * size - 0.5
+	local x0, y0 = floor(fx), floor(fy)
+	local tx, ty = fx - x0, fy - y0
+	local faceBase = (faceIndex - 1) * size * size
+	local total = 0
+	for oy = 0, 1 do
+		local py = min(max(y0 + oy, 0), size - 1)
+		local wy = oy == 0 and (1 - ty) or ty
+		for ox = 0, 1 do
+			local px = min(max(x0 + ox, 0), size - 1)
+			local w = wy * (ox == 0 and (1 - tx) or tx)
+			total = total + w * buffer.readf32(data, (faceBase + py * size + px) * FLOATS * 4 + 36)
+		end
+	end
+	return total
+end
+
+return CloudPass
+end)()
+local Render = (function()
+local Render = {}
+
+local sqrt, exp, abs, floor, sin, cos, atan2, acos, min, max = math.sqrt, math.exp, math.abs, math.floor, math.sin, math.cos, math.atan2, math.acos, math.min, math.max
+local PI = math.pi
+
+Render.Faces = {
+	{ name = "PositiveX", nx = 1, ny = 0, nz = 0, ux = 0, uy = 1, uz = 0 },
+	{ name = "NegativeX", nx = -1, ny = 0, nz = 0, ux = 0, uy = 1, uz = 0 },
+	{ name = "PositiveZ", nx = 0, ny = 0, nz = 1, ux = 0, uy = 1, uz = 0 },
+	{ name = "NegativeZ", nx = 0, ny = 0, nz = -1, ux = 0, uy = 1, uz = 0 },
+	{ name = "PositiveY", nx = 0, ny = 1, nz = 0, ux = 0, uy = 0, uz = -1 },
+	{ name = "NegativeY", nx = 0, ny = -1, nz = 0, ux = 0, uy = 0, uz = 1 },
+}
+
+for _, face in ipairs(Render.Faces) do
+	face.rx = face.ny * face.uz - face.nz * face.uy
+	face.ry = face.nz * face.ux - face.nx * face.uz
+	face.rz = face.nx * face.uy - face.ny * face.ux
+end
+
+local function ditherHash(x, y)
+	local px = x * 123.34
+	local py = y * 456.21
+	px = px - floor(px)
+	py = py - floor(py)
+	local d = px * (px + 45.32) + py * (py + 45.32)
+	px = px + d
+	py = py + d
+	local v = px * py
+	return v - floor(v)
+end
+
+local function bilinearChannel(data, o00, o10, o01, o11, w00, w10, w01, w11, offset)
+	return buffer.readf32(data, o00 + offset) * w00 + buffer.readf32(data, o10 + offset) * w10 + buffer.readf32(data, o01 + offset) * w01 + buffer.readf32(data, o11 + offset) * w11
+end
+
+function Render.renderFaceRows(face, size, pixels, rowStart, rowEnd, frame)
+	local lut = frame.lut
+	local Sky = frame.Sky
+	local Core = frame.Core
+	local exposeToDisplay = Core.exposeToDisplay
+	local sample = Sky.sample
+	local nx, ny, nz = face.nx, face.ny, face.nz
+	local ux, uy, uz = face.ux, face.uy, face.uz
+	local rx, ry, rz = face.rx, face.ry, face.rz
+	local exposure = frame.exposure
+	local glowR, glowG, glowB = frame.glowR, frame.glowG, frame.glowB
+	local moonX, moonY, moonZ, moonIntensity = frame.moonX, frame.moonY, frame.moonZ, frame.moonIntensity
+	local moonSky = frame.moonSky
+	local ditherSeedA, ditherSeedB = frame.ditherSeedA, frame.ditherSeedB
+	local grain = frame.nightGrain
+	local invSize2 = 2 / size
+	local cloudData = frame.cloudData
+	local cloudSize = frame.cloudSize
+	local cloudFaceBase = cloudData and (frame.faceIndex - 1) * cloudSize * cloudSize or 0
+	local readf32 = buffer.readf32
+	local cloudScale = cloudData and cloudSize / size or 0
+	local stride = frame.cloudFloats or 10
+	for py = rowStart, rowEnd do
+		local v = 1 - (py + 0.5) * invSize2
+		local baseX = nx + ux * v
+		local baseY = ny + uy * v
+		local baseZ = nz + uz * v
+		local index = (py * size) * 4
+		local row0, row1, wy0, wy1
+		if cloudData then
+			local fy = (py + 0.5) * cloudScale - 0.5
+			local y0 = floor(fy)
+			local ty = fy - y0
+			local ya = y0 < 0 and 0 or (y0 > cloudSize - 1 and cloudSize - 1 or y0)
+			local yb = y0 + 1 < 0 and 0 or (y0 + 1 > cloudSize - 1 and cloudSize - 1 or y0 + 1)
+			row0, row1 = cloudFaceBase + ya * cloudSize, cloudFaceBase + yb * cloudSize
+			wy0, wy1 = 1 - ty, ty
+		end
+		for px = 0, size - 1 do
+			local u = (px + 0.5) * invSize2 - 1
+			local dx = baseX + rx * u
+			local dy = baseY + ry * u
+			local dz = baseZ + rz * u
+			local inv = 1 / sqrt(dx * dx + dy * dy + dz * dz)
+			dx, dy, dz = dx * inv, dy * inv, dz * inv
+			local r, g, b = sample(lut, dx, dy, dz)
+			if dy > 0 then
+				if moonIntensity > 0 then
+					local mr, mg, mb = moonSky(dx, dy, dz, moonX, moonY, moonZ, moonIntensity)
+					r, g, b = r + mr, g + mg, b + mb
+				end
+				if cloudData then
+					local fx = (px + 0.5) * cloudScale - 0.5
+					local x0 = floor(fx)
+					local tx = fx - x0
+					local xa = x0 < 0 and 0 or (x0 > cloudSize - 1 and cloudSize - 1 or x0)
+					local xb = x0 + 1 < 0 and 0 or (x0 + 1 > cloudSize - 1 and cloudSize - 1 or x0 + 1)
+					local w00, w10, w01, w11 = (1 - tx) * wy0, tx * wy0, (1 - tx) * wy1, tx * wy1
+					local o00, o10, o01, o11 = (row0 + xa) * stride * 4, (row0 + xb) * stride * 4, (row1 + xa) * stride * 4, (row1 + xb) * stride * 4
+					local shadowR = bilinearChannel(cloudData, o00, o10, o01, o11, w00, w10, w01, w11, 24)
+					local shadowG = bilinearChannel(cloudData, o00, o10, o01, o11, w00, w10, w01, w11, 28)
+					local shadowB = bilinearChannel(cloudData, o00, o10, o01, o11, w00, w10, w01, w11, 32)
+					r = (r + shadowR) * bilinearChannel(cloudData, o00, o10, o01, o11, w00, w10, w01, w11, 0) + bilinearChannel(cloudData, o00, o10, o01, o11, w00, w10, w01, w11, 12)
+					g = (g + shadowG) * bilinearChannel(cloudData, o00, o10, o01, o11, w00, w10, w01, w11, 4) + bilinearChannel(cloudData, o00, o10, o01, o11, w00, w10, w01, w11, 16)
+					b = (b + shadowB) * bilinearChannel(cloudData, o00, o10, o01, o11, w00, w10, w01, w11, 8) + bilinearChannel(cloudData, o00, o10, o01, o11, w00, w10, w01, w11, 20)
+				end
+			end
+			local dr, dg, db, sk = exposeToDisplay(r + glowR, g + glowG, b + glowB, exposure)
+			local amplitude = (1 + 7 * sk * grain) / 255
+			local noise = (ditherHash(px + ditherSeedA, py + ditherSeedB) + ditherHash(py + ditherSeedB, px + ditherSeedA) - 1) * amplitude
+			local cr = floor((dr + noise) * 255 + 0.5)
+			local cg = floor((dg + noise) * 255 + 0.5)
+			local cb = floor((db + noise) * 255 + 0.5)
+			if cr < 0 then cr = 0 elseif cr > 255 then cr = 255 end
+			if cg < 0 then cg = 0 elseif cg > 255 then cg = 255 end
+			if cb < 0 then cb = 0 elseif cb > 255 then cb = 255 end
+			buffer.writeu8(pixels, index, cr)
+			buffer.writeu8(pixels, index + 1, cg)
+			buffer.writeu8(pixels, index + 2, cb)
+			buffer.writeu8(pixels, index + 3, 255)
+			index = index + 4
+		end
+	end
+end
+
+return Render
+end)()
+local Sprites = (function()
+local Sprites = {}
+
+local sqrt, exp, abs, floor, sin, cos, atan2, asin, acos, min, max, tan, atan = math.sqrt, math.exp, math.abs, math.floor, math.sin, math.cos, math.atan2, math.asin, math.acos, math.min, math.max, math.tan, math.atan
+local PI = math.pi
+
+local function smoothstep(e0, e1, x)
+	local t = (x - e0) / (e1 - e0)
+	if t < 0 then t = 0 elseif t > 1 then t = 1 end
+	return t * t * (3 - 2 * t)
+end
+
+local function spriteBasis(dirX, dirY, dirZ)
+	local ux, uy, uz = 0, 1, 0
+	local along = uy * dirY
+	ux, uy, uz = ux - dirX * along, uy - dirY * along, uz - dirZ * along
+	local len = sqrt(ux * ux + uy * uy + uz * uz)
+	if len < 1e-4 then
+		ux, uy, uz = 0, 0, -1
+		len = 1
+	end
+	ux, uy, uz = ux / len, uy / len, uz / len
+	local rx = dirY * uz - dirZ * uy
+	local ry = dirZ * ux - dirX * uz
+	local rz = dirX * uy - dirY * ux
+	return rx, ry, rz, ux, uy, uz
+end
+Sprites.spriteBasis = spriteBasis
+
+local function writePixel(pixels, size, px, py, r, g, b, a)
+	local index = (py * size + px) * 4
+	buffer.writeu8(pixels, index, r)
+	buffer.writeu8(pixels, index + 1, g)
+	buffer.writeu8(pixels, index + 2, b)
+	buffer.writeu8(pixels, index + 3, a)
+end
+
+local function toByte(x)
+	local v = floor(x * 255 + 0.5)
+	if v < 0 then return 0 elseif v > 255 then return 255 end
+	return v
+end
+
+
+function Sprites.sampleDisplay(buffers, size, faces, dx, dy, dz)
+	local ax, ay, az = abs(dx), abs(dy), abs(dz)
+	local faceIndex
+	if ax >= ay and ax >= az then
+		faceIndex = dx > 0 and 1 or 2
+	elseif az >= ay then
+		faceIndex = dz > 0 and 3 or 4
+	else
+		faceIndex = dy > 0 and 5 or 6
+	end
+	local face = faces[faceIndex]
+	local along = dx * face.nx + dy * face.ny + dz * face.nz
+	local u = (dx * face.rx + dy * face.ry + dz * face.rz) / along
+	local v = (dx * face.ux + dy * face.uy + dz * face.uz) / along
+	local fx = (u + 1) * 0.5 * size - 0.5
+	local fy = (1 - v) * 0.5 * size - 0.5
+	local x0, y0 = floor(fx), floor(fy)
+	local tx, ty = fx - x0, fy - y0
+	local pixels = buffers[faceIndex]
+	local r, g, b = 0, 0, 0
+	for oy = 0, 1 do
+		local py = min(max(y0 + oy, 0), size - 1)
+		local wy = oy == 0 and (1 - ty) or ty
+		for ox = 0, 1 do
+			local px = min(max(x0 + ox, 0), size - 1)
+			local w = wy * (ox == 0 and (1 - tx) or tx)
+			local index = (py * size + px) * 4
+			r = r + w * buffer.readu8(pixels, index)
+			g = g + w * buffer.readu8(pixels, index + 1)
+			b = b + w * buffer.readu8(pixels, index + 2)
+		end
+	end
+	return r / 255, g / 255, b / 255
+end
+
+local function overlayPixel(pixels, size, px, py, d0r, d0g, d0b, addR, addG, addB, exposure, Core)
+	local aces, srgbEncode, srgbDecode, acesInverse = Core.aces, Core.srgbEncode, Core.srgbDecode, Core.acesInverse
+	local x0r, x0g, x0b = acesInverse(srgbDecode(d0r)), acesInverse(srgbDecode(d0g)), acesInverse(srgbDecode(d0b))
+	local d1r = srgbEncode(aces(x0r + exposure * addR))
+	local d1g = srgbEncode(aces(x0g + exposure * addG))
+	local d1b = srgbEncode(aces(x0b + exposure * addB))
+	local aR = (d1r - d0r) / max(1 - d0r, 0.02)
+	local aG = (d1g - d0g) / max(1 - d0g, 0.02)
+	local aB = (d1b - d0b) / max(1 - d0b, 0.02)
+	local alpha = max(aR, aG, aB)
+	if alpha <= 0.002 then
+		writePixel(pixels, size, px, py, 0, 0, 0, 0)
+		return
+	end
+	if alpha > 1 then alpha = 1 end
+	writePixel(pixels, size, px, py, toByte((d1r - d0r * (1 - alpha)) / alpha), toByte((d1g - d0g * (1 - alpha)) / alpha), toByte((d1b - d0b * (1 - alpha)) / alpha), toByte(alpha))
+end
+
+function Sprites.renderSun(pixels, size, halfAngleDegrees, sun, ctx, rowStart, rowEnd)
+	local tanHalf = tan(math.rad(halfAngleDegrees))
+	local sx, sy, sz = sun.x, sun.y, sun.z
+	local rx, ry, rz, ux, uy, uz = spriteBasis(sx, sy, sz)
+	local thetaSun = 0.00465
+	local squash = 1 - 0.15 * exp(-max(asin(max(-1, min(1, sy))), 0) * 23)
+	local luR, luG, luB = 0.45, 0.6, 0.76
+	local invDenomR, invDenomG, invDenomB = 1 / (1 - luR / 3), 1 / (1 - luG / 3), 1 / (1 - luB / 3)
+	local transR, transG, transB = ctx.transR, ctx.transG, ctx.transB
+	local E0, exposure, Core = ctx.E0, ctx.exposure, ctx.Core
+	local cloudData = ctx.cloudData
+	for py = rowStart, rowEnd do
+		local ay = (1 - (py + 0.5) / size * 2) * tanHalf
+		for px = 0, size - 1 do
+			local ax = ((px + 0.5) / size * 2 - 1) * tanHalf
+			local dx, dy, dz = sx + rx * ax + ux * ay, sy + ry * ax + uy * ay, sz + rz * ax + uz * ay
+			local inv = 1 / sqrt(dx * dx + dy * dy + dz * dz)
+			dx, dy, dz = dx * inv, dy * inv, dz * inv
+			if dy < 0 then
+				writePixel(pixels, size, px, py, 0, 0, 0, 0)
+				continue
+			end
+			local qx, qy, qz = dx - sx, dy - sy, dz - sz
+			local chord = sqrt(qx * qx + qy * qy + qz * qz)
+			local theta = 2 * asin(min(1, chord * 0.5))
+			local verticalScaled = qy / squash
+			local te = sqrt(qx * qx + qz * qz + verticalScaled * verticalScaled)
+			local al = cloudData and ctx.opacityAt(dx, dy, dz) or 0
+			local addR, addG, addB = 0, 0, 0
+			if te < thetaSun then
+				local m = sqrt(1 - (te / thetaSun) * (te / thetaSun))
+				local clear = 12.8 * (1 - al)
+				addR = clear * (1 - luR * (1 - m)) * invDenomR * transR
+				addG = clear * (1 - luG * (1 - m)) * invDenomG * transG
+				addB = clear * (1 - luB * (1 - m)) * invDenomB * transB
+			end
+			local glare = E0 * 1.2e-6 / (theta * theta + 6e-5) * (1 - 0.5 * al)
+			addR, addG, addB = addR + glare * transR, addG + glare * transG, addB + glare * transB
+			local d0r, d0g, d0b = Sprites.sampleDisplay(ctx.faceBuffers, ctx.faceSize, ctx.faces, dx, dy, dz)
+			overlayPixel(pixels, size, px, py, d0r, d0g, d0b, addR, addG, addB, exposure, Core)
+		end
+	end
+end
+
+local MARIA = {
+	{ -0.3, 0.45, 0.3 }, { 0.22, 0.5, 0.2 }, { 0.4, 0.12, 0.24 }, { 0.72, 0.3, 0.13 },
+	{ 0.66, -0.1, 0.16 }, { -0.72, 0.05, 0.34 }, { -0.28, -0.4, 0.2 }, { -0.58, -0.45, 0.12 },
+}
+
+function Sprites.renderMoon(pixels, size, halfAngleDegrees, moon, sun, ctx, rowStart, rowEnd)
+	local tanHalf = tan(math.rad(halfAngleDegrees))
+	local mx, my, mz = moon.x, moon.y, moon.z
+	local rx, ry, rz, ux, uy, uz = spriteBasis(mx, my, mz)
+	local latitude = math.rad(ctx.latitudeDegrees)
+	local pnx, pny, pnz = 0, sin(latitude), -cos(latitude)
+	local pDot = pnx * mx + pny * my + pnz * mz
+	local umx, umy, umz = pnx - mx * pDot, pny - my * pDot, pnz - mz * pDot
+	local umLen = sqrt(umx * umx + umy * umy + umz * umz)
+	umx, umy, umz = umx / umLen, umy / umLen, umz / umLen
+	local rmx, rmy, rmz = my * umz - mz * umy, mz * umx - mx * umz, mx * umy - my * umx
+	local exposure, Core, noise = ctx.exposure, ctx.Core, ctx.noise
+	local limbLight = min(0.3, 0.6 / exposure)
+	local glareGate = smoothstep(0.5, 30, exposure)
+	local transR, transG, transB = ctx.transR, ctx.transG, ctx.transB
+	local cloudData = ctx.cloudData
+	for py = rowStart, rowEnd do
+		local ay = (1 - (py + 0.5) / size * 2) * tanHalf
+		for px = 0, size - 1 do
+			local ax = ((px + 0.5) / size * 2 - 1) * tanHalf
+			local dx, dy, dz = mx + rx * ax + ux * ay, my + ry * ax + uy * ay, mz + rz * ax + uz * ay
+			local inv = 1 / sqrt(dx * dx + dy * dy + dz * dz)
+			dx, dy, dz = dx * inv, dy * inv, dz * inv
+			if dy < 0 then
+				writePixel(pixels, size, px, py, 0, 0, 0, 0)
+				continue
+			end
+			local ex, ey, ez = dx - mx, dy - my, dz - mz
+			local qx = (ex * rmx + ey * rmy + ez * rmz) / 0.0046
+			local qy = (ex * umx + ey * umy + ez * umz) / 0.0046
+			local r2 = qx * qx + qy * qy
+			local chord = sqrt(ex * ex + ey * ey + ez * ez)
+			local thetaMoon = 2 * asin(min(1, chord * 0.5))
+			local al = cloudData and ctx.opacityAt(dx, dy, dz) or 0
+			local k = 0
+			if r2 < 1.2 then
+				local zz = sqrt(max(1 - r2, 0))
+				local nnx = qx * rmx + qy * umx - mx * zz
+				local nny = qx * rmy + qy * umy - my * zz
+				local nnz = qx * rmz + qy * umz - mz * zz
+				local nl = 1 / sqrt(nnx * nnx + nny * nny + nnz * nnz)
+				nnx, nny, nnz = nnx * nl, nny * nl, nnz * nl
+				local maria = 0
+				for i = 1, 8 do
+					local m = MARIA[i]
+					local ddx, ddy = qx - m[1], qy - m[2]
+					maria = maria + exp(-(ddx * ddx + ddy * ddy) / (m[3] * m[3]))
+				end
+				local lit = 0.02 + (1 - 0.02) * smoothstep(-0.03, 0.1, nnx * sun.x + nny * sun.y + nnz * sun.z)
+				local mal = (0.95 + (0.5 - 0.95) * min(maria, 1)) * (0.9 + 0.2 * noise(qx * 9 + 3, qy * 9 + 3))
+				local edge = (1 - sqrt(r2)) * 4
+				if edge < 0 then edge = 0 elseif edge > 1 then edge = 1 end
+				k = limbLight * mal * lit * edge * (1 - al)
+			end
+			local glare = limbLight * 2e-5 / (thetaMoon * thetaMoon + 6e-5) * (1 - 0.5 * al) * glareGate
+			local total = k + glare
+			if total * exposure < 4e-4 then
+				writePixel(pixels, size, px, py, 0, 0, 0, 0)
+				continue
+			end
+			local d0r, d0g, d0b = Sprites.sampleDisplay(ctx.faceBuffers, ctx.faceSize, ctx.faces, dx, dy, dz)
+			overlayPixel(pixels, size, px, py, d0r, d0g, d0b, total * transR, total * transG, total * transB, exposure, Core)
+		end
+	end
+end
+
+function Sprites.renderHalo(pixels, size, halfAngleDegrees, sun, ctx, rowStart, rowEnd)
+	local tanHalf = tan(math.rad(halfAngleDegrees))
+	local sx, sy, sz = sun.x, sun.y, sun.z
+	local rx, ry, rz, ux, uy, uz = spriteBasis(sx, sy, sz)
+	local exposure, Core, E0 = ctx.exposure, ctx.Core, ctx.E0
+	local R = ctx.R
+	local height = ctx.cameraHeight
+	local cirrusField = ctx.cirrusField
+	local sunTransmittance, aerialTransmittance = ctx.sunTransmittance, ctx.aerialTransmittance
+	local innerR, innerG, innerB = 0.372, 0.3825, 0.393
+	for py = rowStart, rowEnd do
+		local ay = (1 - (py + 0.5) / size * 2) * tanHalf
+		for px = 0, size - 1 do
+			local ax = ((px + 0.5) / size * 2 - 1) * tanHalf
+			local theta = atan(sqrt(ax * ax + ay * ay))
+			if abs(theta - 0.382) > 0.045 then
+				writePixel(pixels, size, px, py, 0, 0, 0, 0)
+				continue
+			end
+			local dx, dy, dz = sx + rx * ax + ux * ay, sy + ry * ax + uy * ay, sz + rz * ax + uz * ay
+			local inv = 1 / sqrt(dx * dx + dy * dy + dz * dz)
+			dx, dy, dz = dx * inv, dy * inv, dz * inv
+			if dy <= 0.012 then
+				writePixel(pixels, size, px, py, 0, 0, 0, 0)
+				continue
+			end
+			local altitude = 9500
+			local b = (R + height) * dy
+			local t = -b + sqrt(b * b - (height - altitude) * (2 * R + height + altitude))
+			local pcx, pcy, pcz = dx * t, R + height + dy * t, dz * t
+			local n = cirrusField(ctx.cameraX + pcx, ctx.cameraZ + pcz)
+			if n <= 0 then
+				writePixel(pixels, size, px, py, 0, 0, 0, 0)
+				continue
+			end
+			local hzR, hzG, hzB = (theta - innerR) / 0.0085, (theta - innerG) / 0.0085, (theta - innerB) / 0.0085
+			local hlR, hlG, hlB = exp(-hzR * hzR), exp(-hzG * hzG), exp(-hzB * hzB)
+			local A = n * 0.55
+			local tapR, tapG, tapB = aerialTransmittance(altitude, dy)
+			local stR, stG, stB = sunTransmittance(pcx, pcy, pcz)
+			local addR = E0 * stR * hlR * 0.06 * A * tapR
+			local addG = E0 * stG * hlG * 0.06 * A * tapG
+			local addB = E0 * stB * hlB * 0.06 * A * tapB
+			local d0r, d0g, d0b = Sprites.sampleDisplay(ctx.faceBuffers, ctx.faceSize, ctx.faces, dx, dy, dz)
+			overlayPixel(pixels, size, px, py, d0r, d0g, d0b, addR, addG, addB, exposure, Core)
+		end
+	end
+end
+
+function Sprites.buildProceduralStars(hash2)
+	local stars = {}
+	local scale = 1 / 114.59
+	for cx = -360, 359 do
+		for cy = -180, 179 do
+			local h = hash2(cx, cy)
+			if h >= 0.992 then
+				local fx = 0.2 + 0.6 * (h * 91.7 - floor(h * 91.7))
+				local fy = 0.2 + 0.6 * (h * 277.3 - floor(h * 277.3))
+				local lon = (cx + fx) * scale
+				local lat = (cy + fy) * scale
+				local tintMix = h * 733.7 - floor(h * 733.7)
+				local brightness = h * 533.1 - floor(h * 533.1)
+				local amplitude = brightness ^ 9 * 0.04 * 0.5
+				local cl = cos(lat)
+				stars[#stars + 1] = {
+					qx = cl * cos(lon),
+					qy = sin(lat),
+					qz = cl * sin(lon),
+					r = (1 + (0.72 - 1) * tintMix) * amplitude,
+					g = (0.82 + (0.82 - 0.82) * tintMix) * amplitude,
+					b = (0.66 + (1 - 0.66) * tintMix) * amplitude,
+				}
+			end
+		end
+	end
+	return stars
+end
+
+local function splat(accumulator, touched, faces, size, dx, dy, dz, r, g, b)
+	local ax, ay, az = abs(dx), abs(dy), abs(dz)
+	local faceIndex
+	if ax >= ay and ax >= az then
+		faceIndex = dx > 0 and 1 or 2
+	elseif az >= ay then
+		faceIndex = dz > 0 and 3 or 4
+	else
+		faceIndex = dy > 0 and 5 or 6
+	end
+	local face = faces[faceIndex]
+	local along = dx * face.nx + dy * face.ny + dz * face.nz
+	local u = (dx * face.rx + dy * face.ry + dz * face.rz) / along
+	local v = (dx * face.ux + dy * face.uy + dz * face.uz) / along
+	local fx = (u + 1) * 0.5 * size - 0.5
+	local fy = (1 - v) * 0.5 * size - 0.5
+	local x0, y0 = floor(fx), floor(fy)
+	local tx, ty = fx - x0, fy - y0
+	local faceOffset = (faceIndex - 1) * size * size
+	for oy = 0, 1 do
+		local py = y0 + oy
+		if py >= 0 and py < size then
+			local wy = oy == 0 and (1 - ty) or ty
+			for ox = 0, 1 do
+				local px = x0 + ox
+				if px >= 0 and px < size then
+					local w = wy * (ox == 0 and (1 - tx) or tx)
+					local key = faceOffset + py * size + px
+					local accR = accumulator.r
+					if accR[key] == nil then
+						accR[key] = 0
+						accumulator.g[key] = 0
+						accumulator.b[key] = 0
+						touched[#touched + 1] = key
+					end
+					accR[key] = accR[key] + r * w
+					accumulator.g[key] = accumulator.g[key] + g * w
+					accumulator.b[key] = accumulator.b[key] + b * w
+				end
+			end
+		end
+	end
+end
+
+function Sprites.bakeBegin(context)
+	context.stage = "erase"
+	context.cursor = 1
+	context.accumulator = { r = {}, g = {}, b = {} }
+	context.touched = {}
+	context.written = {}
+end
+
+function Sprites.bakeStep(context, deadline)
+	local clock = os.clock
+	local faces = context.faces
+	local size = context.size
+	local buffers = context.buffers
+	if context.stage == "erase" then
+		local previous = context.previousKeys
+		if previous then
+			local count = #previous
+			local cursor = context.cursor
+			while cursor <= count do
+				local key = previous[cursor]
+				local faceIndex = floor(key / (size * size)) + 1
+				local localIndex = key - (faceIndex - 1) * size * size
+				buffer.writeu32(buffers[faceIndex], localIndex * 4, 0)
+				cursor = cursor + 1
+				if cursor % 128 == 0 and clock() >= deadline then
+					context.cursor = cursor
+					return false
+				end
+			end
+		end
+		context.stage = "procedural"
+		context.cursor = 1
+	end
+	local accumulator, touched = context.accumulator, context.touched
+	local siderealCos, siderealSin = context.siderealCos, context.siderealSin
+	local cf, sf = context.latitudeCos, context.latitudeSin
+	local transmittanceAt = context.transmittanceAt
+	local opacityAt = context.opacityAt
+	if context.stage == "procedural" then
+		local procedural = context.procedural
+		local count = #procedural
+		local cursor = context.cursor
+		while cursor <= count do
+			local star = procedural[cursor]
+			local qx, qy, qz = star.qx, star.qy, star.qz
+			local dx = -siderealSin * qx + siderealCos * qz
+			local dy = siderealCos * cf * qx + sf * qy + siderealSin * cf * qz
+			local dz = siderealCos * sf * qx - cf * qy + siderealSin * sf * qz
+			if dy > 0.004 then
+				local tr, tg, tb = transmittanceAt(dy)
+				local clear = 1 - opacityAt(dx, dy, dz)
+				splat(accumulator, touched, faces, size, dx, dy, dz, star.r * tr * clear, star.g * tg * clear, star.b * tb * clear)
+			end
+			cursor = cursor + 1
+			if cursor % 64 == 0 and clock() >= deadline then
+				context.cursor = cursor
+				return false
+			end
+		end
+		context.stage = "catalog"
+		context.cursor = 1
+	end
+	if context.stage == "catalog" then
+		local catalog = context.catalog
+		for i = 1, #catalog do
+			local entry = catalog[i]
+			if entry.dy > 0.004 then
+				local tr, tg, tb = transmittanceAt(entry.dy)
+				local clear = 1 - opacityAt(entry.dx, entry.dy, entry.dz)
+				splat(accumulator, touched, faces, size, entry.dx, entry.dy, entry.dz, entry.star.colorR * tr * clear, entry.star.colorG * tg * clear, entry.star.colorB * tb * clear)
+			end
+		end
+		context.stage = "convert"
+		context.cursor = 1
+		context.baseR, context.baseG, context.baseB = context.exposeToDisplay(context.skyR, context.skyG, context.skyB, context.exposure)
+	end
+	local exposeToDisplay = context.exposeToDisplay
+	local exposure = context.exposure
+	local skyR, skyG, skyB = context.skyR, context.skyG, context.skyB
+	local baseR, baseG, baseB = context.baseR, context.baseG, context.baseB
+	local written = context.written
+	local count = #touched
+	local cursor = context.cursor
+	while cursor <= count do
+		local key = touched[cursor]
+		local d1R, d1G, d1B = exposeToDisplay(skyR + accumulator.r[key], skyG + accumulator.g[key], skyB + accumulator.b[key], exposure)
+		local aR = (d1R - baseR) / max(1 - baseR, 0.02)
+		local aG = (d1G - baseG) / max(1 - baseG, 0.02)
+		local aB = (d1B - baseB) / max(1 - baseB, 0.02)
+		local alpha = max(aR, aG, aB)
+		if alpha > 0.004 then
+			if alpha > 1 then alpha = 1 end
+			local faceIndex = floor(key / (size * size)) + 1
+			local localIndex = key - (faceIndex - 1) * size * size
+			local index = localIndex * 4
+			local pixels = buffers[faceIndex]
+			buffer.writeu8(pixels, index, toByte((d1R - baseR * (1 - alpha)) / alpha))
+			buffer.writeu8(pixels, index + 1, toByte((d1G - baseG * (1 - alpha)) / alpha))
+			buffer.writeu8(pixels, index + 2, toByte((d1B - baseB * (1 - alpha)) / alpha))
+			buffer.writeu8(pixels, index + 3, toByte(alpha))
+			written[#written + 1] = key
+		end
+		cursor = cursor + 1
+		if cursor % 64 == 0 and clock() >= deadline then
+			context.cursor = cursor
+			return false
+		end
+	end
+	context.previousKeys = written
+	context.stage = "done"
+	return true
+end
+
+return Sprites
+end)()
+
+local ImageFactory = {}
+
+function ImageFactory.create(width, height)
+	local ok, image = pcall(function()
+		return AssetService:CreateEditableImage({ Size = Vector2.new(width, height) })
+	end)
+	if not ok or not image then
+		ok, image = pcall(function()
+			local created = (Instance.new :: any)("EditableImage")
+			created.Size = Vector2.new(width, height)
+			return created
+		end)
+	end
+	if ok and image then
+		Cleanup.add(function()
+			pcall(function()
+				image:Destroy()
+			end)
+		end)
+		return image
+	end
+	return nil
+end
+
+ImageFactory.warned = false
+
+function ImageFactory.write(image, width, height, pixels)
+	local ok, err = pcall(function()
+		image:WritePixelsBuffer(Vector2.zero, Vector2.new(width, height), pixels)
+	end)
+	if not ok and not ImageFactory.warned then
+		ImageFactory.warned = true
+		notify("EditableImage write failed: " .. tostring(err))
+	end
+	return ok
+end
+
+function ImageFactory.content(image)
+	return Content.fromObject(image)
+end
+
+local Dome = {}
+
+local function createSurfaceGui(part, canvasPixels)
+	local gui = Instance.new("SurfaceGui")
+	gui.Name = "Canvas"
+	gui.Face = Enum.NormalId.Front
+	gui.SizingMode = Enum.SurfaceGuiSizingMode.FixedSize
+	gui.CanvasSize = Vector2.new(canvasPixels, canvasPixels)
+	gui.LightInfluence = 0
+	gui.Brightness = 1
+	gui.AlwaysOnTop = false
+	gui.ClipsDescendants = true
+	gui.MaxDistance = 100000
+	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	gui.Adornee = part
+	gui.Parent = part
+	return gui
+end
+
+local function createImageLabel(parent, image, zIndex)
+	local label = Instance.new("ImageLabel")
+	label.BackgroundTransparency = 1
+	label.BorderSizePixel = 0
+	label.Size = UDim2.fromScale(1, 1)
+	label.ZIndex = zIndex
+	label.ScaleType = Enum.ScaleType.Stretch
+	label.ResampleMode = Enum.ResamplerMode.Default
+	local assigned, assignError = pcall(function()
+		label.ImageContent = ImageFactory.content(image)
+	end)
+	if not assigned then
+		error("ImageContent is not supported on this client: " .. tostring(assignError))
+	end
+	label.Parent = parent
+	return label
+end
+
+function Dome.build(faces, faceImageSets, faceSize, starImages, starSize)
+	local half = Config.Sky.HalfSize
+	local overlap = Config.Sky.TileOverlap
+	local thickness = Config.Sky.CubeThickness
+	local tilesPerSide = math.max(1, math.ceil(2 * half / (2048 - overlap)))
+	local tileSpan = 2 * half / tilesPerSide
+	local partWidth = tileSpan + overlap
+	local folder = track(Instance.new("Folder"))
+	folder.Name = "GeorgiaSky"
+	folder.Parent = Workspace
+	local model = Instance.new("Model")
+	model.Name = "SkyDome"
+	model.Parent = folder
+	local dome = { folder = folder, model = model, starLabels = {}, skyLabels = { {}, {} }, tilesPerSide = tilesPerSide, tileSpan = tileSpan }
+	local starTilePixels = starImages[1] and (starSize / tilesPerSide) or 0
+	local skyTilePixels = faceSize / tilesPerSide
+	local canvasPixels = math.max(64, math.ceil(math.max(starTilePixels, skyTilePixels)))
+	for faceIndex, face in ipairs(faces) do
+		local normal = Vector3.new(face.nx, face.ny, face.nz)
+		local upVector = Vector3.new(face.ux, face.uy, face.uz)
+		local rightVector = Vector3.new(face.rx, face.ry, face.rz)
+		for ty = 0, tilesPerSide - 1 do
+			for tx = 0, tilesPerSide - 1 do
+				local center = normal * half + rightVector * (-half + (tx + 0.5) * tileSpan) + upVector * (half - (ty + 0.5) * tileSpan)
+				local part = Instance.new("Part")
+				part.Name = string.format("%s_%d_%d", face.name, tx, ty)
+				part.Anchored = true
+				part.CanCollide = false
+				part.CanQuery = false
+				part.CanTouch = false
+				part.CastShadow = false
+				part.Locked = true
+				part.Material = Enum.Material.SmoothPlastic
+				part.Color = Color3.new(0, 0, 0)
+				part.Size = Vector3.new(partWidth, partWidth, thickness)
+				part.CFrame = CFrame.fromMatrix(center, -rightVector, upVector)
+				part.Parent = model
+				local gui = createSurfaceGui(part, canvasPixels)
+				for set = 1, 2 do
+					local skyLabel = createImageLabel(gui, faceImageSets[set][faceIndex], set == 1 and 2 or 1)
+					skyLabel.ImageRectOffset = Vector2.new(tx * skyTilePixels, ty * skyTilePixels)
+					skyLabel.ImageRectSize = Vector2.new(skyTilePixels, skyTilePixels)
+					dome.skyLabels[set][#dome.skyLabels[set] + 1] = skyLabel
+				end
+				if starImages[faceIndex] then
+					local starLabel = createImageLabel(gui, starImages[faceIndex], 5)
+					starLabel.ImageRectOffset = Vector2.new(tx * starTilePixels, ty * starTilePixels)
+					starLabel.ImageRectSize = Vector2.new(starTilePixels, starTilePixels)
+					starLabel.Visible = false
+					dome.starLabels[#dome.starLabels + 1] = starLabel
+				end
+			end
+		end
+	end
+	model.WorldPivot = CFrame.new()
+	dome.starsVisible = false
+	function dome.setStarsVisible(visible)
+		if dome.starsVisible == visible then
+			return
+		end
+		dome.starsVisible = visible
+		for _, label in ipairs(dome.starLabels) do
+			label.Visible = visible
+		end
+	end
+	function dome.beginFade(set)
+		for _, label in ipairs(dome.skyLabels[set]) do
+			label.ImageTransparency = 1
+			label.ZIndex = 3
+		end
+	end
+	function dome.setFade(set, progress)
+		local transparency = 1 - math.clamp(progress, 0, 1)
+		for _, label in ipairs(dome.skyLabels[set]) do
+			label.ImageTransparency = transparency
+		end
+	end
+	function dome.finishFade(set)
+		for _, label in ipairs(dome.skyLabels[set]) do
+			label.ImageTransparency = 0
+			label.ZIndex = 2
+		end
+		for _, label in ipairs(dome.skyLabels[3 - set]) do
+			label.ZIndex = 1
+		end
+	end
+	function dome.follow(cameraPosition)
+		model:PivotTo(CFrame.new(cameraPosition))
+	end
+	return dome
+end
+
+function Dome.buildQuad(parent, name, widthStuds, image, canvasPixels)
+	local part = Instance.new("Part")
+	part.Name = name
+	part.Anchored = true
+	part.CanCollide = false
+	part.CanQuery = false
+	part.CanTouch = false
+	part.CastShadow = false
+	part.Locked = true
+	part.Transparency = 1
+	part.Size = Vector3.new(widthStuds, widthStuds, 0.2)
+	part.Parent = parent
+	local gui = createSurfaceGui(part, canvasPixels)
+	local label = createImageLabel(gui, image, 1)
+	label.Visible = false
+	local quad = { part = part, label = label, gui = gui, visible = false }
+	function quad.setVisible(visible)
+		if quad.visible ~= visible then
+			quad.visible = visible
+			label.Visible = visible
+		end
+	end
+	function quad.place(cameraPosition, direction, distance)
+		local position = cameraPosition + direction * distance
+		part.CFrame = CFrame.lookAt(position, cameraPosition)
+	end
+	return quad
+end
+
+local SkyController = {}
+SkyController.__index = SkyController
+
+local function angleBetween(ax, ay, az, bx, by, bz)
+	local dot = ax * bx + ay * by + az * bz
+	if dot > 1 then dot = 1 elseif dot < -1 then dot = -1 end
+	return math.deg(math.acos(dot))
+end
+
+local function newSpriteState(imageFactory, size)
+	return {
+		size = size,
+		pixels = buffer.create(size * size * 4),
+		image = imageFactory.create(size, size),
+		rowCursor = 0,
+		active = false,
+		params = nil,
+		lastParams = nil,
+		renderRows = nil,
+		hasImage = false,
+	}
+end
+
+function SkyController.new(imageFactory)
+	local self = setmetatable({}, SkyController)
+	local sky = Config.Sky
+	self.imageFactory = imageFactory
+	self.faceSize = sky.FaceResolution
+	self.starSize = sky.StarResolution
+	self.lut = Sky.newLut(sky.LutElevations, sky.LutAzimuths)
+	self.lutVersion = 0
+	self.faceBuffers = { {}, {} }
+	self.faceImages = { {}, {} }
+	for set = 1, 2 do
+		for index = 1, 6 do
+			self.faceBuffers[set][index] = buffer.create(self.faceSize * self.faceSize * 4)
+			self.faceImages[set][index] = imageFactory.create(self.faceSize, self.faceSize)
+		end
+	end
+	self.frontSet = 1
+	self.faceVersion = 0
+	self.fade = nil
+	self.starBuffers = {}
+	self.starImages = {}
+	if sky.StarsEnabled then
+		for index = 1, 6 do
+			self.starBuffers[index] = buffer.create(self.starSize * self.starSize * 4)
+			self.starImages[index] = imageFactory.create(self.starSize, self.starSize)
+		end
+		self.procedural = Sprites.buildProceduralStars(Core.hash2)
+		self.catalog = {}
+		for index, star in ipairs(Astro.Stars) do
+			self.catalog[index] = { star = star, dx = 0, dy = 0, dz = 0 }
+		end
+	end
+	self.cloudSize = Config.Clouds.Resolution
+	self.cloudBuffers = { CloudPass.newBuffer(self.cloudSize), CloudPass.newBuffer(self.cloudSize), CloudPass.newBuffer(self.cloudSize), CloudPass.newBuffer(self.cloudSize) }
+	self.faceCloudIndex = nil
+	self.cloudFront = 1
+	self.cloudVersion = 0
+	self.cloudJob = { active = false }
+	self.cloudSnapshot = nil
+	self.facesCloudVersion = 0
+	self.sunSprite = newSpriteState(imageFactory, sky.SunSpriteSize)
+	self.moonSprite = newSpriteState(imageFactory, sky.MoonSpriteSize)
+	self.haloSprite = newSpriteState(imageFactory, sky.HaloSpriteSize)
+	self.stage = "idle"
+	self.lastSnapshot = nil
+	self.lastCompletedAt = -1e9
+	self.starState = { lastExposure = 0, lastSidereal = -1e9, lastBakedAt = -1e9, uploadQueue = {}, baked = false, cloudVersion = -1 }
+	self.dome = nil
+	self.starJob = { active = false }
+	self.starCloudIndex = nil
+	return self
+end
+
+function SkyController:useAtmosphere(world)
+	Atmos.configure(world.sunX, world.sunY, world.sunZ, world.aerosol, world.cameraHeight)
+end
+
+function SkyController:currentCloudData()
+	if Config.Clouds.Enabled and self.cloudVersion > 0 then
+		return self.cloudBuffers[self.cloudFront]
+	end
+	return nil
+end
+
+function SkyController:pickCloudTarget()
+	for index = 1, #self.cloudBuffers do
+		if index ~= self.cloudFront and index ~= self.faceCloudIndex and index ~= self.starCloudIndex and index ~= self.sunSprite.cloudIndex and index ~= self.moonSprite.cloudIndex and index ~= self.haloSprite.cloudIndex then
+			return index
+		end
+	end
+	return 1
+end
+
+function SkyController:opacityFunction()
+	local data = self:currentCloudData()
+	if not data then
+		return function()
+			return 0
+		end
+	end
+	local size = self.cloudSize
+	return function(dx, dy, dz)
+		return CloudPass.opacityAt(data, size, Render.Faces, dx, dy, dz)
+	end
+end
+
+function SkyController:skyRadiance(world, dx, dy, dz)
+	local r, g, b = Sky.sample(self.lut, dx, dy, dz)
+	if dy > 0 and world.moonIntensity > 0 then
+		local mr, mg, mb = Atmos.moonSky(dx, dy, dz, world.moonX, world.moonY, world.moonZ, world.moonIntensity)
+		r, g, b = r + mr, g + mg, b + mb
+	end
+	local glow = Atmos.GLOW
+	return r + glow[1], g + glow[2], b + glow[3]
+end
+
+function SkyController:snapshotOf(world)
+	return {
+		sunX = world.sunX, sunY = world.sunY, sunZ = world.sunZ,
+		aerosol = world.aerosol, cameraHeight = world.cameraHeight,
+		moonX = world.moonX, moonY = world.moonY, moonZ = world.moonZ, moonIntensity = world.moonIntensity,
+		exposure = world.exposure,
+	}
+end
+
+function SkyController:planNext(world, now)
+	local last = self.lastSnapshot
+	if not last then
+		return "lut"
+	end
+	if self.fade or now - self.lastCompletedAt < Config.Sky.MinRefreshInterval then
+		return nil
+	end
+	if angleBetween(world.sunX, world.sunY, world.sunZ, last.sunX, last.sunY, last.sunZ) > 0.1
+		or math.abs(world.aerosol - last.aerosol) > last.aerosol * 0.03
+		or math.abs(world.cameraHeight - last.cameraHeight) > 40 then
+		return "lut"
+	end
+	if self.cloudVersion ~= self.facesCloudVersion then
+		return "faces"
+	end
+	if math.abs(world.exposure / last.exposure - 1) > 0.04 then
+		return "faces"
+	end
+	if world.moonIntensity > 0 or last.moonIntensity > 0 then
+		if angleBetween(world.moonX, world.moonY, world.moonZ, last.moonX, last.moonY, last.moonZ) > 0.4
+			or math.abs(world.moonIntensity - last.moonIntensity) > 0.04 * math.max(last.moonIntensity, 1e-6) then
+			return "faces"
+		end
+	end
+	return nil
+end
+
+function SkyController:startLut(world)
+	local snapshot = self:snapshotOf(world)
+	self.pendingSnapshot = snapshot
+	self.lutState = Sky.beginBuild(self.lut, snapshot.sunX, snapshot.sunY, snapshot.sunZ, snapshot.aerosol, snapshot.cameraHeight, snapshot.moonX, snapshot.moonY, snapshot.moonZ, snapshot.moonIntensity)
+	self.stage = "lut"
+end
+
+function SkyController:startFaces(world)
+	local snapshot = self.pendingSnapshot or self:snapshotOf(world)
+	snapshot.exposure = world.exposure
+	snapshot.moonX, snapshot.moonY, snapshot.moonZ, snapshot.moonIntensity = world.moonX, world.moonY, world.moonZ, world.moonIntensity
+	self.pendingSnapshot = snapshot
+	local glow = Atmos.GLOW
+	self.renderSet = 3 - self.frontSet
+	if not self.lastSnapshot then
+		self.renderSet = self.frontSet
+	end
+	self.faceFrame = {
+		lut = self.lut, Sky = Sky, Core = Core,
+		exposure = snapshot.exposure,
+		glowR = glow[1], glowG = glow[2], glowB = glow[3],
+		moonX = snapshot.moonX, moonY = snapshot.moonY, moonZ = snapshot.moonZ, moonIntensity = snapshot.moonIntensity,
+		moonSky = Atmos.moonSky,
+		ditherSeedA = math.random() * 50, ditherSeedB = math.random() * 50,
+		nightGrain = Config.Sky.NightGrain,
+		cloudData = self:currentCloudData(),
+		cloudSize = self.cloudSize,
+		cloudFloats = CloudPass.FLOATS,
+	}
+	self.facesCloudVersion = self.cloudVersion
+	self.faceCloudIndex = self.faceFrame.cloudData and self.cloudFront or nil
+	self.faceIndex = 1
+	self.faceRow = 0
+	self.stage = "faces"
+end
+
+function SkyController:finishFaces(now)
+	local set = self.renderSet
+	for index = 1, 6 do
+		self.imageFactory.write(self.faceImages[set][index], self.faceSize, self.faceSize, self.faceBuffers[set][index])
+	end
+	self.lastSnapshot = self.pendingSnapshot
+	self.lastCompletedAt = os.clock()
+	self.faceVersion = self.faceVersion + 1
+	self.faceCloudIndex = nil
+	self.stage = "idle"
+	if set ~= self.frontSet then
+		self.frontSet = set
+		if self.dome then
+			self.dome.beginFade(set)
+			self.fade = { set = set, start = os.clock() }
+		end
+	elseif self.dome then
+		self.dome.finishFade(set)
+	end
+end
+
+function SkyController:stepLut(deadline)
+	local finished = Sky.buildStep(self.lutState, Atmos, deadline)
+	if finished then
+		self.lutVersion = self.lutVersion + 1
+		self.lutSnapshot = self.pendingSnapshot
+		self.stage = "lutDone"
+	end
+end
+
+function SkyController:stepFaces(deadline)
+	local snapshot = self.pendingSnapshot
+	Atmos.configure(snapshot.sunX, snapshot.sunY, snapshot.sunZ, snapshot.aerosol, snapshot.cameraHeight)
+	local size = self.faceSize
+	local buffers = self.faceBuffers[self.renderSet]
+	local frame = self.faceFrame
+	while self.stage == "faces" and os.clock() < deadline do
+		local rowEnd = math.min(self.faceRow + 1, size - 1)
+		frame.faceIndex = self.faceIndex
+		Render.renderFaceRows(Render.Faces[self.faceIndex], size, buffers[self.faceIndex], self.faceRow, rowEnd, frame)
+		self.faceRow = rowEnd + 1
+		if self.faceRow >= size then
+			self.faceRow = 0
+			self.faceIndex = self.faceIndex + 1
+			if self.faceIndex > 6 then
+				self:finishFaces()
+			end
+		end
+	end
+end
+
+function SkyController:stepSkyPipeline(world, deadline, now)
+	if self.stage == "idle" then
+		local plan = self:planNext(world, now)
+		if plan == "lut" then
+			self:startLut(world)
+		elseif plan == "faces" then
+			self.pendingSnapshot = self:snapshotOf(world)
+			self:startFaces(world)
+		end
+	end
+	if self.stage == "lut" then
+		self:stepLut(deadline)
+	end
+	if self.stage == "lutDone" then
+		self:startFaces(world)
+	end
+	if self.stage == "faces" then
+		self:stepFaces(deadline)
+	end
+end
+
+function SkyController:cloudsNeedPass(world)
+	local last = self.cloudSnapshot
+	if not last then
+		return true
+	end
+	if math.abs(world.windTime - last.windTime) * 6.94 >= Config.Clouds.RefreshDriftMeters then
+		return true
+	end
+	if math.abs(world.convection - last.convection) > 0.04 or math.abs(world.cloudBase - last.cloudBase) > 30 then
+		return true
+	end
+	if angleBetween(world.sunX, world.sunY, world.sunZ, last.sunX, last.sunY, last.sunZ) > 0.3 then
+		return true
+	end
+	if math.abs(world.cameraX - last.cameraX) + math.abs(world.cameraZ - last.cameraZ) > 80 then
+		return true
+	end
+	return false
+end
+
+function SkyController:startCloudPass(world)
+	local windX, windZ = Astro.windOffset(world.windTime)
+	local steps = Config.Clouds.Steps
+	if world.timeSpeedEffective >= 300 then
+		steps = math.min(steps, 6)
+	elseif world.timeSpeedEffective >= 30 then
+		steps = math.min(steps, 11)
+	end
+	local lutSnapshot = self.lutSnapshot
+	local params = {
+		size = self.cloudSize,
+		targetIndex = self:pickCloudTarget(),
+		sunX = lutSnapshot.sunX, sunY = lutSnapshot.sunY, sunZ = lutSnapshot.sunZ,
+		aerosol = lutSnapshot.aerosol, cameraHeight = lutSnapshot.cameraHeight,
+		windX = windX, windZ = windZ, convection = world.convection, cloudBase = world.cloudBase,
+		cameraX = world.cameraX, cameraZ = world.cameraZ,
+		moonX = world.moonX, moonY = world.moonY, moonZ = world.moonZ, moonIntensity = world.moonIntensity,
+		steps = steps, earlyOut = Config.Clouds.EarlyOut,
+		windTime = world.windTime,
+		lutVersion = self.lutVersion,
+	}
+	params.target = self.cloudBuffers[params.targetIndex]
+	self.cloudParams = params
+	CloudPass.begin(self.cloudJob, params)
+end
+
+function SkyController:finishCloudPass()
+	local params = self.cloudParams
+	if params.lutVersion ~= self.lutVersion then
+		self.cloudSnapshot = nil
+		return
+	end
+	self.cloudFront = params.targetIndex
+	self.cloudVersion = self.cloudVersion + 1
+	self.cloudSnapshot = {
+		windTime = params.windTime, convection = params.convection, cloudBase = params.cloudBase,
+		sunX = params.sunX, sunY = params.sunY, sunZ = params.sunZ,
+		cameraX = params.cameraX, cameraZ = params.cameraZ,
+	}
+end
+
+function SkyController:updateClouds(world, deadline)
+	if not Config.Clouds.Enabled or not self.lut.ready or not self.lastSnapshot or not self.lutSnapshot then
+		return
+	end
+	local job = self.cloudJob
+	if job.active then
+		if CloudPass.step(job, deadline, Render.Faces, self.lut) then
+			self:finishCloudPass()
+		end
+	elseif self:cloudsNeedPass(world) then
+		self:startCloudPass(world)
+		if CloudPass.step(job, deadline, Render.Faces, self.lut) then
+			self:finishCloudPass()
+		end
+	end
+end
+
+function SkyController:updateFade(now)
+	local fade = self.fade
+	if not fade or not self.dome then
+		return
+	end
+	local progress = (os.clock() - fade.start) / Config.Clouds.FadeSeconds
+	if progress >= 1 then
+		self.dome.finishFade(fade.set)
+		self.fade = nil
+	else
+		self.dome.setFade(fade.set, progress)
+	end
+end
+
+function SkyController:spriteContext(world)
+	local cloudData = self:currentCloudData()
+	return {
+		faces = Render.Faces,
+		faceBuffers = self.faceBuffers[self.frontSet],
+		faceSize = self.faceSize,
+		cloudData = cloudData,
+		opacityAt = self:opacityFunction(),
+		exposure = world.exposure,
+		E0 = Atmos.E0,
+		Core = Core,
+	}
+end
+
+function SkyController:spriteNeedsRefresh(state, world, bodyX, bodyY, bodyZ)
+	if state.active or not self.lut.ready then
+		return false
+	end
+	local last = state.lastParams
+	if not last then
+		return true
+	end
+	return last.lutVersion ~= self.lutVersion
+		or last.faceVersion ~= self.faceVersion
+		or math.abs(world.exposure / last.exposure - 1) > 0.03
+		or angleBetween(bodyX, bodyY, bodyZ, last.bodyX, last.bodyY, last.bodyZ) > 0.12
+end
+
+function SkyController:startSunSprite(world)
+	local state = self.sunSprite
+	self:useAtmosphere(world)
+	local sunDirection = { x = world.sunX, y = world.sunY, z = world.sunZ }
+	local half = Config.Sky.SunSpriteHalfAngle
+	local _, _, _, tr, tg, tb = Atmos.scatter(world.sunX, math.max(world.sunY, 0), world.sunZ, 1e7, 24)
+	local context = self:spriteContext(world)
+	context.transR, context.transG, context.transB = tr, tg, tb
+	state.params = { lutVersion = self.lutVersion, faceVersion = self.faceVersion, exposure = world.exposure, bodyX = world.sunX, bodyY = world.sunY, bodyZ = world.sunZ }
+	state.renderRows = function(rowStart, rowEnd)
+		Sprites.renderSun(state.pixels, state.size, half, sunDirection, context, rowStart, rowEnd)
+	end
+	state.rowCursor = 0
+	state.active = true
+	state.cloudIndex = self.cloudVersion > 0 and self.cloudFront or nil
+end
+
+function SkyController:startMoonSprite(world)
+	local state = self.moonSprite
+	self:useAtmosphere(world)
+	local half = Config.Sky.MoonSpriteHalfAngle
+	local moonDirection = { x = world.moonX, y = world.moonY, z = world.moonZ }
+	local sunDirection = { x = world.sunX, y = world.sunY, z = world.sunZ }
+	local tr, tg, tb = Atmos.aerialTransmittance(1e5, world.moonY)
+	local context = self:spriteContext(world)
+	context.transR, context.transG, context.transB = tr, tg, tb
+	context.latitudeDegrees = Astro.Latitude
+	context.noise = Core.valueNoise
+	state.params = { lutVersion = self.lutVersion, faceVersion = self.faceVersion, exposure = world.exposure, bodyX = world.moonX, bodyY = world.moonY, bodyZ = world.moonZ }
+	state.renderRows = function(rowStart, rowEnd)
+		Sprites.renderMoon(state.pixels, state.size, half, moonDirection, sunDirection, context, rowStart, rowEnd)
+	end
+	state.rowCursor = 0
+	state.active = true
+	state.cloudIndex = self.cloudVersion > 0 and self.cloudFront or nil
+end
+
+function SkyController:startHaloSprite(world)
+	local state = self.haloSprite
+	local half = Config.Sky.HaloSpriteHalfAngle
+	local sunDirection = { x = world.sunX, y = world.sunY, z = world.sunZ }
+	local context = self:spriteContext(world)
+	context.R = Atmos.R
+	context.cameraHeight = world.cameraHeight
+	context.cameraX, context.cameraZ = world.cameraX, world.cameraZ
+	context.cirrusField = CloudField.cirrus
+	context.sunTransmittance = Atmos.sunTransmittance
+	context.aerialTransmittance = Atmos.aerialTransmittance
+	local windX, windZ = Astro.windOffset(world.windTime)
+	local convection, cloudBase = world.convection, world.cloudBase
+	local aerosol = world.aerosol
+	local sunX, sunY, sunZ, height = world.sunX, world.sunY, world.sunZ, world.cameraHeight
+	local cameraX, cameraZ = world.cameraX, world.cameraZ
+	state.params = { lutVersion = self.lutVersion, faceVersion = self.faceVersion, exposure = world.exposure, bodyX = world.sunX, bodyY = world.sunY, bodyZ = world.sunZ }
+	state.renderRows = function(rowStart, rowEnd)
+		Atmos.configure(sunX, sunY, sunZ, aerosol, height)
+		CloudField.configure(windX, windZ, convection, cloudBase, cameraX, cameraZ, height, sunX, sunY, sunZ)
+		Sprites.renderHalo(state.pixels, state.size, half, sunDirection, context, rowStart, rowEnd)
+	end
+	state.rowCursor = 0
+	state.active = true
+	state.cloudIndex = self.cloudVersion > 0 and self.cloudFront or nil
+end
+
+function SkyController:stepSprite(state, deadline)
+	while state.active and os.clock() < deadline do
+		local rowEnd = state.rowCursor
+		state.renderRows(state.rowCursor, rowEnd)
+		state.rowCursor = rowEnd + 1
+		if state.rowCursor >= state.size then
+			state.active = false
+			state.cloudIndex = nil
+			self.imageFactory.write(state.image, state.size, state.size, state.pixels)
+			state.lastParams = state.params
+			state.hasImage = true
+		end
+	end
+end
+
+function SkyController:starsNeedBake(world, now)
+	if not Config.Sky.StarsEnabled or not self.lut.ready or self.starJob.active then
+		return false
+	end
+	if world.sunEl > 6 then
+		return false
+	end
+	local state = self.starState
+	if #state.uploadQueue > 0 then
+		return false
+	end
+	if not state.baked then
+		return true
+	end
+	local speedFactor = math.min(world.timeSpeed, 600)
+	local minimumInterval = speedFactor > 30 and 0.75 or 4
+	if now - state.lastBakedAt < minimumInterval then
+		return false
+	end
+	return math.abs(world.exposure / state.lastExposure - 1) > 0.1
+		or math.abs(world.siderealDegrees - state.lastSidereal) > 0.05
+		or state.cloudVersion ~= self.cloudVersion
+end
+
+function SkyController:startStarBake(world, now)
+	self:useAtmosphere(world)
+	local siderealRadians = math.rad(world.siderealDegrees)
+	for _, entry in ipairs(self.catalog) do
+		entry.dx, entry.dy, entry.dz = Astro.starDirection(entry.star, world.siderealDegrees)
+	end
+	local referenceDirectionY = math.sin(math.rad(50))
+	local horizontalScale = math.cos(math.rad(50))
+	local hx, hz = -world.sunX, -world.sunZ
+	local horizontal = math.sqrt(hx * hx + hz * hz)
+	if horizontal < 1e-4 then hx, hz, horizontal = 1, 0, 1 end
+	local skyR, skyG, skyB = self:skyRadiance(world, hx / horizontal * horizontalScale, referenceDirectionY, hz / horizontal * horizontalScale)
+	local context = self.starContext
+	if not context then
+		context = {
+			faces = Render.Faces,
+			size = self.starSize,
+			buffers = self.starBuffers,
+			procedural = self.procedural,
+			catalog = self.catalog,
+			latitudeCos = math.cos(math.rad(Astro.Latitude)),
+			latitudeSin = math.sin(math.rad(Astro.Latitude)),
+			exposeToDisplay = Core.exposeToDisplay,
+		}
+		self.starContext = context
+	end
+	local lut = self.lut
+	context.transmittanceAt = function(dy)
+		return Sky.transmittanceAt(lut, dy)
+	end
+	context.opacityAt = self:opacityFunction()
+	self.starCloudIndex = self.cloudVersion > 0 and self.cloudFront or nil
+	context.siderealCos, context.siderealSin = math.cos(siderealRadians), math.sin(siderealRadians)
+	context.exposure = world.exposure
+	context.skyR, context.skyG, context.skyB = skyR, skyG, skyB
+	Sprites.bakeBegin(context)
+	self.starJob.active = true
+	self.starJob.exposure = world.exposure
+	self.starJob.sidereal = world.siderealDegrees
+	self.starJob.startedAt = now
+end
+
+function SkyController:stepStarBake(deadline)
+	if Sprites.bakeStep(self.starContext, deadline) then
+		local state = self.starState
+		self.starJob.active = false
+		self.starCloudIndex = nil
+		state.baked = true
+		state.lastExposure = self.starJob.exposure
+		state.lastSidereal = self.starJob.sidereal
+		state.lastBakedAt = self.starJob.startedAt
+		state.cloudVersion = self.cloudVersion
+		state.uploadQueue = { 1, 2, 3, 4, 5, 6 }
+	end
+end
+
+function SkyController:stepStarUpload()
+	local queue = self.starState.uploadQueue
+	if #queue > 0 then
+		local index = table.remove(queue, 1)
+		self.imageFactory.write(self.starImages[index], self.starSize, self.starSize, self.starBuffers[index])
+	end
+end
+
+function SkyController:update(world, now)
+	local deadline = os.clock() + Config.Sky.SliceBudgetSeconds
+	self:stepSkyPipeline(world, deadline, now)
+	if self.lut.ready and self.lastSnapshot then
+		if self.sunSprite.active then
+			self:stepSprite(self.sunSprite, deadline)
+		elseif self:spriteNeedsRefresh(self.sunSprite, world, world.sunX, world.sunY, world.sunZ) then
+			self:startSunSprite(world)
+			self:stepSprite(self.sunSprite, deadline)
+		end
+		if self.moonSprite.active then
+			self:stepSprite(self.moonSprite, deadline)
+		elseif world.moonIntensity > 0 and self:spriteNeedsRefresh(self.moonSprite, world, world.moonX, world.moonY, world.moonZ) then
+			self:startMoonSprite(world)
+			self:stepSprite(self.moonSprite, deadline)
+		end
+		if self.haloSprite.active then
+			self:stepSprite(self.haloSprite, deadline)
+		elseif world.sunEl > -1 and self:spriteNeedsRefresh(self.haloSprite, world, world.sunX, world.sunY, world.sunZ) then
+			self:startHaloSprite(world)
+			self:stepSprite(self.haloSprite, deadline)
+		end
+		if self.starJob.active then
+			self:stepStarBake(deadline)
+		elseif self:starsNeedBake(world, now) then
+			self:startStarBake(world, now)
+			self:stepStarBake(deadline)
+		end
+	end
+	self:stepStarUpload()
+	self:updateFade(now)
+	local cloudBudget = self.cloudVersion == 0 and Config.Clouds.InitialBudgetSeconds or Config.Clouds.BudgetSeconds
+	self:updateClouds(world, os.clock() + cloudBudget)
+end
+
+function SkyController:renderNow(world, now)
+	local everything = os.clock() + 120
+	self:startLut(world)
+	while self.stage == "lut" do
+		self:stepLut(everything)
+	end
+	self:startFaces(world)
+	while self.stage == "faces" do
+		self:stepFaces(everything)
+	end
+	self:startSunSprite(world)
+	self:stepSprite(self.sunSprite, everything)
+	if world.moonIntensity > 0 then
+		self:startMoonSprite(world)
+		self:stepSprite(self.moonSprite, everything)
+	end
+	if world.sunEl > -1 then
+		self:startHaloSprite(world)
+		self:stepSprite(self.haloSprite, everything)
+	end
+	if self:starsNeedBake(world, now) then
+		self:startStarBake(world, now)
+		while self.starJob.active do
+			self:stepStarBake(everything)
+		end
+		while #self.starState.uploadQueue > 0 do
+			self:stepStarUpload()
+		end
+	end
+end
+
+local LightingDriver = {}
+LightingDriver.__index = LightingDriver
+
+local function clamp(x, lo, hi)
+	if x < lo then return lo elseif x > hi then return hi end
+	return x
+end
+
+local function color(r, g, b)
+	return Color3.new(clamp(r, 0, 1), clamp(g, 0, 1), clamp(b, 0, 1))
+end
+
+local function luminance(r, g, b)
+	return r * 0.2126 + g * 0.7152 + b * 0.0722
+end
+
+local SAVED_LIGHTING_PROPERTIES = {
+	"ClockTime", "GeographicLatitude", "Ambient", "OutdoorAmbient", "Brightness",
+	"ColorShift_Top", "ColorShift_Bottom", "ExposureCompensation",
+	"EnvironmentDiffuseScale", "EnvironmentSpecularScale",
+}
+
+local SAVED_ATMOSPHERE_PROPERTIES = { "Density", "Offset", "Color", "Decay", "Glare", "Haze" }
+
+function LightingDriver.new()
+	local self = setmetatable({}, LightingDriver)
+	self.original = {}
+	for _, name in ipairs(SAVED_LIGHTING_PROPERTIES) do
+		local ok, value = pcall(function()
+			return (Lighting :: any)[name]
+		end)
+		if ok then
+			self.original[name] = value
+		end
+	end
+	Cleanup.add(function()
+		for name, value in pairs(self.original) do
+			pcall(function()
+				(Lighting :: any)[name] = value
+			end)
+		end
+	end)
+	self.engineClock = Lighting.ClockTime
+	self.engineLatitude = Lighting.GeographicLatitude
+	self.engineAligned = false
+	self.lastEngineTarget = nil
+	self.engineUsesMoon = false
+	self.lastUpdate = -1e9
+	if Config.Lighting.ManageAtmosphere then
+		local atmosphere = Lighting:FindFirstChildOfClass("Atmosphere")
+		if atmosphere then
+			local saved = {}
+			for _, name in ipairs(SAVED_ATMOSPHERE_PROPERTIES) do
+				saved[name] = (atmosphere :: any)[name]
+			end
+			Cleanup.add(function()
+				for name, value in pairs(saved) do
+					pcall(function()
+						(atmosphere :: any)[name] = value
+					end)
+				end
+			end)
+		else
+			atmosphere = track(Instance.new("Atmosphere"))
+			atmosphere.Parent = Lighting
+		end
+		self.atmosphere = atmosphere
+	end
+	if Config.Lighting.ManageEffects then
+		self.colorCorrection = track(Instance.new("ColorCorrectionEffect"))
+		self.colorCorrection.Name = "GeorgiaSkyColor"
+		self.colorCorrection.Parent = Lighting
+		self.bloom = track(Instance.new("BloomEffect"))
+		self.bloom.Name = "GeorgiaSkyBloom"
+		self.bloom.Parent = Lighting
+		self.sunRays = track(Instance.new("SunRaysEffect"))
+		self.sunRays.Name = "GeorgiaSkySunRays"
+		self.sunRays.Parent = Lighting
+	end
+	return self
+end
+
+function LightingDriver:directionOf(clockTime, latitude, useMoon)
+	Lighting.ClockTime = clockTime
+	Lighting.GeographicLatitude = latitude
+	if useMoon then
+		return Lighting:GetMoonDirection()
+	end
+	return Lighting:GetSunDirection()
+end
+
+function LightingDriver:alignCoarse(target, useMoon)
+	local bestError, bestClock, bestLatitude = math.huge, 12, 0
+	for latitude = -90, 90, 15 do
+		for clockTime = 0, 23.5, 0.5 do
+			local direction = self:directionOf(clockTime, latitude, useMoon)
+			local err = 1 - direction:Dot(target)
+			if err < bestError then
+				bestError, bestClock, bestLatitude = err, clockTime, latitude
+			end
+		end
+	end
+	self.engineClock, self.engineLatitude = bestClock, bestLatitude
+	return bestError
+end
+
+function LightingDriver:alignNewton(target, useMoon)
+	local clockTime, latitude = self.engineClock, self.engineLatitude
+	local stepClock, stepLatitude = 0.05, 1
+	for _ = 1, 3 do
+		local d0 = self:directionOf(clockTime, latitude, useMoon)
+		local dT = (self:directionOf(clockTime + stepClock, latitude, useMoon) - d0) / stepClock
+		local dL = (self:directionOf(clockTime, latitude + stepLatitude, useMoon) - d0) / stepLatitude
+		local residual = target - d0
+		local a11, a12, a22 = dT:Dot(dT), dT:Dot(dL), dL:Dot(dL)
+		local b1, b2 = dT:Dot(residual), dL:Dot(residual)
+		local determinant = a11 * a22 - a12 * a12 + 1e-9
+		local deltaClock = (b1 * a22 - b2 * a12) / determinant
+		local deltaLatitude = (a11 * b2 - a12 * b1) / determinant
+		clockTime = (clockTime + clamp(deltaClock, -1.5, 1.5)) % 24
+		latitude = clamp(latitude + clamp(deltaLatitude, -15, 15), -90, 90)
+	end
+	self.engineClock, self.engineLatitude = clockTime, latitude
+	local final = self:directionOf(clockTime, latitude, useMoon)
+	return 1 - final:Dot(target)
+end
+
+function LightingDriver:alignEngine(world)
+	local useMoon = world.sunY < -0.03 and world.moonY > 0
+	local target = useMoon and Vector3.new(world.moonX, world.moonY, world.moonZ) or Vector3.new(world.sunX, world.sunY, world.sunZ)
+	local last = self.lastEngineTarget
+	if last and not (self.engineUsesMoon ~= useMoon) and (last - target).Magnitude < 0.0008 then
+		return
+	end
+	local err
+	if not self.engineAligned or self.engineUsesMoon ~= useMoon then
+		self:alignCoarse(target, useMoon)
+		err = self:alignNewton(target, useMoon)
+		self.engineAligned = true
+	else
+		err = self:alignNewton(target, useMoon)
+		if err > 2e-4 then
+			err = self:alignNewton(target, useMoon)
+		end
+		if err > 5e-3 then
+			self:alignCoarse(target, useMoon)
+			err = self:alignNewton(target, useMoon)
+		end
+	end
+	self.engineUsesMoon = useMoon
+	self.lastEngineTarget = target
+	self.engineError = err
+	Lighting.ClockTime = self.engineClock
+	Lighting.GeographicLatitude = self.engineLatitude
+end
+
+function LightingDriver:update(world, skyController, now)
+	if now - self.lastUpdate < Config.Lighting.UpdateInterval then
+		return
+	end
+	self.lastUpdate = now
+	local lut = skyController.lut
+	if not lut.ready then
+		return
+	end
+	local context = lut.groundContext
+	local sunGround = lut.sunAtGround
+	local E0 = Atmos.E0
+	local exposure = world.exposure
+	local ambientR = context.ambientR + context.moonR
+	local ambientG = context.ambientG + context.moonG
+	local ambientB = context.ambientB + context.moonB
+	local cloudShadow = 1
+	if Config.Clouds.Enabled then
+		local windX, windZ = Astro.windOffset(world.windTime)
+		CloudField.configure(windX, windZ, world.convection, world.cloudBase, world.cameraX, world.cameraZ, world.cameraHeight, world.sunX, world.sunY, world.sunZ)
+		cloudShadow = CloudField.groundShadow()
+	end
+	local sunVisibility = clamp((world.sunY + 0.02) / 0.05, 0, 1) * cloudShadow
+	local sunTermR = E0 * sunGround[1] * sunVisibility / math.pi
+	local sunTermG = E0 * sunGround[2] * sunVisibility / math.pi
+	local sunTermB = E0 * sunGround[3] * sunVisibility / math.pi
+	local shadedR, shadedG, shadedB = Core.exposeToDisplay(ambientR, ambientG, ambientB, exposure)
+	local litR, litG, litB = Core.exposeToDisplay(ambientR + sunTermR, ambientG + sunTermG, ambientB + sunTermB, exposure)
+	local ambientScale = Config.Lighting.AmbientScale
+	local ambientColor = color(shadedR * ambientScale, shadedG * ambientScale, shadedB * ambientScale)
+	Lighting.OutdoorAmbient = ambientColor
+	Lighting.Ambient = ambientColor
+	local sunContribution = math.max(luminance(litR, litG, litB) - luminance(shadedR, shadedG, shadedB), 0)
+	local brightness = sunContribution * 5 * Config.Lighting.BrightnessScale
+	local useMoon = world.sunY < -0.03 and world.moonY > 0
+	if useMoon then
+		brightness = clamp(world.moonIntensity / 3e-3, 0, 1) * 0.35 * Config.Lighting.BrightnessScale
+	end
+	Lighting.Brightness = clamp(brightness, 0, 8)
+	local maxChannel = math.max(sunGround[1], sunGround[2], sunGround[3], 1e-6)
+	local tintStrength = clamp(1 - world.sunY * 2.5, 0, 1) * clamp((world.sunY + 0.06) / 0.1, 0, 1) * 0.5
+	Lighting.ColorShift_Top = color(sunGround[1] / maxChannel * tintStrength, sunGround[2] / maxChannel * tintStrength, sunGround[3] / maxChannel * tintStrength)
+	Lighting.ColorShift_Bottom = color(shadedR * 0.08, shadedG * 0.1, shadedB * 0.14)
+	Lighting.EnvironmentDiffuseScale = 0
+	Lighting.EnvironmentSpecularScale = 0.2
+	Lighting.ExposureCompensation = 0
+	if Config.Lighting.AlignEngineSun then
+		self:alignEngine(world)
+	end
+	local aerosolRatio = world.aerosol / 4e-5
+	local warm = clamp(1 - world.sunY * 4, 0, 1) * clamp((world.sunY + 0.1) / 0.15, 0, 1)
+	if self.atmosphere then
+		local horizonDirectionX, horizonDirectionZ = -world.sunX, -world.sunZ
+		local horizontal = math.sqrt(horizonDirectionX * horizonDirectionX + horizonDirectionZ * horizonDirectionZ)
+		if horizontal < 1e-4 then
+			horizonDirectionX, horizonDirectionZ, horizontal = 1, 0, 1
+		end
+		local elevation = math.rad(4)
+		local hx, hy, hz = horizonDirectionX / horizontal * math.cos(elevation), math.sin(elevation), horizonDirectionZ / horizontal * math.cos(elevation)
+		local hr, hg, hb = skyController:skyRadiance(world, hx, hy, hz)
+		local cr, cg, cb = Core.exposeToDisplay(hr, hg, hb, exposure)
+		self.atmosphere.Color = color(cr, cg, cb)
+		local nr, ng, nb = skyController:skyRadiance(world, world.sunX * 0.98, math.max(world.sunY, 0.05) * 0.98 + 0.02, world.sunZ * 0.98)
+		local dr, dg, db = Core.exposeToDisplay(nr, ng, nb, exposure)
+		self.atmosphere.Decay = color(dr, dg, db)
+		self.atmosphere.Density = clamp(0.06 * aerosolRatio ^ 0.7 * Config.Lighting.AtmosphereDensityScale, 0, 0.5)
+		self.atmosphere.Haze = clamp(0.6 * aerosolRatio, 0, 4)
+		self.atmosphere.Glare = clamp(0.2 + 0.8 * warm, 0, 1)
+		self.atmosphere.Offset = 0.25
+	end
+	if self.colorCorrection then
+		local night = clamp(-world.sunEl / 12, 0, 1)
+		self.colorCorrection.Saturation = 0.05 - 0.5 * night
+		self.colorCorrection.Contrast = 0.08
+		self.colorCorrection.Brightness = 0
+		self.colorCorrection.TintColor = color(1 - 0.23 * night * 0.8, 1 - 0.1 * night * 0.8, 1)
+		self.bloom.Intensity = 0.25 + 0.3 * warm
+		self.bloom.Size = 26
+		self.bloom.Threshold = 0.92
+		self.sunRays.Intensity = clamp(0.03 + 0.12 * warm, 0, 1) * clamp((world.sunY + 0.05) / 0.1, 0, 1)
+		self.sunRays.Spread = 0.8
+	end
+end
+
+local Hud = {}
+Hud.__index = Hud
+
+local function createLabel(parent, name, position, size, textSize, bold)
+	local label = Instance.new("TextLabel")
+	label.Name = name
+	label.BackgroundTransparency = 1
+	label.Position = position
+	label.Size = size
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.TextYAlignment = Enum.TextYAlignment.Top
+	label.Font = bold and Enum.Font.GothamMedium or Enum.Font.Gotham
+	label.TextSize = textSize
+	label.TextColor3 = Color3.fromRGB(235, 232, 226)
+	label.TextStrokeColor3 = Color3.new(0, 0, 0)
+	label.TextStrokeTransparency = 0.65
+	label.Text = ""
+	label.Parent = parent
+	return label
+end
+
+local function getGuiParent()
+	local ok, container = pcall(function()
+		return gethui()
+	end)
+	if ok and container then
+		return container
+	end
+	local player = Players.LocalPlayer
+	if player then
+		return player:WaitForChild("PlayerGui")
+	end
+	return nil
+end
+
+function Hud.new(state)
+	local parent = getGuiParent()
+	if not parent then
+		return nil
+	end
+	local self = setmetatable({}, Hud)
+	self.state = state
+	local gui = track(Instance.new("ScreenGui"))
+	gui.Name = "GeorgiaSkyHud"
+	gui.ResetOnSpawn = false
+	gui.IgnoreGuiInset = true
+	gui.DisplayOrder = 50
+	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	gui.Parent = parent
+	self.gui = gui
+	self.clock = createLabel(gui, "Clock", UDim2.fromOffset(18, 52), UDim2.fromOffset(320, 36), 28, true)
+	self.sun = createLabel(gui, "Sun", UDim2.fromOffset(18, 90), UDim2.fromOffset(560, 20), 14, false)
+	self.location = createLabel(gui, "Location", UDim2.fromOffset(18, 112), UDim2.fromOffset(420, 20), 13, false)
+	self.location.TextTransparency = 0.25
+	local bar = Instance.new("Frame")
+	bar.Name = "Bar"
+	bar.AnchorPoint = Vector2.new(0.5, 1)
+	bar.Position = UDim2.new(0.5, 0, 1, -14)
+	bar.Size = UDim2.fromOffset(460, 44)
+	bar.BackgroundColor3 = Color3.fromRGB(14, 16, 20)
+	bar.BackgroundTransparency = 0.35
+	bar.BorderSizePixel = 0
+	bar.Parent = gui
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 12)
+	corner.Parent = bar
+	local playButton = Instance.new("TextButton")
+	playButton.Name = "Play"
+	playButton.Position = UDim2.fromOffset(8, 7)
+	playButton.Size = UDim2.fromOffset(30, 30)
+	playButton.BackgroundTransparency = 1
+	playButton.Font = Enum.Font.GothamBold
+	playButton.TextSize = 18
+	playButton.TextColor3 = Color3.fromRGB(240, 236, 228)
+	playButton.Text = "II"
+	playButton.Parent = bar
+	local sliderTrack = Instance.new("Frame")
+	sliderTrack.Name = "Track"
+	sliderTrack.Position = UDim2.fromOffset(48, 20)
+	sliderTrack.Size = UDim2.fromOffset(260, 4)
+	sliderTrack.BackgroundColor3 = Color3.fromRGB(90, 94, 104)
+	sliderTrack.BorderSizePixel = 0
+	sliderTrack.Parent = bar
+	local trackCorner = Instance.new("UICorner")
+	trackCorner.CornerRadius = UDim.new(1, 0)
+	trackCorner.Parent = sliderTrack
+	local knob = Instance.new("Frame")
+	knob.Name = "Knob"
+	knob.AnchorPoint = Vector2.new(0.5, 0.5)
+	knob.Position = UDim2.new(0, 0, 0.5, 0)
+	knob.Size = UDim2.fromOffset(16, 16)
+	knob.BackgroundColor3 = Color3.fromRGB(255, 214, 150)
+	knob.BorderSizePixel = 0
+	knob.Parent = sliderTrack
+	local knobCorner = Instance.new("UICorner")
+	knobCorner.CornerRadius = UDim.new(1, 0)
+	knobCorner.Parent = knob
+	local hit = Instance.new("TextButton")
+	hit.Name = "Hit"
+	hit.BackgroundTransparency = 1
+	hit.Text = ""
+	hit.Position = UDim2.fromOffset(-8, -14)
+	hit.Size = UDim2.new(1, 16, 0, 32)
+	hit.Parent = sliderTrack
+	local speedButton = Instance.new("TextButton")
+	speedButton.Name = "Speed"
+	speedButton.Position = UDim2.fromOffset(322, 7)
+	speedButton.Size = UDim2.fromOffset(130, 30)
+	speedButton.BackgroundColor3 = Color3.fromRGB(40, 44, 52)
+	speedButton.BackgroundTransparency = 0.2
+	speedButton.BorderSizePixel = 0
+	speedButton.Font = Enum.Font.Gotham
+	speedButton.TextSize = 12
+	speedButton.TextColor3 = Color3.fromRGB(235, 232, 226)
+	speedButton.Text = ""
+	speedButton.Parent = bar
+	local speedCorner = Instance.new("UICorner")
+	speedCorner.CornerRadius = UDim.new(0, 8)
+	speedCorner.Parent = speedButton
+	self.playButton = playButton
+	self.track = sliderTrack
+	self.knob = knob
+	self.speedButton = speedButton
+	self.dragging = false
+	local function setFromInput(positionX)
+		local left = sliderTrack.AbsolutePosition.X
+		local width = math.max(sliderTrack.AbsoluteSize.X, 1)
+		local fraction = math.clamp((positionX - left) / width, 0, 1)
+		state.hour = fraction * 24
+	end
+	connect(hit.InputBegan, function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			self.dragging = true
+			setFromInput(input.Position.X)
+		end
+	end)
+	connect(UserInputService.InputChanged, function(input)
+		if self.dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			setFromInput(input.Position.X)
+		end
+	end)
+	connect(UserInputService.InputEnded, function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			self.dragging = false
+		end
+	end)
+	connect(playButton.Activated, function()
+		state.playing = not state.playing
+	end)
+	connect(speedButton.Activated, function()
+		state.speedIndex = state.speedIndex % #Config.Speeds + 1
+	end)
+	self.lastText = -1e9
+	return self
+end
+
+function Hud:update(world, now)
+	local state = self.state
+	self.playButton.Text = state.playing and "II" or ">"
+	self.speedButton.Text = Config.SpeedLabels[state.speedIndex] or tostring(Config.Speeds[state.speedIndex])
+	self.knob.Position = UDim2.new(state.hour / 24, 0, 0.5, 0)
+	if now - self.lastText < 0.25 then
+		return
+	end
+	self.lastText = now
+	self.clock.Text = Astro.formatClock(state.hour)
+	local illumination = math.floor((1 + math.cos(math.rad(world.moonPhase))) * 50 + 0.5)
+	self.sun.Text = string.format("Sun %.1f\u{00B0} above horizon \u{00B7} azimuth %.0f\u{00B0} \u{00B7} Moon %d%% lit, %.0f\u{00B0}", world.sunEl, world.sunAz, illumination, world.moonEl)
+	self.location.Text = "Atlanta, Georgia \u{00B7} 33.749\u{00B0} N, 84.388\u{00B0} W"
+end
+
+local function resolveStartTime()
+	local civil = os.date("*t")
+	local startHour = Config.StartHour
+	if startHour == "Now" then
+		local utcSeconds = os.time()
+		local utc = os.date("!*t", utcSeconds)
+		local offset = Astro.easternOffsetHours(utc.year, utc.month, utc.day)
+		local atlanta = os.date("!*t", utcSeconds + offset * 3600)
+		Astro.setDate(atlanta.year, atlanta.month, atlanta.day)
+		return atlanta.hour + atlanta.min / 60 + atlanta.sec / 3600
+	end
+	Astro.setDate(civil.year, civil.month, civil.day)
+	if type(startHour) == "number" then
+		return startHour % 24
+	end
+	local hour = 17
+	local t = 12
+	while t < 24 do
+		if Astro.sunAt(t) < 1.2 then
+			hour = t
+			break
+		end
+		t = t + 1 / 60
+	end
+	return hour
+end
+
+local function computeWorld(state, cameraPosition, deltaTime)
+	local world = {}
+	local hour = state.hour
+	world.hour = hour
+	world.sunX, world.sunY, world.sunZ, world.sunEl, world.sunAz = Astro.sunDirection(hour)
+	world.humidity, world.aerosol, world.cloudBase, world.convection = Astro.humidityState(hour)
+	world.siderealDegrees = Astro.siderealAngle(hour)
+	world.moonX, world.moonY, world.moonZ, world.moonEl, world.moonPhase = Astro.moonAt(hour, world.siderealDegrees)
+	world.moonIntensity = Astro.moonIntensity(world.moonPhase, world.moonEl)
+	local target = Astro.exposureTarget(world.sunEl)
+	if state.exposureLog == nil then
+		state.exposureLog = target
+	else
+		local rate = target > state.exposureLog and 3.5 or 0.6
+		state.exposureLog = state.exposureLog + (target - state.exposureLog) * (1 - math.exp(-deltaTime / rate))
+	end
+	world.exposure = 2 ^ state.exposureLog
+	world.cameraHeight = math.max(1.7, cameraPosition.Y / STUDS_PER_METER)
+	world.cameraX = cameraPosition.X / STUDS_PER_METER
+	world.cameraZ = cameraPosition.Z / STUDS_PER_METER
+	local speed = Config.Speeds[state.speedIndex]
+	world.timeSpeedEffective = speed
+	world.timeSpeed = state.playing and speed or 1
+	world.windTime = state.windTime
+	return world
+end
+
+local function start()
+	local camera = Workspace.CurrentCamera
+	if not camera then
+		notify("No CurrentCamera; aborting")
+		return
+	end
+	local state = {
+		hour = resolveStartTime(),
+		playing = Config.StartPlaying,
+		speedIndex = Config.StartSpeedIndex,
+		windTime = 0,
+		exposureLog = nil,
+	}
+	Astro.buildStars()
+	local cameraPosition = camera.CFrame.Position
+	local world = computeWorld(state, cameraPosition, 0)
+	local skyController = SkyController.new(ImageFactory)
+	local skyReady = skyController.faceImages[1][1] ~= nil
+	local dome, sunQuad, moonQuad, haloQuad
+	if skyReady then
+		local sky = Config.Sky
+		local built, failure = pcall(function()
+			dome = Dome.build(Render.Faces, skyController.faceImages, skyController.faceSize, skyController.starImages, skyController.starSize)
+			local celestialDistance = sky.HalfSize * sky.CelestialDistanceFraction
+			sunQuad = Dome.buildQuad(dome.folder, "SunQuad", 2 * celestialDistance * math.tan(math.rad(sky.SunSpriteHalfAngle)), skyController.sunSprite.image, sky.SunSpriteSize)
+			moonQuad = Dome.buildQuad(dome.folder, "MoonQuad", 2 * celestialDistance * math.tan(math.rad(sky.MoonSpriteHalfAngle)), skyController.moonSprite.image, sky.MoonSpriteSize)
+			haloQuad = Dome.buildQuad(dome.folder, "HaloQuad", 2 * sky.HaloDistance * math.tan(math.rad(sky.HaloSpriteHalfAngle)), skyController.haloSprite.image, sky.HaloSpriteSize)
+		end)
+		if built then
+			skyController.dome = dome
+			skyController:renderNow(world, os.clock())
+		else
+			notify("Could not build the physical sky: " .. tostring(failure))
+			skyReady = false
+		end
+	else
+		notify("EditableImage is unavailable here, so the physical sky texture is disabled")
+	end
+	local lightingDriver
+	if Config.Lighting.Enabled then
+		lightingDriver = LightingDriver.new()
+	end
+	local hud
+	if Config.Hud.Enabled then
+		task.spawn(function()
+			hud = Hud.new(state)
+		end)
+	end
+	local previousClock = os.clock()
+	local function step()
+		local now = os.clock()
+		local deltaTime = math.min(now - previousClock, 0.1)
+		previousClock = now
+		local currentCamera = Workspace.CurrentCamera
+		if not currentCamera then
+			return
+		end
+		local speed = Config.Speeds[state.speedIndex]
+		if state.playing then
+			state.hour = (state.hour + deltaTime * speed / 3600) % 24
+		end
+		state.windTime = state.windTime + deltaTime * speed
+		local position = currentCamera.CFrame.Position
+		local currentWorld = computeWorld(state, position, deltaTime)
+		if skyReady then
+			dome.follow(position)
+			local sunDirection = Vector3.new(currentWorld.sunX, currentWorld.sunY, currentWorld.sunZ)
+			local moonDirection = Vector3.new(currentWorld.moonX, currentWorld.moonY, currentWorld.moonZ)
+			local celestialDistance = Config.Sky.HalfSize * Config.Sky.CelestialDistanceFraction
+			sunQuad.place(position, sunDirection, celestialDistance)
+			moonQuad.place(position, moonDirection, celestialDistance)
+			haloQuad.place(position, sunDirection, Config.Sky.HaloDistance)
+			skyController:update(currentWorld, now)
+			sunQuad.setVisible(skyController.sunSprite.hasImage == true and currentWorld.sunEl > -2.5)
+			moonQuad.setVisible(skyController.moonSprite.hasImage == true and currentWorld.moonIntensity > 0)
+			haloQuad.setVisible(skyController.haloSprite.hasImage == true and currentWorld.sunEl > -1)
+			dome.setStarsVisible(Config.Sky.StarsEnabled and skyController.starState.baked and currentWorld.sunEl < 7)
+		end
+		if lightingDriver and skyReady then
+			lightingDriver:update(currentWorld, skyController, now)
+		end
+		if hud then
+			hud:update(currentWorld, now)
+		end
+		local port = sharedEnvironment.GeorgiaSkyPort
+		if port then
+			port.World = currentWorld
+			port.Sky = skyController
+			port.Lighting = lightingDriver
+		end
+	end
+	RunService:BindToRenderStep("GeorgiaSkyStep", Enum.RenderPriority.Camera.Value + 1, step)
+	Cleanup.add(function()
+		RunService:UnbindFromRenderStep("GeorgiaSkyStep")
+	end)
+	sharedEnvironment.GeorgiaSkyPort = {
+		Destroy = function()
+			Cleanup.run()
+			sharedEnvironment.GeorgiaSkyPort = nil
+		end,
+		State = state,
+		Config = Config,
+	}
+end
+
+start()
