@@ -117,7 +117,7 @@ local function RunMainMenu(onFinished)
             theme = THEMES.gohan,
             unavailableMessage = "Gohan is not available as of November 6, 2026 and is still in the works",
             unlockUserId = 8029999470,
-            unlockNames = { "bruuf1", "delta_isgoat4" },
+            unlockNames = { "bruuf1", "delta_isgoat4", "Error_Code1034" },
             iconFile = "IMG_6910.png",
             iconUrl = "https://raw.githubusercontent.com/NetlessScripter/THE-Script/refs/heads/main/IMG_6910.png",
         },
