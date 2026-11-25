@@ -722,6 +722,103 @@ local function RunMainMenu(onFinished)
         warn("[CharacterSelect] Viewport failed: " .. tostring(viewportErr))
     end
 
+    local previewAttachmentNames = { "GokuSSJHair", "GokuCustomHair", "GokuCustomAccessory" }
+    local previewAttachmentSources = {}
+    local previewAttachmentCopies = {}
+
+    if previewModel then
+        for _, existingItem in ipairs(previewModel:GetChildren()) do
+            if table.find(previewAttachmentNames, existingItem.Name) then
+                existingItem:Destroy()
+            end
+        end
+    end
+
+    local function buildPreviewAttachment(sourceItem, sourceCharacter)
+        local wasArchivable = sourceItem.Archivable
+        sourceItem.Archivable = true
+        local copyOk, itemCopy = pcall(function()
+            return sourceItem:Clone()
+        end)
+        sourceItem.Archivable = wasArchivable
+        if not copyOk or not itemCopy then return nil end
+
+        local sourceNodes = sourceItem:GetDescendants()
+        table.insert(sourceNodes, 1, sourceItem)
+        local copyNodes = itemCopy:GetDescendants()
+        table.insert(copyNodes, 1, itemCopy)
+
+        local weldJobs = {}
+        local removedNodes = {}
+        for nodeIndex, sourceNode in ipairs(sourceNodes) do
+            local copyNode = copyNodes[nodeIndex]
+            if sourceNode:IsA("WeldConstraint") then
+                local sourceAnchor = sourceNode.Part0
+                local sourceHolder = sourceNode.Parent
+                if sourceAnchor and sourceHolder and sourceHolder:IsA("BasePart") and sourceAnchor:IsDescendantOf(sourceCharacter) then
+                    table.insert(weldJobs, {
+                        part = copyNode.Parent,
+                        anchorName = sourceAnchor.Name,
+                        offset = sourceAnchor.CFrame:ToObjectSpace(sourceHolder.CFrame),
+                    })
+                end
+                table.insert(removedNodes, copyNode)
+            elseif copyNode:IsA("LuaSourceContainer") or copyNode:IsA("Sound") or copyNode:IsA("ParticleEmitter")
+                or copyNode:IsA("Trail") or copyNode:IsA("Beam") or copyNode:IsA("Light")
+                or copyNode:IsA("Highlight") or copyNode:IsA("Fire") or copyNode:IsA("Smoke")
+                or copyNode:IsA("Sparkles") then
+                table.insert(removedNodes, copyNode)
+            elseif copyNode:IsA("BasePart") then
+                copyNode.Anchored = false
+            end
+        end
+        for _, removedNode in ipairs(removedNodes) do
+            removedNode:Destroy()
+        end
+
+        for _, weldJob in ipairs(weldJobs) do
+            local previewAnchor = previewModel:FindFirstChild(weldJob.anchorName, true)
+            if previewAnchor and weldJob.part then
+                weldJob.part.CFrame = previewAnchor.CFrame * weldJob.offset
+                local previewWeld = Instance.new("Weld")
+                previewWeld.Part0 = previewAnchor
+                previewWeld.Part1 = weldJob.part
+                previewWeld.C0 = weldJob.offset
+                previewWeld.Parent = weldJob.part
+            end
+        end
+
+        itemCopy.Parent = previewModel
+        return itemCopy
+    end
+
+    local function syncPreviewAttachments()
+        if not previewModel or not previewModel.Parent then return end
+        local sourceCharacter = localPlayer.Character
+        if not sourceCharacter then return end
+        for _, itemName in ipairs(previewAttachmentNames) do
+            local sourceItem = sourceCharacter:FindFirstChild(itemName)
+            if sourceItem ~= previewAttachmentSources[itemName] then
+                local oldCopy = previewAttachmentCopies[itemName]
+                if oldCopy then
+                    oldCopy:Destroy()
+                end
+                previewAttachmentCopies[itemName] = nil
+                previewAttachmentSources[itemName] = sourceItem
+                if sourceItem then
+                    previewAttachmentCopies[itemName] = buildPreviewAttachment(sourceItem, sourceCharacter)
+                end
+            end
+        end
+    end
+
+    task.spawn(function()
+        while overlayGui.Parent do
+            pcall(syncPreviewAttachments)
+            task.wait(0.2)
+        end
+    end)
+
     local manualStepConnection
 
     function BackNav.stopAnimations()
@@ -1813,6 +1910,9 @@ local function RunMainMenu(onFinished)
         exiting = true
         BackNav.playSelectSounds()
         _G.GAPI.SelectedCharacter = CHARACTERS[currentCharacterIndex].apiName or CHARACTERS[currentCharacterIndex].name
+        if _G.GAPI.OnCharacterPicked then
+            pcall(_G.GAPI.OnCharacterPicked)
+        end
         BackNav.stopMenuPositionCheck()
         cancelActiveTweens()
 
@@ -5215,6 +5315,15 @@ do
     end
 end
 
+_G.GAPI.OnCharacterPicked = function()
+    if HairSystem.GohanLook.IsActive() then
+        HairSystem.GohanLook.AppliedOnPick = true
+        HairSystem.GohanLook.ApplyClothing()
+        HairSystem.GohanLook.ApplyAppearance()
+        HairSystem.GohanLook.MaybeAsk()
+    end
+end
+
 task.spawn(HairSystem.Preload)
 
 local ssjFaceId     = "rbxassetid://12876975875"
@@ -5315,6 +5424,61 @@ CharacterHooks.Add(function()
     end
 end)
 
+local hairModel = game:GetObjects("rbxassetid://8724964030")[1]
+hairModel.Name   = "GokuHairForms"
+hairModel.Parent = Workspace
+
+local ssjHair = nil
+
+local function WeldToHead(hairPart)
+    local weld   = Instance.new("WeldConstraint")
+    weld.Part0   = headPart
+    weld.Part1   = hairPart
+    weld.Parent  = hairPart
+end
+
+local function AddSSJHair()
+    if ssjHair and ssjHair.Parent == character then return end
+    ssjHair              = hairModel["Super saiyan 1"]["Ssj dominated (Original)"]:Clone()
+    ssjHair.Name         = "GokuSSJHair"
+    ssjHair.Anchored     = false
+    ssjHair.CanCollide   = false
+    ssjHair.CFrame       = headPart.CFrame * CFrame.new(0, 1.1, 0.5) * CFrame.Angles(0, math.rad(180), 0)
+    ssjHair.Parent       = character
+    WeldToHead(ssjHair)
+end
+
+local hairLight = Instance.new("PointLight")
+hairLight.Color      = HairSystem.LightColors.SSJ
+hairLight.Range      = 8
+hairLight.Brightness = 1
+hairLight.Enabled    = true
+
+CharacterHooks.Add(function()
+
+    local customHairOnCharacter = HairSystem.Model ~= nil and HairSystem.Model.Parent == character
+    if HairSystem.Model and not customHairOnCharacter then
+        HairSystem.Model = nil
+    end
+    HairSystem.CurrentForm = "SSJ"
+
+    if customHairOnCharacter then
+        pcall(HairSystem.ApplyFormLook, "SSJ", false)
+        local oldDefaultHair = character:FindFirstChild("GokuSSJHair")
+        if oldDefaultHair then oldDefaultHair:Destroy() end
+    else
+        AddSSJHair()
+        if ssjHair then
+            hairLight.Color   = HairSystem.LightColors.SSJ
+            hairLight.Enabled = true
+            hairLight.Parent  = ssjHair
+        end
+    end
+    if CharacterHooks.dressedOnce then
+        pcall(HairSystem.RefreshDefaultLight)
+    end
+end)
+
 if menuRan then
     while not menuFinished do
         task.wait(0.1)
@@ -5328,7 +5492,7 @@ end
 -- further up already ran while the menu was still open, when "Son Goku" was the default),
 -- so the Gohan look is put on here, after the pick.
 pcall(function()
-    if HairSystem.GohanLook.IsActive() then
+    if HairSystem.GohanLook.IsActive() and not HairSystem.GohanLook.AppliedOnPick then
         HairSystem.GohanLook.ApplyClothing()
         HairSystem.GohanLook.ApplyAppearance()
         HairSystem.GohanLook.MaybeAsk()
@@ -5569,6 +5733,7 @@ local musicSongs = {
     { name = "Warmpop", file = "Warmpop.mp3", url = "https://raw.githubusercontent.com/ChosenSkibidi/Goku-Update-Testing-/refs/heads/main/ESPRIT%20%E7%A9%BA%E6%83%B3%2C%20George%20Clanton%20-%20Warmpop.mp3" },
     { name = "I can't handle change - ROAR", file = "ICantHandleChange.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/I%20can%27t%20handle%20change%20-%20ROAR.mp3" },
     { name = "Safe Room", file = "SafeRoom.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/safe%20room.mp3" },
+    { name = "Pause Menu Theme", file = "PauseMenuTheme.mp3", url = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/Pause%20Menu%20Theme.mp3", manualOnly = true },
 }
 
 local dbSongs = {
@@ -5682,6 +5847,7 @@ local currentMusicSound      = nil
 local prematureEndRetryCount = 0
 local currentFadeInTween      = nil
 local playbackGeneration     = 0
+local nextSongFadeInTime     = nil
 
 local activePack = "Regular"
 
@@ -5755,12 +5921,13 @@ local function FindSongIndexByName(name)
 end
 
 local function PickNextSongIndex()
-    local songCount = #GetSongsForPack(activePack)
+    local packSongs = GetSongsForPack(activePack)
+    local songCount = #packSongs
     if songCount == 1 then return 1 end
     local index
     repeat
         index = math.random(songCount)
-    until index ~= currentSongIndex
+    until index ~= currentSongIndex and not packSongs[index].manualOnly
     return index
 end
 
@@ -5873,7 +6040,9 @@ local function PlaySoundCycle(isRetryingCurrentSong, forcedSongIndex)
 
     sound:Play()
 
-    local fadeInTween = TweenService:Create(sound, TweenInfo.new(5, Enum.EasingStyle.Linear), { Volume = musicVolume })
+    local fadeInDuration = nextSongFadeInTime or 5
+    nextSongFadeInTime = nil
+    local fadeInTween = TweenService:Create(sound, TweenInfo.new(fadeInDuration, Enum.EasingStyle.Linear), { Volume = musicVolume })
     currentFadeInTween = fadeInTween
     fadeInTween:Play()
 
@@ -6074,6 +6243,310 @@ end
 if _G.Music then
     task.spawn(PlaySoundCycle)
 end
+
+local PauseMusic = {
+    Url        = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/Pause%20Menu%20Theme.mp3",
+    File       = "PauseMenuTheme.mp3",
+    FadeTime   = 0.8,
+    Sound      = nil,
+    Loading    = false,
+    Active     = false,
+    Suppressed = false,
+    GamePaused = false,
+    GameSound  = nil,
+    PendingSong = nil,
+    ThemeIsGameSong = false,
+    EndedConnection = nil,
+    Token      = 0,
+    Tweens     = setmetatable({}, { __mode = "k" }),
+}
+
+function PauseMusic.TargetVolume()
+    return type(musicVolume) == "number" and musicVolume or 1
+end
+
+function PauseMusic.EnsureSound()
+    while PauseMusic.Loading do
+        task.wait(0.05)
+    end
+    if PauseMusic.Sound and PauseMusic.Sound.Parent then
+        return PauseMusic.Sound
+    end
+
+    PauseMusic.Loading = true
+    local loadOk, loadedSound = pcall(GetGitSound, PauseMusic.Url, PauseMusic.File)
+    if loadOk and loadedSound then
+        loadedSound.Name   = "PauseMenuTheme"
+        loadedSound.Looped = true
+        loadedSound.Volume = 0
+        pcall(WaitForSoundToLoad, loadedSound, 5)
+        PauseMusic.Sound = loadedSound
+    else
+        warn("[PauseMusic] Couldn't load the pause menu theme: " .. tostring(loadedSound))
+    end
+    PauseMusic.Loading = false
+    return PauseMusic.Sound
+end
+
+function PauseMusic.Fade(targetSound, goalVolume, onCompleted)
+    local previousTween = PauseMusic.Tweens[targetSound]
+    if previousTween then
+        previousTween:Cancel()
+    end
+
+    local fadeTween = TweenService:Create(
+        targetSound,
+        TweenInfo.new(PauseMusic.FadeTime, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut),
+        { Volume = goalVolume }
+    )
+    PauseMusic.Tweens[targetSound] = fadeTween
+    fadeTween.Completed:Connect(function(playbackState)
+        if PauseMusic.Tweens[targetSound] == fadeTween then
+            PauseMusic.Tweens[targetSound] = nil
+        end
+        if playbackState == Enum.PlaybackState.Completed and onCompleted then
+            onCompleted()
+        end
+    end)
+    fadeTween:Play()
+end
+
+function PauseMusic.CancelGameFadeIn()
+    if currentFadeInTween then
+        currentFadeInTween:Cancel()
+        currentFadeInTween = nil
+    end
+end
+
+function PauseMusic.FadeOutAndPause(targetSound, myToken)
+    PauseMusic.Fade(targetSound, 0, function()
+        if PauseMusic.Token == myToken and targetSound.Parent then
+            targetSound:Pause()
+        end
+    end)
+end
+
+function PauseMusic.Watch(myToken)
+    while PauseMusic.Active and PauseMusic.Token == myToken do
+        local themeSound = PauseMusic.Sound
+        if themeSound and not PauseMusic.Suppressed then
+            local liveSound    = currentMusicSound
+            local songReplaced = liveSound ~= nil and liveSound ~= PauseMusic.GameSound
+            local musicOff     = _G.Music == false or not musicActive
+            if songReplaced or musicOff then
+                PauseMusic.Suppressed  = true
+                PauseMusic.PendingSong = nil
+                PauseMusic.GameSound   = liveSound
+                PauseMusic.FadeOutAndPause(themeSound, myToken)
+            else
+                local gameSound = PauseMusic.GameSound
+                if PauseMusic.GamePaused and gameSound and gameSound.Parent and gameSound.IsPlaying then
+                    gameSound.Volume = 0
+                    gameSound:Pause()
+                end
+                local targetVolume = PauseMusic.TargetVolume()
+                if not PauseMusic.Tweens[themeSound] and math.abs(themeSound.Volume - targetVolume) > 0.01 then
+                    themeSound.Volume = targetVolume
+                end
+            end
+        end
+        task.wait(0.1)
+    end
+end
+
+function PauseMusic.Open()
+    if PauseMusic.Active then return end
+    if _G.Music == false or not musicActive then return end
+
+    PauseMusic.Active     = true
+    PauseMusic.Suppressed = false
+    PauseMusic.GamePaused = false
+    PauseMusic.PendingSong = nil
+    PauseMusic.Token      = PauseMusic.Token + 1
+    local myToken = PauseMusic.Token
+
+    local gameSound = currentMusicSound
+    PauseMusic.GameSound = gameSound
+    PauseMusic.ThemeIsGameSong = gameSound ~= nil and gameSound == PauseMusic.Sound
+    if PauseMusic.ThemeIsGameSong then
+        task.spawn(PauseMusic.Watch, myToken)
+        return
+    end
+    if gameSound and gameSound.Parent then
+        PauseMusic.CancelGameFadeIn()
+        PauseMusic.Fade(gameSound, 0, function()
+            if PauseMusic.Token == myToken and gameSound.Parent then
+                gameSound:Pause()
+                PauseMusic.GamePaused = true
+            end
+        end)
+    end
+
+    task.spawn(function()
+        local themeSound = PauseMusic.EnsureSound()
+        if not themeSound or PauseMusic.Token ~= myToken then return end
+
+        if themeSound.IsPaused then
+            themeSound:Resume()
+        elseif not themeSound.IsPlaying then
+            themeSound:Play()
+        end
+        PauseMusic.Fade(themeSound, PauseMusic.TargetVolume())
+        PauseMusic.Watch(myToken)
+    end)
+end
+
+function PauseMusic.DeferSong(songIndex, packName)
+    if not PauseMusic.Active or PauseMusic.Suppressed then return false end
+    local songEntry = GetSongsForPack(packName)[songIndex]
+    if not songEntry then return false end
+
+    if PauseMusic.ThemeIsGameSong and songEntry.file == PauseMusic.File then
+        PauseMusic.PendingSong = nil
+        return true
+    end
+
+    PauseMusic.PendingSong = { index = songIndex, pack = packName }
+    activePack       = packName
+    currentSongIndex = songIndex
+    task.spawn(pcall, DownloadSongFile, songEntry.url, songEntry.file)
+    return true
+end
+
+function PauseMusic.GetControlledSound()
+    local themeSound = PauseMusic.Sound
+    if PauseMusic.Active and not PauseMusic.Suppressed and themeSound and themeSound.Parent and themeSound.IsPlaying then
+        return themeSound
+    end
+    return nil
+end
+
+function PauseMusic.IsThemeEntry(songIndex, packName)
+    local songEntry = GetSongsForPack(packName)[songIndex]
+    return songEntry ~= nil and songEntry.file == PauseMusic.File
+end
+
+function PauseMusic.Release(themeSound)
+    if PauseMusic.EndedConnection then
+        PauseMusic.EndedConnection:Disconnect()
+        PauseMusic.EndedConnection = nil
+    end
+    if currentMusicSound == themeSound then
+        currentMusicSound = nil
+    end
+    themeSound.Looped        = true
+    themeSound.PlaybackSpeed = 1
+    local reverbEffect = themeSound:FindFirstChild("MusicReverb")
+    if reverbEffect then
+        reverbEffect:Destroy()
+    end
+end
+
+function PauseMusic.Adopt(themeSound, songIndex, packName)
+    playbackGeneration = playbackGeneration + 1
+    local myGeneration = playbackGeneration
+    PauseMusic.CancelGameFadeIn()
+
+    local oldSound = currentMusicSound
+    if oldSound and oldSound ~= themeSound then
+        oldSound:Stop()
+        oldSound:Destroy()
+    end
+
+    activePack        = packName
+    currentSongIndex  = songIndex
+    _G.Music          = true
+    musicActive       = true
+    themeSound.Looped = false
+    ApplyMusicSpeedToSound(themeSound)
+    ApplyMusicReverbToSound(themeSound)
+    currentMusicSound = themeSound
+    PauseMusic.Fade(themeSound, PauseMusic.TargetVolume())
+
+    if PauseMusic.EndedConnection then
+        PauseMusic.EndedConnection:Disconnect()
+    end
+    PauseMusic.EndedConnection = themeSound.Ended:Connect(function()
+        if currentMusicSound ~= themeSound then return end
+        PauseMusic.Release(themeSound)
+        if musicActive and playbackGeneration == myGeneration then
+            PlaySoundCycle()
+        end
+    end)
+end
+
+function PauseMusic.Close()
+    if not PauseMusic.Active then return end
+
+    PauseMusic.Active = false
+    PauseMusic.Token  = PauseMusic.Token + 1
+    local myToken = PauseMusic.Token
+
+    local suppressed   = PauseMusic.Suppressed
+    local gameSound    = PauseMusic.GameSound
+    local wasPaused    = PauseMusic.GamePaused
+    local pendingSong  = PauseMusic.PendingSong
+    local themeWasGame = PauseMusic.ThemeIsGameSong
+    PauseMusic.Suppressed      = false
+    PauseMusic.GamePaused      = false
+    PauseMusic.GameSound       = nil
+    PauseMusic.PendingSong     = nil
+    PauseMusic.ThemeIsGameSong = false
+
+    local themeSound   = PauseMusic.Sound
+    local musicAllowed = musicActive and _G.Music ~= false
+
+    if themeWasGame then
+        if not suppressed and pendingSong and musicAllowed and themeSound and currentMusicSound == themeSound then
+            PauseMusic.Release(themeSound)
+            PauseMusic.FadeOutAndPause(themeSound, myToken)
+            nextSongFadeInTime = PauseMusic.FadeTime
+            PlaySongAtIndex(pendingSong.index, pendingSong.pack)
+        end
+        return
+    end
+
+    local themeStaysPlaying = not suppressed and pendingSong ~= nil and musicAllowed
+        and PauseMusic.IsThemeEntry(pendingSong.index, pendingSong.pack)
+        and themeSound ~= nil and themeSound.Parent ~= nil and themeSound.IsPlaying
+    if themeStaysPlaying then
+        PauseMusic.Adopt(themeSound, pendingSong.index, pendingSong.pack)
+        return
+    end
+
+    if themeSound and themeSound.Parent and themeSound.IsPlaying then
+        PauseMusic.FadeOutAndPause(themeSound, myToken)
+    end
+
+    if suppressed then return end
+
+    if pendingSong and musicAllowed then
+        nextSongFadeInTime = PauseMusic.FadeTime
+        PlaySongAtIndex(pendingSong.index, pendingSong.pack)
+        return
+    end
+
+    if not gameSound or not gameSound.Parent or not musicAllowed then return end
+
+    local inLucyFadeOut = gameSound.Name:lower():find("lucy~", 1, true) ~= nil and gameSound.TimePosition >= LucyFadeOutStart
+    if inLucyFadeOut then
+        if gameSound.IsPaused then
+            gameSound:Resume()
+        end
+        return
+    end
+
+    PauseMusic.CancelGameFadeIn()
+    if wasPaused then
+        gameSound.Volume = 0
+    end
+    if gameSound.IsPaused then
+        gameSound:Resume()
+    end
+    PauseMusic.Fade(gameSound, PauseMusic.TargetVolume())
+end
+
+task.spawn(PauseMusic.EnsureSound)
 
 task.delay(1, function()
     task.spawn(function()
@@ -6288,7 +6761,7 @@ task.spawn(function()
     end
 
     local function GetPlayingSoundOrNil()
-        local activeSound = currentMusicSound
+        local activeSound = PauseMusic.GetControlledSound() or currentMusicSound
         if activeSound and activeSound.Parent and activeSound.TimeLength > 0 then
             return activeSound
         end
@@ -6926,6 +7399,7 @@ task.spawn(function()
             SetMusicVolume(settingsState.musicVolume)
             RefreshSettingValues()
         end
+        if PauseMusic.DeferSong(songIndex, packName) then return end
         PlaySongAtIndex(songIndex, packName)
     end
 
@@ -8519,6 +8993,7 @@ task.spawn(function()
     local function Open()
         cancelActiveTweens()
         CloseAllDropdowns()
+        pcall(PauseMusic.Open)
 
         borderImage.Size = UDim2.new(4, 0, 4, 0)
         characterImage.Position = UDim2.new(0, 0, 0, 945)
@@ -8555,6 +9030,7 @@ task.spawn(function()
         cancelActiveTweens()
         CloseAllDropdowns()
         HideClothingWindow()
+        pcall(PauseMusic.Close)
         HideHairWindow()
 
         playTween(characterImage, descendTweenInfo, {
@@ -9359,60 +9835,8 @@ CharacterHooks.OnAnimationPlayed(function(track)
     end
 end)
 
-local hairModel = game:GetObjects("rbxassetid://8724964030")[1]
-hairModel.Name   = "GokuHairForms"
-hairModel.Parent = Workspace
-
-local ssjHair = nil
-
-local function WeldToHead(hairPart)
-    local weld   = Instance.new("WeldConstraint")
-    weld.Part0   = headPart
-    weld.Part1   = hairPart
-    weld.Parent  = hairPart
-end
-
-local function AddSSJHair()
-    if ssjHair and ssjHair.Parent == character then return end
-    ssjHair              = hairModel["Super saiyan 1"]["Ssj dominated (Original)"]:Clone()
-    ssjHair.Name         = "GokuSSJHair"
-    ssjHair.Anchored     = false
-    ssjHair.CanCollide   = false
-    ssjHair.CFrame       = headPart.CFrame * CFrame.new(0, 1.1, 0.5) * CFrame.Angles(0, math.rad(180), 0)
-    ssjHair.Parent       = character
-    WeldToHead(ssjHair)
-end
-
-local hairLight = Instance.new("PointLight")
-hairLight.Color      = HairSystem.LightColors.SSJ
-hairLight.Range      = 8
-hairLight.Brightness = 1
-hairLight.Enabled    = true
-
 CharacterHooks.Add(function()
-
-    local customHairOnCharacter = HairSystem.Model ~= nil and HairSystem.Model.Parent == character
-    if HairSystem.Model and not customHairOnCharacter then
-        HairSystem.Model = nil
-    end
-    HairSystem.CurrentForm = "SSJ"
     ssjbActive = false
-
-    if customHairOnCharacter then
-        pcall(HairSystem.ApplyFormLook, "SSJ", false)
-        local oldDefaultHair = character:FindFirstChild("GokuSSJHair")
-        if oldDefaultHair then oldDefaultHair:Destroy() end
-    else
-        AddSSJHair()
-        if ssjHair then
-            hairLight.Color   = HairSystem.LightColors.SSJ
-            hairLight.Enabled = true
-            hairLight.Parent  = ssjHair
-        end
-    end
-    if CharacterHooks.dressedOnce then
-        pcall(HairSystem.RefreshDefaultLight)
-    end
 end)
 
 local ssjbRevertAnimIds = {
