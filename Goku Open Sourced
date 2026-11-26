@@ -6691,6 +6691,55 @@ task.spawn(function()
     end
     settingsState.graphicsQuality = graphicsQualityOptions[graphicsQualityIndex]
 
+    -- "New Graphics" is the last item of the Graphics Quality dropdown. It isn't a quality
+    -- level: picking it calls Sunset's Disable() (destroys the Sunset graphics and restores the
+    -- original lighting), then loads the Realistic graphics. It can't be undone: afterwards the
+    -- Graphics Quality row says GRAPHICS_LOCKED_LABEL and every graphics setting does nothing.
+    local NEW_GRAPHICS_LABEL = "New Graphics"
+    local GRAPHICS_LOCKED_LABEL = "Cannot Change Graphics"
+    local REALISTIC_URL = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/Realistic"
+    local graphicsDropdownItems = table.clone(graphicsQualityOptions)
+    table.insert(graphicsDropdownItems, NEW_GRAPHICS_LABEL)
+    local newGraphicsIndex = #graphicsDropdownItems
+
+    local function IsNewGraphicsActive()
+        local sunsetQuality = _G.SunsetQuality
+        return sunsetQuality ~= nil
+            and sunsetQuality.IsDisabled ~= nil
+            and sunsetQuality.IsDisabled() == true
+    end
+
+    local function ApplyNewGraphics()
+        if IsNewGraphicsActive() then return end -- already switched (and Realistic must only load once)
+
+        local sunsetQuality = _G.SunsetQuality
+        if not sunsetQuality then
+            warn("[Panel] Sunset isn't loaded yet - New Graphics not applied")
+            return
+        end
+        if not sunsetQuality.Disable then
+            warn("[Panel] This Sunset version has no Disable() - New Graphics not applied")
+            return
+        end
+
+        local disableOk, disableError = pcall(sunsetQuality.Disable)
+        if not disableOk then
+            warn("[Panel] Couldn't apply New Graphics: " .. tostring(disableError))
+            return -- don't load Realistic on top of the Sunset graphics
+        end
+
+        -- Sunset is off and the original lighting is back, so Realistic loads on a clean slate.
+        -- (This has to come after Disable(), which would otherwise restore the lighting over it.)
+        task.spawn(function()
+            local realisticLoaded, realisticError = pcall(function()
+                loadstring(game:HttpGet(REALISTIC_URL))()
+            end)
+            if not realisticLoaded then
+                warn("[Panel] Realistic failed to load: " .. tostring(realisticError))
+            end
+        end)
+    end
+
     local lightingLookOptions = {"Default", "OG Lighting", "Cosmos"}
     local lightingLookIndex = 1
     settingsState.lightingLook = lightingLookOptions[lightingLookIndex]
@@ -6855,9 +6904,13 @@ task.spawn(function()
             isDropdownRow = true,
             dropdownKey = "graphics",
             getValueText = function()
+                if IsNewGraphicsActive() then
+                    return GRAPHICS_LOCKED_LABEL
+                end
                 return graphicsQualityOptions[graphicsQualityIndex]
             end,
             onActivated = function()
+                if IsNewGraphicsActive() then return end -- locked after New Graphics
                 graphicsDropdown.Toggle()
             end,
         },
@@ -6869,6 +6922,7 @@ task.spawn(function()
                 return lightingLookOptions[lightingLookIndex]
             end,
             onActivated = function()
+                if IsNewGraphicsActive() then return end -- locked after New Graphics
                 lightingDropdown.Toggle()
             end,
         },
@@ -6885,6 +6939,7 @@ task.spawn(function()
         },
         {
             labelText = "Next Song",
+            tab = "Music",
             isDropdownRow = true,
             dropdownKey = "regular",
             getValueText = function()
@@ -7603,11 +7658,16 @@ task.spawn(function()
     dbDropdown = CreateSongDropdown(dropdownHostButtons.db, dbSongs, "DB")
 
     if dropdownHostButtons.graphics then
-        graphicsDropdown = CreateDropdown(dropdownHostButtons.graphics, "GraphicsQualityDropdown", graphicsQualityOptions,
+        graphicsDropdown = CreateDropdown(dropdownHostButtons.graphics, "GraphicsQualityDropdown", graphicsDropdownItems,
             function()
                 return graphicsQualityIndex
             end,
             function(optionIndex)
+                if IsNewGraphicsActive() then return end -- locked after New Graphics
+                if optionIndex == newGraphicsIndex then
+                    ApplyNewGraphics()
+                    return
+                end
                 graphicsQualityIndex = optionIndex
                 settingsState.graphicsQuality = graphicsQualityOptions[graphicsQualityIndex]
             end)
@@ -7619,6 +7679,7 @@ task.spawn(function()
                 return lightingLookIndex
             end,
             function(optionIndex)
+                if IsNewGraphicsActive() then return end -- locked after New Graphics
                 lightingLookIndex = optionIndex
                 settingsState.lightingLook = lightingLookOptions[lightingLookIndex]
             end)
@@ -8913,6 +8974,7 @@ task.spawn(function()
 
     local function ApplyGraphicsQuality()
         if _G.Graphics == false then return end
+        if IsNewGraphicsActive() then return end -- Sunset is disabled; Set/SetLook would only warn
         local qualityLevel = graphicsQualityLevels[settingsState.graphicsQuality]
         if qualityLevel then
             local levelSet, levelError = pcall(function()
