@@ -4533,7 +4533,7 @@ local HairOffsets = {
 	["Tenth Hair"] = {AssetId = "rbxassetid://107039956325024", YOffset = 0.450, ZOffset = 0.250, RotationY = 90},
 	["Eleventh Hair"] = {AssetId = "rbxassetid://119570391860313", YOffset = 0.250, ZOffset = 0.400, RotationY = 0},
 	["Twelfth Hair"] = {AssetId = "rbxassetid://119182614796017", YOffset = 0.550, ZOffset = 0.063, RotationY = 0},
-	-- TextureId is optional: it is only used while "Include Texture" is on in the Hair window
+	-- TextureId is optional: it is only used while "Hair Texture" is on in the Hair window
 	["Gohan Base"] = {AssetId = "rbxassetid://80247147125777", TextureId = "rbxassetid://93430399183494", YOffset = 0.800, ZOffset = 0.067, RotationY = 0},
 }
 
@@ -4578,7 +4578,7 @@ local HairSystem = {
     },
     BaseColorName      = "Super Saiyan",
     UltimateColorName  = "SS Blue",
-    IncludeTexture     = false, -- the Hair window's "Include Texture" option (off by default)
+    IncludeTexture     = false, -- the Hair window's "Hair Texture" option (off by default)
     SelectedName       = nil,
     Model              = nil,
     CurrentForm        = "SSJ",
@@ -4674,7 +4674,7 @@ do
         if not LoadHairTemplate(hairName) then return nil end
 
         local hairSettings = HairOffsets[hairName]
-        -- a hair that has a texture shows it only while "Include Texture" is on
+        -- a hair that has a texture shows it only while "Hair Texture" is on
         local useTexture = HairSystem.IncludeTexture and hairSettings.TextureId ~= nil
 
         local handle = Instance.new("Part")
@@ -5424,8 +5424,23 @@ CharacterHooks.Add(function()
     end
 end)
 
+-- Hair / accessory parts must never collide, fire touch events or be hit by raycasts: the camera
+-- zooms in and shakes when it runs into them. Covers the instance itself and every descendant.
+function HairSystem.DisableCollision(root)
+    local parts = root:GetDescendants()
+    table.insert(parts, root)
+    for _, part in ipairs(parts) do
+        if part:IsA("BasePart") then
+            part.CanCollide = false
+            part.CanQuery   = false
+            part.CanTouch   = false
+        end
+    end
+end
+
 local hairModel = game:GetObjects("rbxassetid://8724964030")[1]
 hairModel.Name   = "GokuHairForms"
+HairSystem.DisableCollision(hairModel)
 hairModel.Parent = Workspace
 
 local ssjHair = nil
@@ -5445,6 +5460,7 @@ local function AddSSJHair()
     ssjHair.CanCollide   = false
     ssjHair.CFrame       = headPart.CFrame * CFrame.new(0, 1.1, 0.5) * CFrame.Angles(0, math.rad(180), 0)
     ssjHair.Parent       = character
+    HairSystem.DisableCollision(ssjHair)
     WeldToHead(ssjHair)
 end
 
@@ -6679,6 +6695,17 @@ task.spawn(function()
         rainDisabled = (_G.Rain == false),
         graphicsQuality = "Max",
         musicVolume = (_G.Music == false) and "Disabled" or 1.75,
+        realisticPending = false, -- Realistic Graphics picked in the dropdown, applied when Apply is pressed
+    }
+
+    -- "Cloud Presets" (General tab). The row stays hidden until the Realistic graphics have loaded, because it
+    -- drives Realistic's cloud API (_G.GeorgiaSkyPort.SetCloudPreset). Everything lives in this one table:
+    -- the dropdown and Reveal() are filled in further down, where the panel is built.
+    local cloudPresets = {
+        names    = { "Clear", "Fair Weather", "Scattered", "Broken", "Overcast", "Storm" },
+        apiNames = { "Clear", "FairWeather",  "Scattered", "Broken", "Overcast", "Storm" },
+        index    = 3, -- Realistic starts on "Scattered"
+        revealed = false,
     }
 
     local graphicsQualityOptions = {"Performance", "Medium", "Max"}
@@ -6691,14 +6718,18 @@ task.spawn(function()
     end
     settingsState.graphicsQuality = graphicsQualityOptions[graphicsQualityIndex]
 
-    -- "New Graphics" is the last item of the Graphics Quality dropdown. It isn't a quality
+    -- "Realistic Graphics" is the last item of the Graphics Quality dropdown. It isn't a quality
     -- level: picking it calls Sunset's Disable() (destroys the Sunset graphics and restores the
     -- original lighting), then loads the Realistic graphics. It can't be undone: afterwards the
     -- Graphics Quality row says GRAPHICS_LOCKED_LABEL and every graphics setting does nothing.
-    local NEW_GRAPHICS_LABEL = "New Graphics"
-    local GRAPHICS_LOCKED_LABEL = "Cannot Change Graphics"
+    local NEW_GRAPHICS_LABEL = "Realistic Graphics"
+    local GRAPHICS_LOCKED_LABEL = "Realistic (Locked)"
     local REALISTIC_URL = "https://raw.githubusercontent.com/NetlessScripter/Songs/refs/heads/main/Realistic"
-    local graphicsDropdownItems = table.clone(graphicsQualityOptions)
+    local graphicsQualityDisplayNames = { Performance = "Performance", Medium = "Balanced", Max = "Maximum" }
+    local graphicsDropdownItems = {}
+    for optionIndex, optionName in ipairs(graphicsQualityOptions) do
+        graphicsDropdownItems[optionIndex] = graphicsQualityDisplayNames[optionName] or optionName
+    end
     table.insert(graphicsDropdownItems, NEW_GRAPHICS_LABEL)
     local newGraphicsIndex = #graphicsDropdownItems
 
@@ -6714,40 +6745,64 @@ task.spawn(function()
 
         local sunsetQuality = _G.SunsetQuality
         if not sunsetQuality then
-            warn("[Panel] Sunset isn't loaded yet - New Graphics not applied")
+            warn("[Panel] Sunset isn't loaded yet - Realistic Graphics not applied")
             return
         end
         if not sunsetQuality.Disable then
-            warn("[Panel] This Sunset version has no Disable() - New Graphics not applied")
+            warn("[Panel] This Sunset version has no Disable() - Realistic Graphics not applied")
             return
         end
 
         local disableOk, disableError = pcall(sunsetQuality.Disable)
         if not disableOk then
-            warn("[Panel] Couldn't apply New Graphics: " .. tostring(disableError))
+            warn("[Panel] Couldn't apply Realistic Graphics: " .. tostring(disableError))
             return -- don't load Realistic on top of the Sunset graphics
         end
 
         -- Sunset is off and the original lighting is back, so Realistic loads on a clean slate.
         -- (This has to come after Disable(), which would otherwise restore the lighting over it.)
         task.spawn(function()
+            local REALISTIC_LOAD_DELAY = 8 -- seconds to wait before the Realistic graphics load
+            task.wait(REALISTIC_LOAD_DELAY)
             local realisticLoaded, realisticError = pcall(function()
                 loadstring(game:HttpGet(REALISTIC_URL))()
             end)
             if not realisticLoaded then
                 warn("[Panel] Realistic failed to load: " .. tostring(realisticError))
+                return
+            end
+
+            -- a few more seconds, then the Cloud Presets row animates into the settings panel
+            local CLOUD_ROW_DELAY = 3 -- seconds after Realistic has loaded
+            task.wait(CLOUD_ROW_DELAY)
+            local waitedForApi = 0
+            while not _G.GeorgiaSkyPort and waitedForApi < 5 do -- the row drives Realistic's API, which is created when Realistic starts
+                task.wait(0.25)
+                waitedForApi = waitedForApi + 0.25
+            end
+            if not _G.GeorgiaSkyPort then
+                warn("[Panel] Realistic's cloud API never appeared - Cloud Presets not added")
+                return
+            end
+            if cloudPresets.Reveal then
+                cloudPresets.Reveal()
             end
         end)
     end
 
     local lightingLookOptions = {"Default", "OG Lighting", "Cosmos"}
+    local lightingLookDisplayNames = { Default = "Default", ["OG Lighting"] = "Original", Cosmos = "Cosmos" }
+    local lightingLookDisplayList = {}
+    for optionIndex, optionName in ipairs(lightingLookOptions) do
+        lightingLookDisplayList[optionIndex] = lightingLookDisplayNames[optionName] or optionName
+    end
     local lightingLookIndex = 1
     settingsState.lightingLook = lightingLookOptions[lightingLookIndex]
 
     local musicVolumeOptions = {
-        { label = "Max", value = 1.75 },
+        { label = "High", value = 1.75 },
         { label = "Medium", value = 0.65 },
-        { label = "None", value = "Disabled" },
+        { label = "Off", value = "Disabled" },
     }
     local musicVolumeIndex = (_G.Music == false) and 3 or 1
 
@@ -6885,7 +6940,7 @@ task.spawn(function()
 
     local settingRowDefinitions = {
         {
-            labelText = "Rain",
+            labelText = "Rain Effect",
             getValueText = function()
                 return settingsState.rainDisabled and "Disabled" or "Enabled"
             end,
@@ -6907,23 +6962,38 @@ task.spawn(function()
                 if IsNewGraphicsActive() then
                     return GRAPHICS_LOCKED_LABEL
                 end
-                return graphicsQualityOptions[graphicsQualityIndex]
+                if settingsState.realisticPending then
+                    return NEW_GRAPHICS_LABEL
+                end
+                return graphicsQualityDisplayNames[graphicsQualityOptions[graphicsQualityIndex]]
             end,
             onActivated = function()
-                if IsNewGraphicsActive() then return end -- locked after New Graphics
+                if IsNewGraphicsActive() then return end -- locked after Realistic Graphics
                 graphicsDropdown.Toggle()
             end,
         },
         {
-            labelText = "Lighting",
+            labelText = "Lighting Preset",
             isDropdownRow = true,
             dropdownKey = "lighting",
             getValueText = function()
-                return lightingLookOptions[lightingLookIndex]
+                return lightingLookDisplayNames[lightingLookOptions[lightingLookIndex]]
             end,
             onActivated = function()
-                if IsNewGraphicsActive() then return end -- locked after New Graphics
+                if IsNewGraphicsActive() then return end -- locked after Realistic Graphics
                 lightingDropdown.Toggle()
+            end,
+        },
+        {
+            labelText = "Cloud Presets",
+            isDropdownRow = true,
+            dropdownKey = "clouds",
+            hidden = true, -- shown by cloudPresets.Reveal() once the Realistic graphics have loaded
+            getValueText = function()
+                return cloudPresets.names[cloudPresets.index]
+            end,
+            onActivated = function()
+                cloudPresets.dropdown.Toggle()
             end,
         },
         {
@@ -6938,36 +7008,36 @@ task.spawn(function()
             end,
         },
         {
-            labelText = "Next Song",
+            labelText = "Select Song",
             tab = "Music",
             isDropdownRow = true,
             dropdownKey = "regular",
             getValueText = function()
-                return (regularDropdown and regularDropdown.isOpen) and "Close" or "Select"
+                return (regularDropdown and regularDropdown.isOpen) and "Close" or "Browse"
             end,
             onActivated = function()
                 regularDropdown.Toggle()
             end,
         },
         {
-            labelText = "DB Music Pack",
+            labelText = "Dragon Ball Music Pack",
             tab = "DLC",
             isDropdownRow = true,
             dropdownKey = "db",
             getValueText = function()
                 if dbPackInstalling then
-                    return string.format("Installing %d/%d", dbPackInstallDone, dbPackInstallTotal)
+                    return string.format("Installing (%d/%d)", dbPackInstallDone, dbPackInstallTotal)
                 end
                 if #dbPackMissingSongs > 0 then
                     if dbPackInstallFailed then
-                        return "Retry"
+                        return "Retry Install"
                     end
                     if #dbPackInstalledNames > 0 then
-                        return string.format("%d+ Needs to be installed", #dbPackMissingSongs)
+                        return string.format("%d Songs to Install", #dbPackMissingSongs)
                     end
                     return "Install"
                 end
-                return (dbDropdown and dbDropdown.isOpen) and "Close" or "Select"
+                return (dbDropdown and dbDropdown.isOpen) and "Close" or "Browse"
             end,
             onActivated = function()
                 if dbPackInstalling then return end
@@ -6979,7 +7049,7 @@ task.spawn(function()
             end,
         },
         {
-            labelText = "Song Position",
+            labelText = "Playback Position",
             tab = "Music",
             isSlider = true,
             getValueText = GetSongPositionText,
@@ -6997,7 +7067,7 @@ task.spawn(function()
             onActivated = function() end,
         },
         {
-            labelText = "Song Speed",
+            labelText = "Playback Speed",
             tab = "Music",
             isSlider = true,
             getValueText = function()
@@ -7015,7 +7085,7 @@ task.spawn(function()
             onActivated = function() end,
         },
         {
-            labelText = "Reverb",
+            labelText = "Reverb Preset",
             tab = "Music",
             isDropdownRow = true,
             dropdownKey = "reverb",
@@ -7049,7 +7119,7 @@ task.spawn(function()
             labelText = "Multiplayer",
             tab = "DLC",
             getValueText = function()
-                return multiplayerActive and "Active" or "Trigger"
+                return multiplayerActive and "Playing" or "Play"
             end,
             onActivated = function()
                 TriggerMultiplayer()
@@ -7059,7 +7129,7 @@ task.spawn(function()
             labelText = "Clothing",
             tab = "DLC",
             getValueText = function()
-                return clothingWindowOpen and "Close" or "Select"
+                return clothingWindowOpen and "Close" or "Open"
             end,
             onActivated = function()
                 HideHairWindow()
@@ -7070,7 +7140,7 @@ task.spawn(function()
             labelText = "Hair",
             tab = "DLC",
             getValueText = function()
-                return hairWindowOpen and "Close" or "Select"
+                return hairWindowOpen and "Close" or "Open"
             end,
             onActivated = function()
                 HideClothingWindow()
@@ -7105,8 +7175,214 @@ task.spawn(function()
     local panelRowScale     = 0.16 * 0.4 / panelHeightScale
     local panelPaddingScale = 0.02 * 0.4 / panelHeightScale
 
+    -- The panel fades and drifts in from the right by a few pixels (no big slide-in).
     local settingsPanelOpenPosition = UDim2.new(0.73, 0, 0.5, 0)
-    local settingsPanelClosedPosition = UDim2.new(1.3, 0, 0.5, 0)
+    local settingsPanelClosedPosition = UDim2.new(0.73, 48, 0.5, 0)
+
+    -- ===== UI motion helpers: only the settings panel and its windows use these =====
+    -- (the border and character animations are separate and are not touched)
+    local UIFx = {}
+    UIFx.HoverEnabled = userInputService.MouseEnabled
+    UIFx.RowHoverColor = Color3.fromRGB(94, 64, 54)
+    UIFx.HeaderHoverColor = Color3.fromRGB(240, 128, 52)
+    UIFx.Quick = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    UIFx.Slide = TweenInfo.new(0.25, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
+    UIFx.WindowIn = TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+    UIFx.WindowOut = TweenInfo.new(0.3, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+    UIFx.FadeStyle = Enum.EasingStyle.Sine
+    UIFx.WindowRest = UDim2.new(0.27, 0, 0.5, 0)
+    UIFx.WindowEnter = UDim2.new(0.27, 32, 0.5, 0)
+    UIFx.shownValues = {}
+    UIFx.running = {}
+    UIFx.windowTokens = {}
+    UIFx.panelToken = 0
+    UIFx.glowTweens = {}
+    UIFx.glowToken = {}
+
+    function UIFx.Tween(instance, tweenInfo, goals)
+        local newTween = tweenService:Create(instance, tweenInfo, goals)
+        newTween:Play()
+        return newTween
+    end
+
+    -- smooth colour change on hover (skipped on touch-only devices)
+    function UIFx.Hover(button, hoverColor)
+        if not UIFx.HoverEnabled then return end
+        local restColor = button.BackgroundColor3
+        button.MouseEnter:Connect(function()
+            UIFx.Tween(button, UIFx.Quick, { BackgroundColor3 = hoverColor })
+        end)
+        button.MouseLeave:Connect(function()
+            UIFx.Tween(button, UIFx.Quick, { BackgroundColor3 = restColor })
+        end)
+    end
+
+    -- remembers how visible each piece of an element normally is (only values below 1 matter)
+    function UIFx.Snapshot(instance)
+        local shown = {}
+        if instance:GetAttribute("FadeShown") ~= nil then
+            -- a row's selection glow: it is "fully shown" when selected, whatever state it is in right now
+            shown.BackgroundTransparency = 0
+            return shown
+        end
+        local function record(propertyName)
+            local value = instance[propertyName]
+            if value < 1 then
+                shown[propertyName] = value
+            end
+        end
+        if instance:IsA("UIStroke") then
+            record("Transparency")
+        elseif instance:IsA("TextLabel") or instance:IsA("TextButton") then
+            record("BackgroundTransparency")
+            record("TextTransparency")
+            record("TextStrokeTransparency")
+        elseif instance:IsA("ViewportFrame") or instance:IsA("ImageLabel") or instance:IsA("ImageButton") then
+            record("BackgroundTransparency")
+            record("ImageTransparency")
+        elseif instance:IsA("Frame") then
+            record("BackgroundTransparency")
+        end
+        return shown
+    end
+
+    -- collects everything under `instance` that is visible right now and has something to fade
+    -- (dropdown lists animate themselves, and the contents of a viewport are left alone)
+    function UIFx.Gather(instance, targets)
+        if instance:IsA("ScrollingFrame") then return end
+        if instance:IsA("GuiObject") and not instance.Visible and instance:GetAttribute("FadeShown") == nil then return end
+        local shown = UIFx.shownValues[instance]
+        if shown == nil then
+            shown = UIFx.Snapshot(instance)
+            UIFx.shownValues[instance] = shown
+        end
+        if next(shown) ~= nil then
+            table.insert(targets, instance)
+        end
+        if instance:IsA("ViewportFrame") then return end
+        for _, child in ipairs(instance:GetChildren()) do
+            UIFx.Gather(child, targets)
+        end
+    end
+
+    -- called whenever a row is selected or deselected
+    function UIFx.SetGlow(glow, selected)
+        glow:SetAttribute("FadeShown", selected and 0 or 1)
+        UIFx.glowToken[glow] = (UIFx.glowToken[glow] or 0) + 1
+        local token = UIFx.glowToken[glow]
+        local previousTween = UIFx.glowTweens[glow]
+        if previousTween then
+            previousTween:Cancel()
+        end
+        if selected then
+            glow.Visible = true
+            UIFx.glowTweens[glow] = UIFx.Tween(glow, UIFx.Quick, { BackgroundTransparency = 0 })
+        else
+            local hideTween = UIFx.Tween(glow, UIFx.Quick, { BackgroundTransparency = 1 })
+            UIFx.glowTweens[glow] = hideTween
+            hideTween.Completed:Connect(function(playbackState)
+                if playbackState == Enum.PlaybackState.Completed and UIFx.glowToken[glow] == token then
+                    glow.Visible = false
+                end
+            end)
+        end
+    end
+
+    -- the selection glow is faded on its own so it always lines up with the rest of its row
+    function UIFx.FadeGlow(glow, fadeIn, shownValue, duration, delay, direction, running)
+        UIFx.glowToken[glow] = (UIFx.glowToken[glow] or 0) + 1
+        local token = UIFx.glowToken[glow]
+        local previousTween = UIFx.glowTweens[glow]
+        if previousTween then
+            previousTween:Cancel()
+            UIFx.glowTweens[glow] = nil
+        end
+
+        if fadeIn then
+            glow.BackgroundTransparency = 1
+            glow.Visible = false
+            if shownValue >= 1 then return end -- this row isn't selected
+            task.delay(delay, function()
+                if UIFx.glowToken[glow] ~= token then return end
+                glow.Visible = true
+                local showTween = tweenService:Create(glow, TweenInfo.new(duration, UIFx.FadeStyle, direction), {
+                    BackgroundTransparency = shownValue,
+                })
+                UIFx.glowTweens[glow] = showTween
+                table.insert(running, showTween)
+                showTween:Play()
+            end)
+        else
+            if not glow.Visible then return end
+            local hideTween = tweenService:Create(glow, TweenInfo.new(duration, UIFx.FadeStyle, direction, 0, false, delay), {
+                BackgroundTransparency = 1,
+            })
+            UIFx.glowTweens[glow] = hideTween
+            table.insert(running, hideTween)
+            hideTween.Completed:Connect(function(playbackState)
+                if playbackState == Enum.PlaybackState.Completed and UIFx.glowToken[glow] == token then
+                    glow.Visible = false
+                end
+            end)
+            hideTween:Play()
+        end
+    end
+
+    -- fades an element and everything inside it in or out
+    function UIFx.Fade(root, fadeIn, duration, delay, direction)
+        delay = delay or 0
+        direction = direction or (fadeIn and Enum.EasingDirection.Out or Enum.EasingDirection.In)
+
+        local running = UIFx.running[root]
+        if running then
+            for _, runningTween in ipairs(running) do
+                runningTween:Cancel()
+            end
+        end
+        running = {}
+        UIFx.running[root] = running
+
+        local targets = {}
+        UIFx.Gather(root, targets)
+
+        local fadeInfo = TweenInfo.new(duration, UIFx.FadeStyle, direction, 0, false, delay)
+        for _, target in ipairs(targets) do
+            local glowShown = target:GetAttribute("FadeShown")
+            if glowShown ~= nil then
+                UIFx.FadeGlow(target, fadeIn, glowShown, duration, delay, direction, running)
+            else
+                local goals = {}
+                for propertyName, shownValue in pairs(UIFx.shownValues[target]) do
+                    goals[propertyName] = fadeIn and shownValue or 1
+                    if fadeIn then
+                        target[propertyName] = 1
+                    end
+                end
+                local fadeTween = tweenService:Create(target, fadeInfo, goals)
+                table.insert(running, fadeTween)
+                fadeTween:Play()
+            end
+        end
+    end
+
+    function UIFx.WindowShow(window)
+        UIFx.windowTokens[window] = (UIFx.windowTokens[window] or 0) + 1
+        window.Position = UIFx.WindowEnter
+        UIFx.Fade(window, true, 0.35, 0)
+        UIFx.Tween(window, UIFx.WindowIn, { Position = UIFx.WindowRest })
+    end
+
+    function UIFx.WindowHide(window, onHidden)
+        local token = (UIFx.windowTokens[window] or 0) + 1
+        UIFx.windowTokens[window] = token
+        UIFx.Fade(window, false, 0.3, 0, Enum.EasingDirection.InOut)
+        UIFx.Tween(window, UIFx.WindowOut, { Position = UIFx.WindowEnter })
+        task.delay(0.3, function()
+            if UIFx.windowTokens[window] == token then
+                onHidden()
+            end
+        end)
+    end
 
     local settingsPanel = Instance.new("Frame")
     settingsPanel.Name = "SettingsPanel"
@@ -7138,6 +7414,7 @@ task.spawn(function()
     headerStroke.Parent = headerBar
 
     local tabNames = { "Settings", "Music", "DLC" }
+    local tabDisplayNames = { Settings = "General", Music = "Music", DLC = "Add-ons" }
     local activeTabName = "Settings"
     local tabButtons = {}
     local SetActiveTab
@@ -7151,7 +7428,7 @@ task.spawn(function()
         tabButton.Position = UDim2.new((tabIndex - 1) / #tabNames, 0, 0, 0)
         tabButton.Size = UDim2.new(1 / #tabNames, 0, 1, 0)
         tabButton.FontFace = settingsFont
-        tabButton.Text = tabName
+        tabButton.Text = tabDisplayNames[tabName] or tabName
         tabButton.TextColor3 = normalTextColor
         tabButton.TextStrokeColor3 = Color3.new(0, 0, 0)
         tabButton.TextStrokeTransparency = 0
@@ -7172,8 +7449,21 @@ task.spawn(function()
         tabButton.Activated:Connect(function()
             if activeTabName == tabName then return end
             playNextSound()
-            SetActiveTab(tabName)
+            SetActiveTab(tabName, true)
         end)
+
+        if UIFx.HoverEnabled then
+            tabButton.MouseEnter:Connect(function()
+                if activeTabName ~= tabName then
+                    UIFx.Tween(tabButton, UIFx.Quick, { BackgroundColor3 = UIFx.HeaderHoverColor })
+                end
+            end)
+            tabButton.MouseLeave:Connect(function()
+                if activeTabName ~= tabName then
+                    UIFx.Tween(tabButton, UIFx.Quick, { BackgroundColor3 = headerColor })
+                end
+            end)
+        end
 
         tabButtons[tabName] = tabButton
     end
@@ -7184,8 +7474,13 @@ task.spawn(function()
     local function refreshRowVisuals()
         for rowIndex, rowVisuals in ipairs(settingRows) do
             local isSelected = rowIndex == selectedRowIndex
-            rowVisuals.highlight.Visible = isSelected
-            rowVisuals.label.TextColor3 = isSelected and selectedTextColor or normalTextColor
+            if rowVisuals.selected ~= isSelected then
+                rowVisuals.selected = isSelected
+                UIFx.SetGlow(rowVisuals.highlight, isSelected)
+                UIFx.Tween(rowVisuals.label, UIFx.Quick, {
+                    TextColor3 = isSelected and selectedTextColor or normalTextColor,
+                })
+            end
         end
     end
 
@@ -7202,6 +7497,7 @@ task.spawn(function()
             rowButton.ZIndex = 10 + #settingRowDefinitions - rowIndex
         end
         rowButton.Parent = settingsPanel
+        UIFx.Hover(rowButton, UIFx.RowHoverColor)
 
         local rowStroke = Instance.new("UIStroke")
         rowStroke.Color = rowStrokeColor
@@ -7428,7 +7724,7 @@ task.spawn(function()
     local settingRowButtons = {}
     for rowIndex, rowDefinition in ipairs(settingRowDefinitions) do
         local createdRowButton = createSettingRow(rowIndex, rowDefinition)
-        table.insert(settingRowButtons, { button = createdRowButton, tab = rowDefinition.tab or "Settings" })
+        table.insert(settingRowButtons, { button = createdRowButton, tab = rowDefinition.tab or "Settings", hidden = rowDefinition.hidden == true })
         if rowDefinition.dropdownKey then
             dropdownHostButtons[rowDefinition.dropdownKey] = createdRowButton
         end
@@ -7502,7 +7798,7 @@ task.spawn(function()
             if activeSizeTween then activeSizeTween:Cancel() end
             if activeStrokeTween then activeStrokeTween:Cancel() end
 
-            local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Quint, easingDirection)
+            local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Cubic, easingDirection)
             local sizeTween = TweenService:Create(dropdownFrame, tweenInfo, {
                 Size = UDim2.new(1, 0, 0, height),
                 BackgroundTransparency = transparency,
@@ -7579,10 +7875,15 @@ task.spawn(function()
 
             itemButton.MouseEnter:Connect(function()
                 if itemButton.BackgroundColor3 ~= highlightColor then
-                    itemButton.BackgroundColor3 = songHoverColor
+                    UIFx.Tween(itemButton, UIFx.Quick, { BackgroundColor3 = songHoverColor })
                 end
             end)
-            itemButton.MouseLeave:Connect(RefreshVisuals)
+            itemButton.MouseLeave:Connect(function()
+                local isHighlighted = getHighlightedIndex() == itemIndex
+                UIFx.Tween(itemButton, UIFx.Quick, {
+                    BackgroundColor3 = isHighlighted and highlightColor or rowBackgroundColor,
+                })
+            end)
 
             itemButton.Activated:Connect(function()
                 playNextSound()
@@ -7660,28 +7961,50 @@ task.spawn(function()
     if dropdownHostButtons.graphics then
         graphicsDropdown = CreateDropdown(dropdownHostButtons.graphics, "GraphicsQualityDropdown", graphicsDropdownItems,
             function()
-                return graphicsQualityIndex
+                return settingsState.realisticPending and newGraphicsIndex or graphicsQualityIndex
             end,
             function(optionIndex)
-                if IsNewGraphicsActive() then return end -- locked after New Graphics
+                if IsNewGraphicsActive() then return end -- locked after Realistic Graphics
                 if optionIndex == newGraphicsIndex then
-                    ApplyNewGraphics()
+                    settingsState.realisticPending = true -- nothing happens until Apply is pressed
                     return
                 end
+                settingsState.realisticPending = false
                 graphicsQualityIndex = optionIndex
                 settingsState.graphicsQuality = graphicsQualityOptions[graphicsQualityIndex]
             end)
     end
 
     if dropdownHostButtons.lighting then
-        lightingDropdown = CreateDropdown(dropdownHostButtons.lighting, "LightingLookDropdown", lightingLookOptions,
+        lightingDropdown = CreateDropdown(dropdownHostButtons.lighting, "LightingLookDropdown", lightingLookDisplayList,
             function()
                 return lightingLookIndex
             end,
             function(optionIndex)
-                if IsNewGraphicsActive() then return end -- locked after New Graphics
+                if IsNewGraphicsActive() then return end -- locked after Realistic Graphics
                 lightingLookIndex = optionIndex
                 settingsState.lightingLook = lightingLookOptions[lightingLookIndex]
+            end)
+    end
+
+    if dropdownHostButtons.clouds then
+        cloudPresets.dropdown = CreateDropdown(dropdownHostButtons.clouds, "CloudPresetsDropdown", cloudPresets.names,
+            function()
+                return cloudPresets.index
+            end,
+            function(optionIndex)
+                local realisticApi = _G.GeorgiaSkyPort
+                if not realisticApi or not realisticApi.SetCloudPreset then
+                    warn("[Panel] Realistic's cloud API isn't available - cloud preset not changed")
+                    return
+                end
+                -- applies live (no Apply button needed): Realistic swaps the clouds itself
+                local callOk, applied = pcall(realisticApi.SetCloudPreset, cloudPresets.apiNames[optionIndex])
+                if callOk and applied then
+                    cloudPresets.index = optionIndex
+                else
+                    warn("[Panel] Couldn't set the cloud preset: " .. tostring(callOk and "unknown preset" or applied))
+                end
             end)
     end
 
@@ -7847,7 +8170,7 @@ task.spawn(function()
         clothingHintLabel.Position = UDim2.new(0.5, 0, 0.98, 0)
         clothingHintLabel.Size = UDim2.new(0.9, 0, 0.09, 0)
         clothingHintLabel.FontFace = settingsFont
-        clothingHintLabel.Text = "Drag to spin"
+        clothingHintLabel.Text = "Drag to rotate"
         clothingHintLabel.TextColor3 = normalTextColor
         clothingHintLabel.TextTransparency = 0.3
         clothingHintLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
@@ -7971,6 +8294,7 @@ task.spawn(function()
             pickerRow.Size = UDim2.new(1, 0, 0.16, 0)
             pickerRow.ZIndex = rowZIndex
             pickerRow.Parent = clothingColumn
+            UIFx.Hover(pickerRow, UIFx.RowHoverColor)
 
             local pickerStroke = Instance.new("UIStroke")
             pickerStroke.Color = rowStrokeColor
@@ -8122,6 +8446,7 @@ task.spawn(function()
             clothingButton.TextStrokeTransparency = 0
             clothingButton.TextScaled = true
             clothingButton.Parent = clothingColumn
+            UIFx.Hover(clothingButton, UIFx.HeaderHoverColor)
 
             local clothingButtonStroke = Instance.new("UIStroke")
             clothingButtonStroke.Color = headerStrokeColor
@@ -8148,7 +8473,7 @@ task.spawn(function()
                 and HairSystem.Accessories.WriteSaved(HairSystem.Accessories.SelectedName)
             clothingSaveToken = clothingSaveToken + 1
             local myToken = clothingSaveToken
-            clothingSaveButton.Text = saved and "Saved!" or "Failed"
+            clothingSaveButton.Text = saved and "Saved" or "Save Failed"
             task.delay(1.2, function()
                 if clothingSaveToken == myToken then
                     clothingSaveButton.Text = "Save"
@@ -8177,14 +8502,19 @@ task.spawn(function()
             BuildClothingPreview()
             clothingWindowOpen = true
             clothingWindow.Visible = true
+            UIFx.WindowShow(clothingWindow)
         end
 
         HideClothingWindow = function()
             if not clothingWindowOpen then return end
             clothingWindowOpen = false
-            clothingWindow.Visible = false
-            DestroyClothingPreview()
             CloseAllDropdowns()
+            UIFx.WindowHide(clothingWindow, function()
+                if not clothingWindowOpen then
+                    clothingWindow.Visible = false
+                    DestroyClothingPreview()
+                end
+            end)
         end
 
         ToggleClothingWindow = function()
@@ -8202,9 +8532,20 @@ task.spawn(function()
     end
 
     do
+        -- internal hair names are save keys, so only the text shown in the UI is renamed
+        local hairDisplayNames = {
+            ["First Hair"] = "Style 1", ["Second Hair"] = "Style 2", ["Third Hair"] = "Style 3",
+            ["Fourth Hair"] = "Style 4", ["Fifth Hair"] = "Style 5", ["Sixth Hair"] = "Style 6",
+            ["Seventh Hair"] = "Style 7", ["Eighth Hair"] = "Style 8", ["Ninth Hair"] = "Style 9",
+            ["Tenth Hair"] = "Style 10", ["Eleventh Hair"] = "Style 11", ["Twelfth Hair"] = "Style 12",
+        }
+        local function GetHairDisplayName(hairName)
+            return hairDisplayNames[hairName] or hairName
+        end
+
         local hairPickerNames = {}
         for hairIndex, hairName in ipairs(HairSystem.HairNames) do
-            hairPickerNames[hairIndex] = hairName
+            hairPickerNames[hairIndex] = GetHairDisplayName(hairName)
         end
         table.insert(hairPickerNames, "Default")
         local hairDefaultItemIndex = #hairPickerNames
@@ -8300,7 +8641,7 @@ task.spawn(function()
         hairHintLabel.Position = UDim2.new(0.5, 0, 0.98, 0)
         hairHintLabel.Size = UDim2.new(0.9, 0, 0.09, 0)
         hairHintLabel.FontFace = settingsFont
-        hairHintLabel.Text = "Drag to spin"
+        hairHintLabel.Text = "Drag to rotate"
         hairHintLabel.TextColor3 = normalTextColor
         hairHintLabel.TextTransparency = 0.3
         hairHintLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
@@ -8423,6 +8764,7 @@ task.spawn(function()
         hairPickerRow.Size = UDim2.new(1, 0, 0.16, 0)
         hairPickerRow.ZIndex = 12
         hairPickerRow.Parent = hairColumn
+        UIFx.Hover(hairPickerRow, UIFx.RowHoverColor)
 
         local hairPickerStroke = Instance.new("UIStroke")
         hairPickerStroke.Color = rowStrokeColor
@@ -8437,7 +8779,7 @@ task.spawn(function()
         hairPickerLabel.Position = UDim2.new(0.05, 0, 0.5, 0)
         hairPickerLabel.Size = UDim2.new(0.38, 0, 0.5, 0)
         hairPickerLabel.FontFace = settingsFont
-        hairPickerLabel.Text = "Hair"
+        hairPickerLabel.Text = "Hairstyle"
         hairPickerLabel.TextColor3 = normalTextColor
         hairPickerLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
         hairPickerLabel.TextStrokeTransparency = 0
@@ -8479,12 +8821,12 @@ task.spawn(function()
         hairPickerValueConstraint.Parent = hairPickerValueLabel
 
         local function RefreshHairLabel()
-            local labelText = pickedHairName or "Default"
+            local labelText = pickedHairName and GetHairDisplayName(pickedHairName) or "Default"
             if pickedHairName and HairSystem.SelectedName ~= pickedHairName then
                 if HairSystem.TemplateStatus[pickedHairName] == "failed" then
-                    labelText = pickedHairName .. " (failed)"
+                    labelText = GetHairDisplayName(pickedHairName) .. " (failed to load)"
                 else
-                    labelText = pickedHairName .. " ..."
+                    labelText = GetHairDisplayName(pickedHairName) .. " (loading...)"
                 end
             end
             hairPickerValueLabel.Text = labelText
@@ -8547,6 +8889,7 @@ task.spawn(function()
             colorRow.Size = UDim2.new(1, 0, 0.16, 0)
             colorRow.ZIndex = rowZIndex
             colorRow.Parent = hairColumn
+            UIFx.Hover(colorRow, UIFx.RowHoverColor)
 
             local colorRowStroke = Instance.new("UIStroke")
             colorRowStroke.Color = rowStrokeColor
@@ -8637,10 +8980,10 @@ task.spawn(function()
             return RefreshColorRow
         end
 
-        local RefreshBaseColorRow = CreateHairColorRow("BaseHairColorRow", "Base Hair color", 2, 11,
+        local RefreshBaseColorRow = CreateHairColorRow("BaseHairColorRow", "Base Hair Color", 2, 11,
             function() return HairSystem.BaseColorName end,
             function(colorName) HairSystem.SetBaseColor(colorName) end)
-        local RefreshUltimateColorRow = CreateHairColorRow("UltimateColorRow", "Ultimate Color", 3, 10,
+        local RefreshUltimateColorRow = CreateHairColorRow("UltimateColorRow", "Ultimate Hair Color", 3, 10,
             function() return HairSystem.UltimateColorName end,
             function(colorName) HairSystem.SetUltimateColor(colorName) end)
 
@@ -8664,6 +9007,7 @@ task.spawn(function()
                 valueRow.Size = UDim2.new(1, 0, 0.16, 0)
                 valueRow.ZIndex = rowZIndex
                 valueRow.Parent = hairColumn
+                UIFx.Hover(valueRow, UIFx.RowHoverColor)
 
                 local valueRowStroke = Instance.new("UIStroke")
                 valueRowStroke.Color = rowStrokeColor
@@ -8723,9 +9067,9 @@ task.spawn(function()
             end
 
             -- Include Texture: click to switch On / Off (only hairs that have a texture, like Gohan Base, use it)
-            local textureRow, textureValueLabel = CreateHairValueRow("IncludeTextureRow", "Include Texture", 4, 9)
+            local textureRow, textureValueLabel = CreateHairValueRow("IncludeTextureRow", "Hair Texture", 4, 9)
             local function RefreshTextureRow()
-                textureValueLabel.Text = HairSystem.IncludeTexture and "On" or "Off"
+                textureValueLabel.Text = HairSystem.IncludeTexture and "Enabled" or "Disabled"
             end
             textureRow.Activated:Connect(function()
                 playNextSound()
@@ -8764,6 +9108,7 @@ task.spawn(function()
             hairButton.TextStrokeTransparency = 0
             hairButton.TextScaled = true
             hairButton.Parent = hairButtonRow
+            UIFx.Hover(hairButton, UIFx.HeaderHoverColor)
 
             local hairButtonStroke = Instance.new("UIStroke")
             hairButtonStroke.Color = headerStrokeColor
@@ -8789,7 +9134,7 @@ task.spawn(function()
             local saved = HairSystem.WriteSaved(pickedHairName)
             hairSaveToken = hairSaveToken + 1
             local myToken = hairSaveToken
-            hairSaveButton.Text = saved and "Saved!" or "Failed"
+            hairSaveButton.Text = saved and "Saved" or "Save Failed"
             task.delay(1.2, function()
                 if hairSaveToken == myToken then
                     hairSaveButton.Text = "Save"
@@ -8818,14 +9163,19 @@ task.spawn(function()
             BuildHairPreview(false)
             hairWindowOpen = true
             hairWindow.Visible = true
+            UIFx.WindowShow(hairWindow)
         end
 
         HideHairWindow = function()
             if not hairWindowOpen then return end
             hairWindowOpen = false
-            hairWindow.Visible = false
-            DestroyHairPreview()
             CloseAllDropdowns()
+            UIFx.WindowHide(hairWindow, function()
+                if not hairWindowOpen then
+                    hairWindow.Visible = false
+                    DestroyHairPreview()
+                end
+            end)
         end
 
         ToggleHairWindow = function()
@@ -8850,6 +9200,14 @@ task.spawn(function()
     buttonRow.Size = UDim2.new(1, 0, panelRowScale, 0)
     buttonRow.Parent = settingsPanel
 
+    -- Apply and Close live in this wrapper so they can glide when the tab (and its row count) changes
+    local buttonSlide = Instance.new("Frame")
+    buttonSlide.Name = "ButtonSlide"
+    buttonSlide.BackgroundTransparency = 1
+    buttonSlide.BorderSizePixel = 0
+    buttonSlide.Size = UDim2.new(1, 0, 1, 0)
+    buttonSlide.Parent = buttonRow
+
     local function createActionButton(buttonName, buttonText, horizontalAlignment)
         local actionButton = Instance.new("TextButton")
         actionButton.Name = buttonName
@@ -8865,7 +9223,8 @@ task.spawn(function()
         actionButton.TextStrokeColor3 = Color3.new(0, 0, 0)
         actionButton.TextStrokeTransparency = 0
         actionButton.TextScaled = true
-        actionButton.Parent = buttonRow
+        actionButton.Parent = buttonSlide
+        UIFx.Hover(actionButton, UIFx.HeaderHoverColor)
 
         local actionButtonStroke = Instance.new("UIStroke")
         actionButtonStroke.Color = headerStrokeColor
@@ -8889,7 +9248,9 @@ task.spawn(function()
     end
     for _, rowDefinition in ipairs(settingRowDefinitions) do
         local rowTabName = rowDefinition.tab or "Settings"
-        tabRowCounts[rowTabName] = tabRowCounts[rowTabName] + 1
+        if not rowDefinition.hidden then -- the Cloud Presets row is counted when it is revealed
+            tabRowCounts[rowTabName] = tabRowCounts[rowTabName] + 1
+        end
     end
     local tallestTabRowCount = 0
     for _, rowCount in pairs(tabRowCounts) do
@@ -8913,7 +9274,8 @@ task.spawn(function()
     tabSpacer.Visible = false
     tabSpacer.Parent = settingsPanel
 
-    SetActiveTab = function(tabName)
+    SetActiveTab = function(tabName, animate)
+        local previousTabName = activeTabName
         activeTabName = tabName
         CloseAllDropdowns()
         if tabName ~= "DLC" then
@@ -8923,11 +9285,11 @@ task.spawn(function()
 
         local isSettingsTab = tabName == "Settings"
         for _, rowEntry in ipairs(settingRowButtons) do
-            rowEntry.button.Visible = rowEntry.tab == tabName
+            rowEntry.button.Visible = rowEntry.tab == tabName and not rowEntry.hidden
         end
-        local spacerScale = GetSpacerScaleForTab(tabName)
-        tabSpacer.Size = UDim2.new(1, 0, spacerScale, 0)
-        tabSpacer.Visible = spacerScale > 0
+        -- Apply/Close sit directly under the last row of the active tab (no filler space)
+        tabSpacer.Size = UDim2.new(1, 0, 0, 0)
+        tabSpacer.Visible = false
         applyButton.Visible = isSettingsTab
 
         local selectedEntry = settingRowButtons[selectedRowIndex]
@@ -8943,11 +9305,64 @@ task.spawn(function()
 
         for name, tabButton in pairs(tabButtons) do
             local isActive = name == tabName
-            tabButton.BackgroundColor3 = isActive and highlightColor or headerColor
-            tabButton.TextColor3 = isActive and selectedTextColor or normalTextColor
+            UIFx.Tween(tabButton, UIFx.Quick, {
+                BackgroundColor3 = isActive and highlightColor or headerColor,
+                TextColor3 = isActive and selectedTextColor or normalTextColor,
+            })
+        end
+
+        if animate and previousTabName ~= tabName then
+            -- Apply/Close glide from where they were to where they belong now
+            local rowDifference = (tabRowCounts[previousTabName] or 0) - (tabRowCounts[tabName] or 0)
+            if rowDifference ~= 0 then
+                buttonSlide.Position = UDim2.new(0, 0, rowDifference * (panelRowScale + panelPaddingScale) / panelRowScale, 0)
+                UIFx.Tween(buttonSlide, UIFx.Slide, { Position = UDim2.new(0, 0, 0, 0) })
+            end
+
+            -- the new tab's rows fade in with a very short stagger
+            local fadeOrder = 0
+            for _, rowEntry in ipairs(settingRowButtons) do
+                if rowEntry.tab == tabName and not rowEntry.hidden then
+                    UIFx.Fade(rowEntry.button, true, 0.25, fadeOrder * 0.04)
+                    fadeOrder = fadeOrder + 1
+                end
+            end
+            if isSettingsTab then
+                UIFx.Fade(applyButton, true, 0.25, fadeOrder * 0.04)
+            end
         end
     end
     SetActiveTab("Settings")
+
+    -- Called a few seconds after the Realistic graphics have loaded. The "Cloud Presets" row fades in (same fade
+    -- as the window / tab rows) while Apply and Close glide down to make room for it (same glide as a tab switch).
+    cloudPresets.Reveal = function()
+        if cloudPresets.revealed then return end
+        cloudPresets.revealed = true
+        tabRowCounts.Settings = tabRowCounts.Settings + 1
+
+        local cloudRowButton = dropdownHostButtons.clouds
+        local cloudRowEntry
+        for _, rowEntry in ipairs(settingRowButtons) do
+            if rowEntry.button == cloudRowButton then
+                cloudRowEntry = rowEntry
+                break
+            end
+        end
+        if not cloudRowEntry then return end
+        cloudRowEntry.hidden = false
+
+        if activeTabName ~= "Settings" then return end -- it shows the next time the General tab is opened
+        cloudRowButton.Visible = true
+        RefreshSettingValues()
+
+        if overlayGui.Enabled and settingsPanel.Visible then
+            -- Apply/Close start one row higher (where they were) and glide down into place
+            buttonSlide.Position = UDim2.new(0, 0, -(panelRowScale + panelPaddingScale) / panelRowScale, 0)
+            UIFx.Tween(buttonSlide, UIFx.WindowIn, { Position = UDim2.new(0, 0, 0, 0) })
+            UIFx.Fade(cloudRowButton, true, 0.35, 0)
+        end
+    end
 
     RunService.Heartbeat:Connect(function()
         if not overlayGui.Enabled or activeTabName ~= "Music" then return end
@@ -8965,15 +9380,21 @@ task.spawn(function()
     applyButtonScale.Scale = 1
     applyButtonScale.Parent = applyButton
 
-    local applyPulseOutTween = tweenService:Create(applyButtonScale, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-        Scale = 1.12,
+    local applyPulseOutTween = tweenService:Create(applyButtonScale, TweenInfo.new(0.08, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        Scale = 0.96,
     })
-    local applyPulseBackTween = tweenService:Create(applyButtonScale, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+    local applyPulseBackTween = tweenService:Create(applyButtonScale, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
         Scale = 1,
     })
 
     local function ApplyGraphicsQuality()
         if _G.Graphics == false then return end
+        if settingsState.realisticPending then
+            settingsState.realisticPending = false
+            ApplyNewGraphics() -- Sunset is disabled now, Realistic loads 8 seconds later
+            RefreshSettingValues()
+            return
+        end
         if IsNewGraphicsActive() then return end -- Sunset is disabled; Set/SetLook would only warn
         local qualityLevel = graphicsQualityLevels[settingsState.graphicsQuality]
         if qualityLevel then
@@ -9027,11 +9448,14 @@ task.spawn(function()
     local expandTweenInfo = TweenInfo.new(0.6, Enum.EasingStyle.Cubic, Enum.EasingDirection.In, 0, false, 0.3)
     local unblurTweenInfo = TweenInfo.new(0.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, 0, false, 0.3)
 
+    local borderFadeInTweenInfo = TweenInfo.new(0.7, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
+    local borderFadeOutTweenInfo = TweenInfo.new(0.7, Enum.EasingStyle.Sine, Enum.EasingDirection.In, 0, false, 0.2)
+
     local fovOpenTweenInfo = TweenInfo.new(1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
     local fovCloseTweenInfo = TweenInfo.new(0.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, 0, false, 0.3)
 
-    local panelOpenTweenInfo = TweenInfo.new(0.9, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out, 0, false, 0.35)
-    local panelCloseTweenInfo = TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.In)
+    local panelOpenTweenInfo = TweenInfo.new(0.8, Enum.EasingStyle.Quart, Enum.EasingDirection.Out, 0, false, 0.4)
+    local panelCloseTweenInfo = TweenInfo.new(0.45, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
 
     local openFieldOfViewBoost = 10
     local originalFieldOfView = nil
@@ -9058,16 +9482,23 @@ task.spawn(function()
         pcall(PauseMusic.Open)
 
         borderImage.Size = UDim2.new(4, 0, 4, 0)
+        borderImage.ImageTransparency = 1
         characterImage.Position = UDim2.new(0, 0, 0, 945)
         blurEffect.Size = 0
         settingsPanel.Position = settingsPanelClosedPosition
         overlayGui.Enabled = true
+        UIFx.panelToken = UIFx.panelToken + 1
+        settingsPanel.Visible = true
+        UIFx.Fade(settingsPanel, true, 0.6, 0.4)
 
         openSound.TimePosition = 0
         openSound:Play()
 
         playTween(borderImage, shrinkTweenInfo, {
             Size = UDim2.new(1, 0, 1, 0),
+        })
+        playTween(borderImage, borderFadeInTweenInfo, {
+            ImageTransparency = 0,
         })
         playTween(blurEffect, blurTweenInfo, {
             Size = 24,
@@ -9101,8 +9532,19 @@ task.spawn(function()
         playTween(settingsPanel, panelCloseTweenInfo, {
             Position = settingsPanelClosedPosition,
         })
+        UIFx.panelToken = UIFx.panelToken + 1
+        local exitToken = UIFx.panelToken
+        UIFx.Fade(settingsPanel, false, 0.4, 0, Enum.EasingDirection.InOut)
+        task.delay(0.45, function()
+            if UIFx.panelToken == exitToken then
+                settingsPanel.Visible = false
+            end
+        end)
         local expandTween = playTween(borderImage, expandTweenInfo, {
             Size = UDim2.new(4, 0, 4, 0),
+        })
+        playTween(borderImage, borderFadeOutTweenInfo, {
+            ImageTransparency = 1,
         })
         playTween(blurEffect, unblurTweenInfo, {
             Size = 0,
@@ -9743,6 +10185,7 @@ local function TriggerSSJBEmote()
                     newHair.CanCollide = false
                     newHair.CFrame     = headPart.CFrame * CFrame.new(0, 1.1, 0.5) * CFrame.Angles(0, math.rad(180), 0)
                     newHair.Parent     = character
+                    HairSystem.DisableCollision(newHair)
                     newHair:SetAttribute("IsSSJB", true)
                     local weld = Instance.new("WeldConstraint")
                     weld.Part0 = headPart
@@ -9770,6 +10213,7 @@ local function TriggerSSJBEmote()
                 end
                 for _, v3200 in pairs(v3192) do
                     local v3201 = v3200:Clone()
+                    HairSystem.DisableCollision(v3201)
                     table.insert(v3191, v3201)
                     local l_Weld_23 = Instance.new("Weld")
                     l_Weld_23.Part0 = v3201
@@ -9932,6 +10376,7 @@ local function RevertSSJBHairToSSJ()
     newHair.CanCollide  = false
     newHair.CFrame      = headPart.CFrame * CFrame.new(0, 1.1, 0.5) * CFrame.Angles(0, math.rad(180), 0)
     newHair.Parent      = character
+    HairSystem.DisableCollision(newHair)
     WeldToHead(newHair)
     ssjHair = newHair
 
@@ -10057,6 +10502,7 @@ local function SetSpiritBombHair(kind)
         WeldToHead(newHair)
         root = newHair
     end
+    HairSystem.DisableCollision(newHair)
     ssjHair = newHair
 
     light.Enabled = true
